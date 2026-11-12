@@ -1,0 +1,289 @@
+{
+  "budget": {
+    "max_tris": 20000,
+    "preview_px": 640
+  },
+  "cameras": [
+    {
+      "look_at_cm": [
+        250,
+        200,
+        60
+      ],
+      "name": "Front",
+      "position_cm": [
+        250,
+        -280,
+        150
+      ]
+    },
+    {
+      "look_at_cm": [
+        358,
+        158,
+        86
+      ],
+      "name": "Close on the lamp",
+      "position_cm": [
+        395,
+        195,
+        115
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "part": "floor",
+      "type": "on_ground"
+    },
+    {
+      "on": "floor",
+      "part": "leg_fl",
+      "type": "sits_on"
+    },
+    {
+      "on": "floor",
+      "part": "leg_fr",
+      "type": "sits_on"
+    },
+    {
+      "on": "floor",
+      "part": "leg_bl",
+      "type": "sits_on"
+    },
+    {
+      "on": "floor",
+      "part": "leg_br",
+      "type": "sits_on"
+    },
+    {
+      "on": "floor",
+      "part": "stool_leg",
+      "type": "sits_on"
+    },
+    {
+      "on": "stool_leg",
+      "part": "stool_seat",
+      "type": "sits_on"
+    },
+    {
+      "on": "tabletop",
+      "part": "lamp",
+      "type": "sits_on"
+    },
+    {
+      "on": "tabletop",
+      "part": "mug",
+      "type": "sits_on"
+    }
+  ],
+  "kind": "scene",
+  "name": "Workbench Corner",
+  "parts": [
+    {
+      "id": "floor",
+      "material": "stone",
+      "position_cm": [
+        0,
+        0,
+        0
+      ],
+      "shape": "box",
+      "size_cm": [
+        500,
+        400,
+        10
+      ],
+      "type": "floor"
+    },
+    {
+      "id": "tabletop",
+      "material": "wood",
+      "position_cm": [
+        60,
+        60,
+        74
+      ],
+      "profile_cm": [
+        [
+          20,
+          0
+        ],
+        [
+          360,
+          0
+        ],
+        [
+          380,
+          20
+        ],
+        [
+          380,
+          160
+        ],
+        [
+          360,
+          180
+        ],
+        [
+          20,
+          180
+        ],
+        [
+          0,
+          160
+        ],
+        [
+          0,
+          20
+        ]
+      ],
+      "shape": "extrude",
+      "size_cm": [
+        380,
+        180,
+        4
+      ],
+      "type": "table"
+    },
+    {
+      "id": "leg_fl",
+      "material": "black_metal",
+      "position_cm": [
+        76,
+        76,
+        10
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        6,
+        6,
+        64
+      ],
+      "type": "leg"
+    },
+    {
+      "id": "leg_fr",
+      "material": "black_metal",
+      "position_cm": [
+        418,
+        76,
+        10
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        6,
+        6,
+        64
+      ],
+      "type": "leg"
+    },
+    {
+      "id": "leg_bl",
+      "material": "black_metal",
+      "position_cm": [
+        76,
+        204,
+        10
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        6,
+        6,
+        64
+      ],
+      "type": "leg"
+    },
+    {
+      "id": "leg_br",
+      "material": "black_metal",
+      "position_cm": [
+        418,
+        204,
+        10
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        6,
+        6,
+        64
+      ],
+      "type": "leg"
+    },
+    {
+      "id": "stool_leg",
+      "material": "metal",
+      "position_cm": [
+        215,
+        315,
+        10
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        6,
+        6,
+        45
+      ],
+      "type": "leg"
+    },
+    {
+      "id": "stool_seat",
+      "material": "dark_wood",
+      "position_cm": [
+        200,
+        300,
+        55
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        36,
+        36,
+        5
+      ],
+      "type": "seat"
+    },
+    {
+      "id": "lamp",
+      "material": "glass",
+      "position_cm": [
+        350,
+        150,
+        78
+      ],
+      "shape": "sphere",
+      "size_cm": [
+        16,
+        16,
+        16
+      ],
+      "type": "lamp"
+    },
+    {
+      "id": "mug",
+      "material": "cream",
+      "position_cm": [
+        120,
+        120,
+        78
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        9,
+        9,
+        10
+      ],
+      "type": "mug"
+    }
+  ],
+  "rubric": [
+    "Table top reads as one shaped slab, not a box",
+    "Legs are round and dark metal",
+    "Lamp glows warm through glass on the table"
+  ],
+  "style": {
+    "accent": "#c9a227",
+    "surface": "#201913",
+    "text": "#f2ede4"
+  },
+  "summary": "A workbench corner proving shaped parts and named materials: a chamfered table top extruded from a profile, cylinder legs in black metal, a stool, a glass lamp glowing on the table, and a cream mug."
+}

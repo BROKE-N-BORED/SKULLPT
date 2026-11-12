@@ -1,0 +1,115 @@
+{
+  "budget": {
+    "max_texture_px": 1024,
+    "max_triangles": 500000
+  },
+  "constraints": [
+    {
+      "part": "floor",
+      "type": "on_ground"
+    },
+    {
+      "on": "floor",
+      "part": "counter",
+      "type": "sits_on"
+    },
+    {
+      "on": "counter",
+      "part": "lamp",
+      "type": "sits_on"
+    }
+  ],
+  "kind": "scene",
+  "name": "Tavern Room",
+  "parts": [
+    {
+      "id": "floor",
+      "position_cm": [
+        0,
+        0,
+        0
+      ],
+      "size_cm": [
+        600,
+        500,
+        10
+      ],
+      "triangles": 200,
+      "type": "floor"
+    },
+    {
+      "id": "counter",
+      "position_cm": [
+        100,
+        100,
+        10
+      ],
+      "size_cm": [
+        240,
+        60,
+        110
+      ],
+      "triangles": 800,
+      "type": "counter"
+    },
+    {
+      "id": "lamp",
+      "position_cm": [
+        150,
+        115,
+        120
+      ],
+      "size_cm": [
+        18,
+        18,
+        32
+      ],
+      "texture_px": 512,
+      "triangles": 1200,
+      "type": "lamp"
+    }
+  ],
+  "rubric": [
+    "Nothing floats and nothing is disconnected",
+    "The lamp reads as sitting on the counter at a glance"
+  ],
+  "style": {
+    "accent": "#e0a458",
+    "surface": "#241d16",
+    "text": "#f2ede4"
+  },
+  "summary": "A small tavern room for the low-spec profile: floor, a counter standing on it, and a lamp sitting on the counter. Positions in cm, z-up, third value is the height of each part's base.",
+  "tags": [
+    "tavern",
+    "scene",
+    "low-spec"
+  ],
+  "cameras": [
+    {
+      "name": "Door view",
+      "position_cm": [
+        60,
+        -260,
+        170
+      ],
+      "look_at_cm": [
+        220,
+        180,
+        80
+      ]
+    },
+    {
+      "name": "Over the counter",
+      "position_cm": [
+        220,
+        130,
+        210
+      ],
+      "look_at_cm": [
+        160,
+        115,
+        125
+      ]
+    }
+  ]
+}

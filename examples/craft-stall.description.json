@@ -1,0 +1,329 @@
+{
+  "budget": {
+    "max_tris": 40000,
+    "preview_px": 640
+  },
+  "cameras": [
+    {
+      "look_at_cm": [
+        200,
+        150,
+        60
+      ],
+      "name": "Front",
+      "position_cm": [
+        200,
+        -260,
+        160
+      ]
+    },
+    {
+      "look_at_cm": [
+        120,
+        90,
+        88
+      ],
+      "name": "Close on the vase",
+      "position_cm": [
+        175,
+        145,
+        112
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "part": "floor",
+      "type": "on_ground"
+    },
+    {
+      "on": "floor",
+      "part": "leg_a",
+      "type": "sits_on"
+    },
+    {
+      "on": "floor",
+      "part": "leg_b",
+      "type": "sits_on"
+    },
+    {
+      "on": "leg_a",
+      "part": "counter",
+      "type": "sits_on"
+    },
+    {
+      "on": "floor",
+      "part": "picket",
+      "type": "sits_on"
+    },
+    {
+      "on": "counter",
+      "part": "vase",
+      "type": "sits_on"
+    },
+    {
+      "on": "counter",
+      "part": "kettle",
+      "type": "sits_on"
+    }
+  ],
+  "game_ready": true,
+  "kind": "scene",
+  "name": "Craft Stall",
+  "parts": [
+    {
+      "id": "floor",
+      "material": "stone",
+      "position_cm": [
+        0,
+        0,
+        0
+      ],
+      "shape": "box",
+      "size_cm": [
+        400,
+        300,
+        10
+      ],
+      "type": "floor"
+    },
+    {
+      "id": "leg_a",
+      "material": "black_metal",
+      "mirror": {
+        "at_cm": 200,
+        "axis": "x"
+      },
+      "position_cm": [
+        56,
+        46,
+        10
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        8,
+        8,
+        64
+      ],
+      "type": "leg"
+    },
+    {
+      "id": "leg_b",
+      "material": "black_metal",
+      "mirror": {
+        "at_cm": 200,
+        "axis": "x"
+      },
+      "position_cm": [
+        56,
+        214,
+        10
+      ],
+      "shape": "cylinder",
+      "size_cm": [
+        8,
+        8,
+        64
+      ],
+      "type": "leg"
+    },
+    {
+      "bevel_cm": 1.2,
+      "id": "counter",
+      "material": "wood",
+      "position_cm": [
+        40,
+        30,
+        74
+      ],
+      "profile_cm": [
+        [
+          16,
+          0
+        ],
+        [
+          304,
+          0
+        ],
+        [
+          320,
+          16
+        ],
+        [
+          320,
+          224
+        ],
+        [
+          304,
+          240
+        ],
+        [
+          16,
+          240
+        ],
+        [
+          0,
+          224
+        ],
+        [
+          0,
+          16
+        ]
+      ],
+      "shape": "extrude",
+      "size_cm": [
+        320,
+        240,
+        5
+      ],
+      "type": "counter"
+    },
+    {
+      "id": "picket",
+      "material": "wood",
+      "position_cm": [
+        30,
+        282,
+        10
+      ],
+      "repeat": {
+        "count": 8,
+        "step_cm": [
+          46,
+          0,
+          0
+        ]
+      },
+      "shape": "box",
+      "size_cm": [
+        10,
+        4,
+        90
+      ],
+      "type": "picket"
+    },
+    {
+      "id": "vase",
+      "material": "glass",
+      "position_cm": [
+        120,
+        90,
+        79
+      ],
+      "profile_cm": [
+        [
+          0,
+          0
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          12,
+          3
+        ],
+        [
+          7,
+          9
+        ],
+        [
+          5.5,
+          15
+        ],
+        [
+          7,
+          19
+        ]
+      ],
+      "shape": "lathe",
+      "type": "vase"
+    },
+    {
+      "id": "handle",
+      "material": "metal",
+      "path_cm": [
+        [
+          180,
+          150,
+          79
+        ],
+        [
+          198,
+          150,
+          93
+        ],
+        [
+          215,
+          150,
+          99
+        ],
+        [
+          232,
+          150,
+          93
+        ],
+        [
+          250,
+          150,
+          79
+        ]
+      ],
+      "radius_cm": 2.2,
+      "shape": "tube",
+      "type": "handle"
+    },
+    {
+      "id": "bracket",
+      "material": "black_metal",
+      "mirror": {
+        "at_cm": 200,
+        "axis": "x"
+      },
+      "position_cm": [
+        40,
+        135,
+        54
+      ],
+      "shape": "box",
+      "size_cm": [
+        6,
+        30,
+        20
+      ],
+      "type": "bracket"
+    },
+    {
+      "id": "kettle",
+      "material": "black_metal",
+      "position_cm": [
+        280,
+        180,
+        79
+      ],
+      "shape": "sphere",
+      "size_cm": [
+        26,
+        26,
+        20
+      ],
+      "type": "kettle"
+    }
+  ],
+  "rubric": [
+    "Counter reads as one shaped slab with a softened edge and visible wood grain",
+    "Vase is a smooth turned shape, not a stack of boxes",
+    "Handle arches over the counter as one curved tube",
+    "Pickets repeat evenly along the back"
+  ],
+  "style": {
+    "accent": "#c9a227",
+    "surface": "#201913",
+    "text": "#f2ede4"
+  },
+  "summary": "A market craft stall proving the v0.6 engine: a beveled extruded counter with wood grain, mirrored cylinder legs, a lathe-turned glass vase, a tube handle arching over the counter, repeated fence pickets, and a brushed-metal kettle. Marked game-ready so the build also produces LODs, collision, and a gate report.",
+  "tags": [
+    "demo",
+    "v0.6"
+  ]
+}
