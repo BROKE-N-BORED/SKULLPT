@@ -1,5 +1,61 @@
 # SKULLPT — Changelog
 
+## v1.3 — 2026-11-12 — no terminal at all: GUI installer, python3-venv self-heal
+
+Joshua's rule: "I should not need to use the terminal at all to run
+or install anything period." v1.2's installer still broke it — if
+python3-venv was missing it printed an apt command for the user to
+type, and the installer itself ran in a terminal window. v1.3 closes
+both gaps.
+
+- GUI INSTALLER: `Install-SKULLPT.desktop` is now Terminal=false and
+  launches `install.sh --gui`. The install runs behind a progress
+  window (per-step percentages), shows an info dialog on success and
+  asks "SKULLPT is installed. Open it now?" (yes opens the Bench),
+  and shows a plain-language error dialog with the log path on
+  failure. All install output is logged to `install.log` in the
+  install folder. The dialog tool is the first found in the order
+  Cinnamon's own spices probe — xenity, zenity, yad (xenity is
+  Mint's maintained Zenity fork; on a fully-updated Mint 22.x it
+  may have replaced zenity). If no dialog tool is installed, the
+  installer falls back to the terminal installer — the install
+  still works and is still logged; that is the documented degraded
+  path, not the plan. `install.sh` without flags auto-detects:
+  no terminal + a display + a dialog tool means GUI mode.
+- PYTHON3-VENV SELF-HEAL: when `python3 -m venv` fails because
+  python3-venv is missing, the installer installs that one system
+  package itself with ONE pkexec call (a GUI password prompt, no
+  terminal) — `apt-get update && DEBIAN_FRONTEND=noninteractive
+  apt-get install -y python3.12-venv` — and retries venv creation
+  automatically. If the user declines the prompt or apt fails, the
+  installer says so in plain language ("SKULLPT needs one system
+  package to install — re-run the installer and allow it when
+  asked") and the Bench stays unavailable until then; the CLI still
+  works. The image-engine build tools (git, cmake, C++ compiler)
+  heal the same way, and the Blender / sd.cpp installs to /opt use
+  pkexec too. No terminal command appears in any
+  user-facing message, and the installer never asks the user to
+  type anything.
+- NO-TERMINAL AUDIT: every user-facing string in install.sh, run.sh,
+  qtbench.py, bench.py, imagegen.py, the README, and the desktop
+  files was checked — the install/run path requires no terminal
+  command. The Bench's missing-PySide6 error now says to
+  double-click Install SKULLPT; the image-engine messages point at
+  the installer's image-engine option and the README's install
+  options. The README documents the terminal route only in a
+  clearly labeled optional subsection ("Terminal reference
+  (optional — advanced users)"). The HF_TOKEN setup for the cloud
+  mesh step is unchanged (optional feature config, not install/run).
+- TEST-FAILURE OUTPUT KEPT: if the install-time test suite reports a
+  problem, its full output is now kept as `test-output.log` in the
+  SKULLPT folder and the message names it (the old message said
+  "see above" while the evidence was deleted — no help at all in
+  the GUI installer). The install still completes either way.
+- Otherwise v1.2 behavior is kept: private-venv PySide6 install,
+  SKULLPT name + `designshell/` compat shim, launcher + icon +
+  `skullpt` command, data paths unchanged, cloud mesh step. The
+  held governor-refusal fix stays held.
+
 ## v1.2 — 2026-11-12 — the installer that actually installs, the SKULLPT name, a real program
 
 v1.1's real-PC verdict: install.sh said "Done" but `./run.sh` failed —

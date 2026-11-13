@@ -94,10 +94,11 @@ def find_model(workspace: str | Path | None = None) -> Path | None:
 
 def engine_missing_text() -> str:
     return ("the image engine (stable-diffusion.cpp) is not installed — "
-            "nothing was generated and nothing was faked. Fix: run "
-            "./install.sh --with-image-engine in the skullpt folder "
-            "(it builds the engine from source; the prebuilt Linux binary "
-            "needs a newer system library than Mint ships).")
+            "nothing was generated and nothing was faked. Fix: add the "
+            "image engine through the installer's image-engine option "
+            "(see the README's install options). It builds the engine "
+            "from source; the prebuilt Linux binary needs a newer system "
+            "library than Mint ships.")
 
 
 def model_missing_text() -> str:

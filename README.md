@@ -1,4 +1,4 @@
-# SKULLPT — v1.2
+# SKULLPT — v1.3
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -16,7 +16,11 @@ shell's window, a native Linux desktop app (Qt) — the v1.1 cloud
 mesh step (photo → textured 3D mesh on Hugging Face's free GPU, filed
 in a job), and the v1.2 installer (PySide6 installed into a private
 `.venv` so the Bench opens after a plain install; a desktop launcher
-and a `skullpt` command) are built and tested in the build sandbox.
+and a `skullpt` command), and the v1.3 GUI installer (double-click →
+progress window → "Open it now?"; if python3-venv is missing the
+installer adds that one system package itself with a GUI password
+prompt, so installing and running need no terminal at all) are built
+and tested in the build sandbox.
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11; the Blender install, the
 image-engine install, the Bench's real-PC run, and the first real
@@ -67,41 +71,59 @@ Examples live in `examples/` (a UI panel and a small scene description).
 ## Install / run
 
 Double-click **Install SKULLPT** in this folder (right-click → Allow
-Launching first, if your file manager asks), or run `./install.sh` in a
-terminal. Either way the installer:
+Launching first, if your file manager asks). No terminal needed —
+the install runs behind a progress window, and when it finishes it
+asks "SKULLPT is installed. Open it now?" — say yes and the Bench
+opens. Everything the install does is logged to `install.log` in
+this folder, so a failure can be diagnosed from the log. The
+installer:
 
 - checks Python (>= 3.10) and Blender,
 - creates a private `.venv` in this folder and installs PySide6 into it
-  (the Bench window's only dependency — Mint's Python refuses `pip
-  install` outside a venv, so the shell keeps its own),
+  (the Bench window's only dependency — Mint's Python refuses to
+  install packages outside a venv, so the shell keeps its own). If
+  python3-venv is missing, the installer adds that one system package
+  itself (one GUI password prompt) and carries on — it never asks
+  you to type anything,
 - runs the shell's test suite as the install proof,
 - prints a dependency report,
 - puts a **SKULLPT** launcher on the Desktop and in the app menu, and
   a `skullpt` command on your PATH (so `skullpt` works anywhere).
 
-Then start it from the launcher, from `skullpt`, or from `./run.sh` —
-all three open the Bench, the native desktop window.
-
-    ./install.sh                 install (as above)
-    ./install.sh --with-blender  also download + install the pinned Blender LTS
-                                 (4.5.9) into /opt/blender (sudo; replaces an
-                                 existing /opt/blender)
-    ./install.sh --with-image-engine
-                                 also build the image engine from source and
-                                 download its model (see the image step below;
-                                 needs git, cmake, and a C++ compiler — the
-                                 installer says so plainly if they are missing)
-    ./run.sh                     start the Bench — the shell's window
-                                 (live render view + chat + folders),
-                                 a native Linux desktop window
-    ./run.sh demo <workspace>    run the built-in demo into a workspace
-    ./run.sh <args...>           pass anything to the shell CLI (view, new, build, ...)
+Then start it from the launcher, or from `skullpt` — both open the
+Bench, the native desktop window.
 
 The shell's core runs on Python's standard library alone — PySide6 is
 only for the Bench window, and it lives in the private `.venv`, never
 in the system Python. The installer's test run uses the fast suite;
 the Blender end-to-end builds are skipped there (DESIGNSHELL_SKIP_E2E)
 so installs stay quick.
+
+### Terminal reference (optional — advanced users)
+
+Everything above works without a terminal. The commands below are
+only for people who prefer the terminal; nothing in the install or
+run path requires them.
+
+    ./install.sh                 install (as above; GUI progress window
+                                 when run without a terminal, else the
+                                 terminal installer)
+    ./install.sh --gui           install with the progress window
+    ./install.sh --terminal      install in the terminal
+    ./install.sh --with-blender  also download + install the pinned Blender LTS
+                                 (4.5.9) into /opt/blender (needs admin
+                                 permission — it will ask; replaces an
+                                 existing /opt/blender)
+    ./install.sh --with-image-engine
+                                 also build the image engine from source and
+                                 download its model (see the image step below;
+                                 needs git, cmake, and a C++ compiler — the
+                                 installer adds them itself if they are missing)
+    ./run.sh                     start the Bench — the shell's window
+                                 (live render view + chat + folders),
+                                 a native Linux desktop window
+    ./run.sh demo <workspace>    run the built-in demo into a workspace
+    ./run.sh <args...>           pass anything to the shell CLI (view, new, build, ...)
 
 ## Shaped parts + named materials (new in v0.4)
 
@@ -258,7 +280,7 @@ with the fix in plain words; nothing is faked. Generation runs under
 the governor's heavy-job lock and RAM floor, like a Blender build.
 One honest wrinkle: the prebuilt Linux binary for sd.cpp needs
 glibc 2.43 (Ubuntu 26.04) and will not run on Mint (glibc 2.39), which
-is why `./install.sh --with-image-engine` builds it from source.
+is why the installer's image-engine option builds it from source.
 
 **The second lane** is manual, and needs no building: make the picture
 in the Gemini app (best free quality) and drop the file in through
@@ -284,15 +306,17 @@ stack supports both, and they are later additions, not silent gaps.
 
 ## The Bench — the shell's window (v1.0: a native Linux desktop window)
 
-    ./run.sh
-    # or: python3 -m skullpt bench ~/design-shell-workspace
+Start it from the **SKULLPT** launcher on the Desktop or in the app
+menu (or the `skullpt` command). The terminal way, for reference:
+
+    python3 -m skullpt bench ~/design-shell-workspace
 
 One window where the workshop lives — a real Linux desktop app
 (Qt/PySide6), not a web page, no browser involved. (The old web
 Bench still exists as `webbench` for anyone who wants it, but it is
 no longer the default.) Needs PySide6; `install.sh` installs it into
 the shell's private `.venv`, and the Bench says plainly if it is
-missing (run `./install.sh` again).
+missing (re-run the installer).
 
 The window is laid out in three panes:
 
@@ -500,7 +524,7 @@ model are installed.
     recipes/       recipe manifests
     examples/      example Description Files
     tests/         the test suite
-    Install-SKULLPT.desktop   double-click installer (runs install.sh)
+    Install-SKULLPT.desktop   double-click installer (runs install.sh in GUI mode)
     skullpt-icon.svg          the SKULLPT icon (skull motif)
     .venv/         private virtualenv, created by install.sh — PySide6
                    lives here and nowhere else

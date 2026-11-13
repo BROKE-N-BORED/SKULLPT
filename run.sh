@@ -14,7 +14,7 @@
 # The Bench window runs from the private .venv install.sh creates (it has
 # PySide6); everything else runs on the system Python. If the venv is
 # missing or broken, this falls back to system python3 and the Bench
-# says plainly what to do (run ./install.sh).
+# says plainly what to do (double-click Install SKULLPT).
 #
 # Preflight: checks python3, and warns (does not block) if Blender is
 # missing — 2D work runs fine without it; scene builds will say plainly
@@ -32,7 +32,7 @@ done
 cd -P "$(dirname "$SOURCE")"
 
 command -v python3 >/dev/null 2>&1 || {
-  echo "ERROR: python3 not found — run ./install.sh first." >&2; exit 1; }
+  echo "ERROR: python3 not found — SKULLPT needs Python 3.10 or newer." >&2; exit 1; }
 
 # Prefer the private .venv (it has PySide6 for the Bench window); fall
 # back to system python3 when the venv is missing or lacks PySide6.
@@ -43,7 +43,7 @@ fi
 
 if [ -z "${DESIGNSHELL_BLENDER:-}" ] && ! command -v blender >/dev/null 2>&1 \
    && [ ! -x /opt/blender/blender ]; then
-  echo "Note: Blender not found — scenes cannot build yet (./install.sh --with-blender fixes it)."
+  echo "Note: Blender not found — scenes cannot build yet (the installer's Blender option adds it — see the README's install options)."
 fi
 
 if [ "$#" -eq 0 ]; then

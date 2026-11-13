@@ -2,7 +2,7 @@
 Type=Application
 Name=Install SKULLPT
 Comment=Install SKULLPT — the native Linux design and asset workshop
-Exec=python3 -c "import os,subprocess,sys; d=os.path.dirname(sys.argv[1]) or os.getcwd(); r=subprocess.call(['bash','./install.sh'],cwd=d); print(); print('Install finished.' if r==0 else 'Install hit a problem - see the lines above.'); input('Press Enter to close this window.') if sys.stdin.isatty() else None" %k
-Terminal=true
+Exec=python3 -c "import os,subprocess,sys; d=os.path.dirname(sys.argv[1]) or os.getcwd(); subprocess.call(['bash','./install.sh','--gui'],cwd=d)" %k
+Terminal=false
 Icon=system-software-install
 Categories=Development;Graphics;

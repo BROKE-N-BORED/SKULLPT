@@ -17,8 +17,8 @@ anywhere in this module: no http.server, no HTML, no browser.
 
 Needs PySide6, installed by install.sh into the shell's private .venv
 (v1.2 — before that, install.sh only warned about it and the Bench never
-opened on Joshua's PC, because `pip install PySide6` fails on Mint's
-externally-managed Python). Without PySide6 the CLI says so plainly
+opened on Joshua's PC, because Mint's Python refuses to install packages
+outside a venv). Without PySide6 the CLI says so plainly
 instead of crashing.
 """
 from __future__ import annotations
@@ -893,9 +893,9 @@ if QT_AVAILABLE:
         """Open the Bench window. Returns the Qt exit code."""
         if not QT_AVAILABLE:
             print("The Bench window needs PySide6, and it is not installed here.")
-            print("Fix: run ./install.sh — it installs PySide6 into the shell's")
-            print("private .venv. (Do not `pip install PySide6` — Mint's Python")
-            print("refuses it.)")
+            print("Fix: double-click Install SKULLPT in the SKULLPT folder —")
+            print("it installs PySide6 into the shell's private .venv.")
+            print("(Do not `pip install PySide6` — Mint's Python refuses it.)")
             print(f"(import error was: {QT_ERROR})")
             return 2
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
@@ -909,8 +909,8 @@ else:
 
     def main(workspace: str | Path) -> int:  # type: ignore[no-redef]
         print("The Bench window needs PySide6, and it is not installed here.")
-        print("Fix: run ./install.sh — it installs PySide6 into the shell's")
-        print("private .venv. (Do not `pip install PySide6` — Mint's Python")
-        print("refuses it.)")
+        print("Fix: double-click Install SKULLPT in the SKULLPT folder —")
+        print("it installs PySide6 into the shell's private .venv.")
+        print("(Do not `pip install PySide6` — Mint's Python refuses it.)")
         print(f"(import error was: {QT_ERROR})")
         return 2

@@ -186,18 +186,32 @@ class InstallerTextTests(unittest.TestCase):
             self.assertNotIn("--user", line)
             self.assertNotIn("--break-system-packages", line)
 
-    def test_installer_names_the_venv_fix_and_never_runs_apt(self):
-        self.assertIn("sudo apt install python3.12-venv", self.install)
+    def test_installer_heals_missing_venv_via_pkexec_and_never_uses_sudo(self):
+        # v1.3: a missing python3-venv is fixed by the installer itself
+        # with ONE pkexec call (a GUI password prompt), then venv
+        # creation retries. No terminal command is ever handed to the
+        # user, and the word "sudo" appears nowhere in the installer.
+        self.assertNotIn("sudo", self.install)
+        self.assertIn("apt_install_via_pkexec", self.install)
+        self.assertIn(
+            'pkexec sh -c "apt-get update && '
+            'DEBIAN_FRONTEND=noninteractive apt-get install -y $*"',
+            self.install)
+        self.assertIn("re-run the installer and allow it when asked",
+                      self.install)
         for line in self.install.splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
             if "echo" in stripped:
                 continue
-            # Quoted text only names the fix for the user; strip it and
-            # require that no apt command remains in the code itself.
+            # Quoted text only names things for the user; strip it, and
+            # strip the helper's own name, then require that no bare
+            # apt command remains in the code itself — apt runs only
+            # inside the pkexec helper's quoted command string.
             code = re.sub(r'"[^"]*"', '""', stripped)
             code = re.sub(r"'[^']*'", "''", code)
+            code = code.replace("apt_install_via_pkexec", "")
             self.assertNotIn("apt", code)
 
     def test_old_pip_install_advice_is_gone(self):
@@ -206,8 +220,11 @@ class InstallerTextTests(unittest.TestCase):
         self.assertNotIn("Fix: pip install PySide6", self.install)
         self.assertNotIn("already on Joshua's PC", self.qtbench)
 
-    def test_bench_error_points_at_install_sh(self):
-        self.assertIn("run ./install.sh", self.qtbench)
+    def test_bench_error_points_at_gui_installer(self):
+        # v1.3: the missing-PySide6 error names the double-click
+        # installer, never a terminal command.
+        self.assertIn("double-click Install SKULLPT", self.qtbench)
+        self.assertNotIn("./install.sh", self.qtbench)
         self.assertIn("Do not `pip install PySide6`", self.qtbench)
 
     def test_run_sh_prefers_venv(self):
@@ -248,7 +265,9 @@ class DesktopFileTests(unittest.TestCase):
         entry = parser["Desktop Entry"]
         self.assertEqual(entry["Type"], "Application")
         self.assertEqual(entry["Name"], "Install SKULLPT")
-        self.assertEqual(entry["Terminal"], "true")
+        # v1.3: the installer runs behind a progress window, not in a
+        # terminal.
+        self.assertEqual(entry["Terminal"], "false")
 
     def test_installer_desktop_exec_has_no_nested_quotes(self):
         text = (ROOT / "Install-SKULLPT.desktop").read_text()
@@ -261,6 +280,8 @@ class DesktopFileTests(unittest.TestCase):
         self.assertEqual(value.count('"') % 2, 0)
         self.assertIn("%k", value)
         self.assertIn("install.sh", value)
+        # v1.3: the double-click installer launches in GUI mode.
+        self.assertIn("--gui", value)
 
     def test_icon_is_valid_svg(self):
         path = ROOT / "skullpt-icon.svg"

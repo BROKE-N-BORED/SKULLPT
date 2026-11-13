@@ -89,7 +89,11 @@ class MissingPiecesTests(_FakeEnv):
             with self.assertRaises(imagegen.ImageGenError) as ctx:
                 imagegen.generate(self.ws, bdir)
             self.assertIn("not installed", str(ctx.exception))
-            self.assertIn("install.sh --with-image-engine", str(ctx.exception))
+            # v1.3: the fix names the installer's image-engine option,
+            # never a terminal command.
+            self.assertIn("image-engine option", str(ctx.exception))
+            self.assertIn("README", str(ctx.exception))
+            self.assertNotIn("./install.sh", str(ctx.exception))
 
     def test_missing_model_fails_loud(self):
         os.environ.pop("DESIGNSHELL_SD_MODEL")

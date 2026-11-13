@@ -687,7 +687,7 @@ function render() {
     : 'needs GEMINI_API_KEY in the environment \\u2014 until then, start from an example below';
   document.getElementById('genbtn').disabled = !(S.engines.image_engine && S.engines.image_model);
   document.getElementById('gennote').textContent = (S.engines.image_engine && S.engines.image_model) ? ''
-    : 'needs the image engine + model \\u2014 install.sh --with-image-engine';
+    : 'needs the image engine + model \\u2014 see the README install options';
   // chat transcript (only re-render when it changed, so typing is safe)
   if (S.chat.length !== CHATLEN) {
     CHATLEN = S.chat.length;
