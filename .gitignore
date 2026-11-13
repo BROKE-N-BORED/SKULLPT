@@ -1,0 +1,31 @@
+# SKULLPT — files that must never be committed.
+#
+# Joshua's rule (2026-11-13, immutable): sensitive information and APIs
+# are NEVER in code. API keys and tokens live in the environment
+# (GEMINI_API_KEY, GROQ_API_KEY, HF_TOKEN) or in files listed here —
+# never in a committed file.
+
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+providers.json
+*credentials*
+*secret*
+
+# Local install + run artifacts (created on the user's machine)
+.venv/
+install.log
+test-output.log
+.forge/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Build outputs
+*.zip

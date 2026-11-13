@@ -1,5 +1,16 @@
 # SKULLPT — Changelog
 
+## Unreleased
+
+- SECURITY HYGIENE (Joshua's rule, 2026-11-13): sensitive information
+  and APIs are never in code. The tree was audited — all keys
+  (GEMINI_API_KEY, GROQ_API_KEY, HF_TOKEN) already come from the
+  environment only, and no secret was found in any shipped version
+  (v0.1–v1.3 all clean). Added `.gitignore` covering `.env` files,
+  key/credential files, and local install artifacts, so a secret
+  can never be committed by accident. This rides into the next
+  release zip.
+
 ## v1.3 — 2026-11-12 — no terminal at all: GUI installer, python3-venv self-heal
 
 Joshua's rule: "I should not need to use the terminal at all to run
