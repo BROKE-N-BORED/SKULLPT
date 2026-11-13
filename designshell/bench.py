@@ -89,6 +89,7 @@ def engine_status(workspace: Path) -> dict:
         "image_engine": imagegen.find_engine() is not None,
         "image_model": imagegen.find_model(workspace) is not None,
         "gemini_key": critic_key,
+        "hf_token": bool(os.environ.get("HF_TOKEN")),
     }
 
 
@@ -255,6 +256,40 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             raise ValueError(f"no batch {slug!r}")
         run = _start_run("images", slug, lambda: imagegen.generate(workspace, bdir))
         return {"ok": True, "run": run, "detail": "generating another round"}
+    if action == "cloud-mesh":
+        from . import cloudmesh
+        photo = str(payload.get("photo", "")).strip()
+        if not photo:
+            raise ValueError("give the photo's path — e.g. "
+                             "/home/xprnc/Pictures/stool.jpg")
+        # A bare name resolves against the workspace first, then as-is.
+        candidate = Path(photo).expanduser()
+        if not candidate.is_file() and not candidate.is_absolute():
+            alt = workspace / photo
+            if alt.is_file():
+                candidate = alt
+        # Fast failures (missing photo, no token, wrong job state) before
+        # the background run starts, so the chat answers at once.
+        photo_path = cloudmesh.validate_photo(candidate)
+        cloudmesh.token_value()
+        job_name = payload.get("job") or None
+        if job_name:
+            job = _job(workspace, job_name)
+            if job.state not in ("draft", "awaiting_approval"):
+                raise ValueError(
+                    f"job {job_name!r} is {job.state!r} — the cloud mesh "
+                    "step only lands in a job still waiting at the plan gate")
+
+        def do_mesh():
+            result = cloudmesh.cloud_mesh(
+                workspace, photo_path, job=job_name,
+                seed=payload.get("seed"))
+            return (f"meshed {photo_path.name} into job {result['job']} "
+                    f"({result['parts']} parts) — waiting at the plan gate")
+        run = _start_run("cloud-mesh", photo_path.name, do_mesh)
+        return {"ok": True, "run": run,
+                "detail": "meshing on Hugging Face's free GPU — a few "
+                          "minutes; the photo leaves this machine"}
     if action == "settings":
         current = settings_mod.load_settings(workspace)
         if "critic_reference" in payload:
@@ -316,7 +351,10 @@ def _pick_job(workspace: Path, text: str, selected: str | None,
 
 _CHAT_HELP = ("Commands I take right here: \"make <what you want>\" drafts a job "
               "for your approval; \"picture of <thing>\" generates 3 reference "
-              "candidates; \"approve\" / \"build\" / \"file\" act on the selected "
+              "candidates; \"mesh <photo path>\" turns a photo into a textured "
+              "3D mesh on Hugging Face's free GPU (needs HF_TOKEN) — \"mesh "
+              "this photo\" uses the selected job's reference photo; "
+              "\"approve\" / \"build\" / \"file\" act on the selected "
               "job; \"status\" reports the workshop.")
 
 
@@ -340,10 +378,50 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
         return {"reply": (f"Blender {'ready' if e['blender'] else 'MISSING'}, image engine "
                           f"{'ready' if e['image_engine'] else 'MISSING'}, image model "
                           f"{'ready' if e['image_model'] else 'MISSING'}, Gemini key "
-                          f"{'set' if e['gemini_key'] else 'not set'}. Jobs: {jobs_line}."),
+                          f"{'set' if e['gemini_key'] else 'not set'}, HF token "
+                          f"{'set' if e.get('hf_token') else 'not set'}. Jobs: {jobs_line}."),
                 "actions": actions}
     if low in ("help", "help?", "commands"):
         return {"reply": _CHAT_HELP, "actions": actions}
+
+    # "mesh <photo path>" / "mesh this photo" — the cloud mesh step.
+    mesh_match = re.match(r"^(mesh|cloud[ -]?mesh)\b\s*(.*)$", low)
+    if mesh_match:
+        rest = mesh_match.group(2).strip().strip("\"'")
+        for prefix in ("this photo", "the photo", "it"):
+            if rest == prefix:
+                rest = ""
+                break
+            if rest.startswith(prefix + " "):
+                rest = rest[len(prefix):].strip()
+                break
+        photo_arg = rest
+        job_arg = selected if selected else None
+        if not photo_arg:
+            # No path given: mesh the selected job's reference photo.
+            if job_arg:
+                try:
+                    ref = _job(workspace, job_arg).load_description().get("reference") or {}
+                    stored = ref.get("stored_at")
+                    if stored and Path(stored).exists():
+                        photo_arg = stored
+                except Exception:
+                    photo_arg = ""
+            if not photo_arg:
+                return {"reply": ("Give me the photo's path — e.g. "
+                                  "\"mesh /home/xprnc/Pictures/stool.jpg\" — "
+                                  "or select a job that has a reference photo "
+                                  "and say \"mesh this photo\"."),
+                        "actions": actions}
+        try:
+            act(workspace, "cloud-mesh", {"photo": photo_arg, "job": job_arg})
+            return {"reply": ("Meshing that photo on Hugging Face's free GPU — "
+                              "a few minutes. The photo leaves this machine; "
+                              "the textured mesh comes back into a job waiting "
+                              "at the plan gate."),
+                    "actions": actions}
+        except Exception as exc:
+            return {"reply": str(exc), "actions": actions}
 
     image_match = re.match(
         r"^(image|picture|photo|draw|img)\s+(of\s+|for\s+)?(.+)$", low)
@@ -416,8 +494,9 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
                     "actions": actions}
         except Exception as exc:
             return {"reply": str(exc), "actions": actions}
-    return {"reply": "I take commands here — 'make …', 'picture of …', 'approve', "
-                     "'build', 'file', 'status'. For open conversation I need the "
+    return {"reply": "I take commands here — 'make …', 'picture of …', "
+                     "'mesh <photo path>', 'approve', 'build', 'file', 'status'. "
+                     "For open conversation I need the "
                      "Gemini key set in the environment (GEMINI_API_KEY) — without it "
                      "there's no brain on this seat, and I won't fake one.",
             "actions": actions}
@@ -546,7 +625,8 @@ function render() {
   document.getElementById('ws').textContent = S.workspace;
   document.getElementById('chips').innerHTML =
     chip('Blender', S.engines.blender) + chip('Image engine', S.engines.image_engine) +
-    chip('Image model', S.engines.image_model) + chip('Gemini key', S.engines.gemini_key);
+    chip('Image model', S.engines.image_model) + chip('Gemini key', S.engines.gemini_key) +
+    chip('HF token', S.engines.hf_token);
   document.getElementById('runs').innerHTML = S.runs.filter(function(r){return r.status==='running';})
     .map(function(r){ return '<div class="run">\\u23f3 ' + esc(r.kind) + ': ' + esc(r.label) + ' \\u2014 working\\u2026</div>'; }).join('') +
     S.runs.filter(function(r){return r.status==='error';}).slice(-2)

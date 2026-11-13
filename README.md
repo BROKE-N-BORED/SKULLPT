@@ -1,4 +1,4 @@
-# Design Shell — v0.9
+# Design Shell — v1.1
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -11,12 +11,14 @@ shaped parts + materials, install/run scripts, the v0.6 batch below
 repeat/mirror, game-ready gate, ingest, photo intake, recipe graduation,
 Unreal packaging), the v0.7 image step (prompt → candidate images →
 keep/reject → the keeper becomes a job's reference; the vision critic
-can compare builds against that reference), and the v1.0 Bench — the
-shell's window, a native Linux desktop app (Qt) — are built and tested
-in the build sandbox. The core shell (install, demo, build loop,
-library filing) was verified on the target PC on 2026-11-11; the
-Blender install, the image-engine install, and the Bench's real-PC
-run are still open verdicts.
+can compare builds against that reference), the v1.0 Bench — the
+shell's window, a native Linux desktop app (Qt) — and the v1.1 cloud
+mesh step (photo → textured 3D mesh on Hugging Face's free GPU, filed
+in a job) are built and tested in the build sandbox. The core shell
+(install, demo, build loop, library filing) was verified on the target
+PC on 2026-11-11; the Blender install, the image-engine install, the
+Bench's real-PC run, and the first real cloud mesh are still open
+verdicts.
 
 ## How it works (the short version)
 
@@ -176,8 +178,9 @@ is never modified.
 Copies the photo into `<workspace>/intake/`, measures it (real pixel
 dimensions parsed from the file), and creates a draft job whose
 description records it as the reference. The command prints the routes
-from a photo to a mesh (free TRELLIS.2 ZeroGPU quota, or a local
-SF3D/TripoSR draft — both end at a GLB that returns through `ingest`).
+from a photo to a mesh — since v1.1 the first route is built in (the
+cloud mesh step below); the local SF3D/TripoSR draft route still ends
+at a GLB that returns through `ingest`.
 The shell does not itself convert photos to meshes.
 
 **Recipe graduation.** Filing an approved job now also graduates its
@@ -293,11 +296,14 @@ The window is laid out in three panes:
   sit directly under the viewport.
 - **Right — chat.** Talk to the workshop: "make a market stall"
   drafts a job and offers the Approve button inline; "picture of a
-  brass lamp" generates candidates; "approve" / "build" / "file"
-  act on the selected job; "status" reports. Commands work with no
-  key at all. Open conversation goes to the planner seat (Gemini)
-  when its key is set — without it, the chat says so plainly instead
-  of faking a brain.
+  brass lamp" generates candidates; "mesh /home/xprnc/Pictures/stool.jpg"
+  turns a photo into a textured 3D mesh on Hugging Face's free GPU
+  ("mesh this photo" uses the selected job's reference photo);
+  "approve" / "build" / "file" act on the selected job; "status"
+  reports. Commands work with no key at all, except the mesh step,
+  which needs HF_TOKEN. Open conversation goes to the planner seat
+  (Gemini) when its key is set — without it, the chat says so plainly
+  instead of faking a brain.
 
 Builds and generations run in the background; the chat reports back
 when one finishes, and a failure (say, the governor refusing
@@ -307,6 +313,58 @@ pretending.
 The bench is a face on the same functions the CLI calls — same jobs,
 same gate, same files. The CLI, the render window, and the picker
 all keep working exactly as before.
+
+## v1.1 — the cloud mesh step (photo → textured 3D mesh)
+
+The PC has no GPU worth the name, so the mesh step runs on a free
+Hugging Face Space instead of locally — Microsoft's official
+TRELLIS.2 demo (`microsoft/TRELLIS.2`, MIT licensed) on Hugging
+Face ZeroGPU. Free quota is about 5 minutes of GPU a day on a free
+account; a mesh takes 3–8 minutes of wall time, most of it queue.
+
+    python3 -m designshell cloud-mesh <workspace> photo.jpg
+    python3 -m designshell cloud-mesh <workspace> photo.jpg --job my-chair
+    # or in the Bench chat:  mesh /home/xprnc/Pictures/stool.jpg
+    #                        mesh this photo   (selected job's reference)
+
+The photo is uploaded to the Space (background removed there, then
+the shape is generated, then the textured GLB is extracted), the GLB
+lands in the job's folder, and the existing ingest step derives the
+job's description from it — so the mesh then rides the normal
+approve → build → render path like any other job. Without `--job` a
+new job is created; with `--job` the mesh lands in that job, which
+must still be waiting at the plan gate. Either way the job ends at
+awaiting_approval: nothing builds until the description is approved.
+
+What it needs and what it says:
+
+- **HF_TOKEN in the environment** (free account at huggingface.co,
+  Settings → Access Tokens → New token, Read role). The token is
+  never written to any file — same rule as GEMINI_API_KEY. Without
+  it the step refuses and names the fix; no network call is made.
+- **Disclosure first.** Every run says plainly, before anything is
+  sent, that the photo is uploaded to Hugging Face's free GPU and
+  leaves the machine.
+- **Quota is a plain message, not a crash.** When the daily free GPU
+  time is used up the step says so ("try again tomorrow") and leaves
+  the job untouched. Space down, timeout, bad image, and a bad GLB
+  back from the Space are all plain-language errors the same way —
+  the mesh is generated and ingested before any job is touched, so a
+  failed run leaves the workspace exactly as it was.
+- **No governor block.** The cloud step takes no heavy-job lock and
+  checks no RAM floor — it loads no local model and runs no local
+  compute; it is network-bound. (Builds and image generation still
+  go through the governor as before.)
+- **Stdlib only**, like the rest of the shell — the Gradio HTTP API
+  (upload, call, SSE event stream, file download) is spoken with
+  urllib. The Space base URL can be overridden with
+  DESIGNSHELL_CLOUDMESH_URL (the test suite's mock server uses this).
+
+Honest status: the wiring is verified against a local mock Gradio
+server implementing the same API shapes the real Space exposes (its
+`/gradio_api/info` was read live on 2026-11-12); no call against the
+real Hugging Face Space has been run from the build sandbox (no token
+there). The first real mesh happens on a machine with a token.
 
 ## The making engine — Blender scenes (new in v0.3)
 
@@ -376,7 +434,13 @@ reference, the governor blocks generation, missing engine/model fail
 loud), the settings toggle + per-job override resolution, the picker
 page (script syntax check, image guard, decide over HTTP), and the
 critic's reference mode against a mock Gemini (two images sent, order
-named in the prompt). The end-to-end tests build the tavern room, the
+named in the prompt). v1.1 adds: the cloud mesh step against a local
+mock Gradio server (success round-trip to an ingested description,
+into a new job and into an existing intake job, no-token refusal
+before any network call, quota-exhausted as a plain message with the
+job intact, Space-down, bad image, timeout, GLB extraction retry, and
+proof the step takes no governor lock), plus the CLI and Bench/chat
+wiring for it. The end-to-end tests build the tavern room, the
 workbench, and the craft stall in real Blender when it is installed on
 the test machine, and generate a real image when the sd engine and
 model are installed.
@@ -394,8 +458,10 @@ model are installed.
 - The Unreal import script has not run inside Unreal — no engine on the
   build machine. It is generated, syntax-checked, and its result file
   is the proof when it does run.
-- No photo-to-mesh conversion inside the shell (intake + ingest cover
-  the ends of that route; the middle is a free external tool).
+- No call against the real Hugging Face Space has been run from the
+  build sandbox — the cloud mesh wiring is verified against a local
+  mock Gradio server implementing the same API shapes. The first real
+  mesh happens on a machine with a token.
 - No Character studio yet (MPFB2 route) — characters are a later step.
 - The standalone render window (`view`) and the image picker are
   still local web pages served by the shell itself — only the Bench
@@ -407,7 +473,8 @@ model are installed.
                    constraints, expand, recipes, exporters, blender_export,
                    checks, gameready, critic, seats, live, library,
                    builder, viewer, ingest, intake, graduate, unreal,
-                   imagegen, picker, settings, bench, qtbench, cli)
+                   imagegen, picker, settings, bench, qtbench, cloudmesh,
+                   cli)
     recipes/       recipe manifests
     examples/      example Description Files
     tests/         the test suite

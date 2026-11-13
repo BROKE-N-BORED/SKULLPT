@@ -20,6 +20,10 @@ Commands:
   critique <workspace> <job>             run the live vision critic on a job's renders
   ingest <file.glb|.blend> <out.json>    derive a description FROM an existing asset
   intake <workspace> <photo>             file a photo as a reference + draft job
+  cloud-mesh <workspace> <photo> [--job J] [--seed N]
+                                         photo -> textured 3D mesh on Hugging
+                                         Face's free GPU, filed in a job
+                                         (needs HF_TOKEN in the environment)
   recipes <workspace>                    list graduated recipes
   apply-recipe <workspace> <file> [out]  start a description from a graduated recipe
   unreal-package <workspace> <job>       assemble the Unreal import package for a built job
@@ -81,6 +85,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("critique"); p.add_argument("workspace"); p.add_argument("job")
     p = sub.add_parser("ingest"); p.add_argument("file"); p.add_argument("out")
     p = sub.add_parser("intake"); p.add_argument("workspace"); p.add_argument("photo")
+    p = sub.add_parser("cloud-mesh"); p.add_argument("workspace"); p.add_argument("photo")
+    p.add_argument("--job", default=None)
+    p.add_argument("--seed", type=int, default=None)
     p = sub.add_parser("recipes"); p.add_argument("workspace")
     p = sub.add_parser("apply-recipe"); p.add_argument("workspace"); p.add_argument("recipe")
     p.add_argument("out", nargs="?", default=None)
@@ -221,6 +228,25 @@ def main(argv: list[str] | None = None) -> int:
             print(f"photo filed: {dest_dir}")
             print(f"job created: {job.dir.name} (state: {job.state})")
             print(ROUTES)
+        elif args.cmd == "cloud-mesh":
+            from . import cloudmesh
+            ws = _ws(args.workspace)
+            # The disclosure goes first, before anything is sent.
+            print(cloudmesh.DISCLOSURE)
+            print("A mesh takes a few minutes on the free queue — stay put.")
+            try:
+                result = cloudmesh.cloud_mesh(
+                    ws, args.photo, job=args.job, seed=args.seed,
+                    progress=lambda stage, detail: print(f"  {stage}: {detail}"))
+            except cloudmesh.CloudMeshError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            print(f"mesh filed: {result['glb']}")
+            print(f"job: {result['job']} (state: {result['state']}, "
+                  f"{result['parts']} parts measured)")
+            print(f"seed: {result['seed']}  space: {result['space']}")
+            print("\nThe job is waiting at the plan gate — approve it with "
+                  "the approve command before anything builds.")
         elif args.cmd == "recipes":
             from .graduate import list_recipes
             ws = _ws(args.workspace)

@@ -6,11 +6,11 @@ workspace, measured (real pixel dimensions, parsed from the file), and
 filed as a draft description whose `reference` block records it — so a
 planner (or Joshua) builds FROM the photo with the reference on record.
 
-What the shell does NOT do is convert a photo into a mesh by itself.
-The routes that exist for that step are printed by the CLI and recorded
-in the description summary: the free TRELLIS.2 ZeroGPU space (a few
-production meshes a day on free quota), or a local draft tool
-(SF3D / TripoSR) whose output GLB comes back in through `ingest`.
+Since v1.1 the first route is built in: `cloudmesh` sends the photo to
+the free TRELLIS.2 ZeroGPU space (a few production meshes a day on
+free quota) and files the textured GLB + its ingested description in
+a job. The local draft route (SF3D / TripoSR) still ends at a GLB that
+comes back in through `ingest`.
 """
 from __future__ import annotations
 
@@ -49,11 +49,12 @@ def image_size(path: str | Path) -> tuple[int | None, int | None, str]:
 
 ROUTES = (
     "Routes from this photo to a 3D asset:\n"
-    "  1. Free cloud mesh: TRELLIS.2 on a Hugging Face ZeroGPU space "
-    "(free quota, a few textured GLBs a day) -> download the GLB -> "
-    "bring it back with: ingest <file.glb> <out.description.json>\n"
+    "  1. Free cloud mesh (built in, v1.1): cloud-mesh <workspace> <photo> "
+    "turns the photo into a textured GLB on a Hugging Face ZeroGPU space "
+    "(free quota, a few textured GLBs a day; needs HF_TOKEN) and files "
+    "the mesh + its description in a job.\n"
     "  2. Local draft: SF3D or TripoSR on the PC (draft grade, offline) "
-    "-> GLB -> same ingest step.\n"
+    "-> GLB -> ingest <file.glb> <out.description.json>.\n"
     "  3. Build from the photo as a reference: plan a description with "
     "the photo on record and let the Blender exporter build it."
 )

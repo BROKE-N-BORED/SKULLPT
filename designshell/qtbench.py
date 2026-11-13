@@ -640,7 +640,9 @@ if QT_AVAILABLE:
                 + "   ·   Image model: "
                 + ("ready" if engines["image_model"] else "MISSING")
                 + "   ·   Gemini key: "
-                + ("set" if engines["gemini_key"] else "not set"))
+                + ("set" if engines["gemini_key"] else "not set")
+                + "   ·   HF token: "
+                + ("set" if engines.get("hf_token") else "not set"))
             self._example_combo.clear()
             self._example_combo.addItems(state["examples"])
             jobs = state["jobs"]
