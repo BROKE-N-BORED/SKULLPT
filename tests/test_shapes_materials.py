@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import blender_export, description as desc_mod
+from skullpt import blender_export, description as desc_mod
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKBENCH = ROOT / "examples" / "workbench.description.json"

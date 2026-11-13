@@ -7,13 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import constraints as con_mod
-from designshell import description as desc_mod
-from designshell import governor
-from designshell.builder import build_job
-from designshell.critic import CriticNotConfigured, GeminiCritic, OfflineCritic
-from designshell.jobs import GateError, Job
-from designshell.library import Library
+from skullpt import constraints as con_mod
+from skullpt import description as desc_mod
+from skullpt import governor
+from skullpt.builder import build_job
+from skullpt.critic import CriticNotConfigured, GeminiCritic, OfflineCritic
+from skullpt.jobs import GateError, Job
+from skullpt.library import Library
 
 ROOT = Path(__file__).resolve().parent.parent
 SHOP = json.loads((ROOT / "examples" / "shop-panel.description.json").read_text())

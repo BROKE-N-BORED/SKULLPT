@@ -23,9 +23,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import bench, imagegen  # noqa: E402
-from designshell import settings as settings_mod  # noqa: E402
-from designshell.jobs import Job  # noqa: E402
+from skullpt import bench, imagegen  # noqa: E402
+from skullpt import settings as settings_mod  # noqa: E402
+from skullpt.jobs import Job  # noqa: E402
 
 FAKE_SD = """#!/usr/bin/env python3
 import sys

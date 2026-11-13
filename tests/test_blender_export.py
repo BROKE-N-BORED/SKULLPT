@@ -11,8 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import blender_export, checks as checks_mod
-from designshell import description as desc_mod
+from skullpt import blender_export, checks as checks_mod
+from skullpt import description as desc_mod
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "tavern-room.description.json"
 

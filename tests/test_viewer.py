@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import description as desc_mod
-from designshell import viewer
+from skullpt import description as desc_mod
+from skullpt import viewer
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "tavern-room.description.json"
 

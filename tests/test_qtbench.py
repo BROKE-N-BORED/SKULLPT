@@ -13,8 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from designshell import description as desc_mod
-from designshell import qtbench
+from skullpt import description as desc_mod
+from skullpt import qtbench
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "examples"
@@ -119,7 +119,7 @@ class WidgetTests(unittest.TestCase):
         (self.ws / "jobs").mkdir()
         (self.ws / "library").mkdir()
         desc = desc_mod.load(EXAMPLES / "workbench.description.json")
-        from designshell.jobs import Job
+        from skullpt.jobs import Job
         self.job = Job.create(self.ws / "jobs", desc)
         self.window = qtbench.BenchWindow(self.ws)
         self.window.show()
@@ -159,7 +159,7 @@ class WidgetTests(unittest.TestCase):
         self.assertNotEqual(before, after, "orbit did not change the render")
 
     def test_camera_round_trip(self):
-        from designshell.viewer import upsert_camera
+        from skullpt.viewer import upsert_camera
         vp = self.window._viewport
         entry = vp.current_camera("Test cam")
         self.assertEqual(entry["name"], "Test cam")

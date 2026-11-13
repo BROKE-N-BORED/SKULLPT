@@ -15,10 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import blender_export, cli, description as desc_mod
-from designshell import expand, gameready, graduate, ingest, intake, live, unreal, viewer
-from designshell.critic import GeminiCritic
-from designshell.jobs import Job
+from skullpt import blender_export, cli, description as desc_mod
+from skullpt import expand, gameready, graduate, ingest, intake, live, unreal, viewer
+from skullpt.critic import GeminiCritic
+from skullpt.jobs import Job
 
 ROOT = Path(__file__).resolve().parent.parent
 STALL = ROOT / "examples" / "craft-stall.description.json"
@@ -201,7 +201,7 @@ class LiveSeatTests(unittest.TestCase):
                 os.environ[key] = val
 
     def test_planner_drafts_a_valid_description(self):
-        from designshell.seats import load_seats
+        from skullpt.seats import load_seats
         desc = live.plan_from_words("a small stall", load_seats(None))
         self.assertEqual(desc["name"], "Mock Stall")
         self.assertEqual(desc_mod.validate(desc), [])
@@ -306,7 +306,7 @@ class UnrealPackageTests(unittest.TestCase):
             self.assertIn("tavern-room.glb", names)
             script = (dest / "import_into_unreal.py").read_text()
             ast.parse(script)  # must be valid Python (runs inside Unreal)
-            self.assertIn("/Game/DesignShell/tavern-room", script)
+            self.assertIn("/Game/SKULLPT/tavern-room", script)
             lineage = json.loads((dest / "lineage.json").read_text())
             self.assertFalse(lineage["imported"])
             self.assertEqual(len(lineage["source_description_sha256"]), 64)

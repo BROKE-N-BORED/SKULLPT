@@ -1,8 +1,12 @@
-"""Design Shell — standalone design & asset workshop (skeleton v0.1).
+"""Backward-compatibility shim — the package was renamed to `skullpt` in v1.2.
 
-Working name only. Plan -> Approve -> Build, Description File at the centre,
-recipes instead of raw generation, machine checks + vision critique loop,
-Asset Library as memory. Stdlib only: runs anywhere Python 3.10+ runs.
+`import designshell` returns the `skullpt` package itself, and
+`python3 -m designshell ...` runs the SKULLPT CLI, so the Forge bridge
+and any old scripts keep working unchanged. New code should import
+`skullpt` directly.
 """
+import sys
 
-__version__ = "0.1.0"
+import skullpt
+
+sys.modules[__name__] = skullpt

@@ -1,9 +1,9 @@
-# Design Shell — v1.1
+# SKULLPT — v1.2
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
 made with the tools on your own machine (Blender, Unreal, web) and filed in
-one Asset Library you own. Working name only — rename it any time.
+one Asset Library you own.
 
 **Status:** the skeleton, live render window, Blender making engine,
 shaped parts + materials, install/run scripts, the v0.6 batch below
@@ -12,13 +12,15 @@ repeat/mirror, game-ready gate, ingest, photo intake, recipe graduation,
 Unreal packaging), the v0.7 image step (prompt → candidate images →
 keep/reject → the keeper becomes a job's reference; the vision critic
 can compare builds against that reference), the v1.0 Bench — the
-shell's window, a native Linux desktop app (Qt) — and the v1.1 cloud
+shell's window, a native Linux desktop app (Qt) — the v1.1 cloud
 mesh step (photo → textured 3D mesh on Hugging Face's free GPU, filed
-in a job) are built and tested in the build sandbox. The core shell
-(install, demo, build loop, library filing) was verified on the target
-PC on 2026-11-11; the Blender install, the image-engine install, the
-Bench's real-PC run, and the first real cloud mesh are still open
-verdicts.
+in a job), and the v1.2 installer (PySide6 installed into a private
+`.venv` so the Bench opens after a plain install; a desktop launcher
+and a `skullpt` command) are built and tested in the build sandbox.
+The core shell (install, demo, build loop, library filing) was
+verified on the target PC on 2026-11-11; the Blender install, the
+image-engine install, the Bench's real-PC run, and the first real
+cloud mesh are still open verdicts.
 
 ## How it works (the short version)
 
@@ -42,30 +44,45 @@ verdicts.
    description they were made from, the build report, and the session log,
    indexed by a manifest. Search the library before making anything new.
 
-## Run it (Linux, Python 3.10+, no dependencies)
+## Run it (Linux, Python 3.10+)
 
 From this folder:
 
-    python3 -m designshell demo ~/design-shell-workspace
+    python3 -m skullpt demo ~/design-shell-workspace
 
 That runs the bundled Tavern Shop Panel example end to end and files it in
 the demo workspace's library.
 
 Your own job, step by step:
 
-    python3 -m designshell new ~/design-shell-workspace my-thing.description.json
-    python3 -m designshell show ~/design-shell-workspace my-thing
-    python3 -m designshell approve ~/design-shell-workspace my-thing
-    python3 -m designshell build ~/design-shell-workspace my-thing
-    python3 -m designshell file ~/design-shell-workspace my-thing
-    python3 -m designshell search ~/design-shell-workspace tavern
+    python3 -m skullpt new ~/design-shell-workspace my-thing.description.json
+    python3 -m skullpt show ~/design-shell-workspace my-thing
+    python3 -m skullpt approve ~/design-shell-workspace my-thing
+    python3 -m skullpt build ~/design-shell-workspace my-thing
+    python3 -m skullpt file ~/design-shell-workspace my-thing
+    python3 -m skullpt search ~/design-shell-workspace tavern
 
 Examples live in `examples/` (a UI panel and a small scene description).
 
 ## Install / run
 
-    ./install.sh                 check Python + Blender + image engine, verify,
-                                 print a dependency report
+Double-click **Install SKULLPT** in this folder (right-click → Allow
+Launching first, if your file manager asks), or run `./install.sh` in a
+terminal. Either way the installer:
+
+- checks Python (>= 3.10) and Blender,
+- creates a private `.venv` in this folder and installs PySide6 into it
+  (the Bench window's only dependency — Mint's Python refuses `pip
+  install` outside a venv, so the shell keeps its own),
+- runs the shell's test suite as the install proof,
+- prints a dependency report,
+- puts a **SKULLPT** launcher on the Desktop and in the app menu, and
+  a `skullpt` command on your PATH (so `skullpt` works anywhere).
+
+Then start it from the launcher, from `skullpt`, or from `./run.sh` —
+all three open the Bench, the native desktop window.
+
+    ./install.sh                 install (as above)
     ./install.sh --with-blender  also download + install the pinned Blender LTS
                                  (4.5.9) into /opt/blender (sudo; replaces an
                                  existing /opt/blender)
@@ -75,15 +92,16 @@ Examples live in `examples/` (a UI panel and a small scene description).
                                  needs git, cmake, and a C++ compiler — the
                                  installer says so plainly if they are missing)
     ./run.sh                     start the Bench — the shell's window
-                                 (live render view + chat + folders);
-                                 opens in your browser
+                                 (live render view + chat + folders),
+                                 a native Linux desktop window
     ./run.sh demo <workspace>    run the built-in demo into a workspace
     ./run.sh <args...>           pass anything to the shell CLI (view, new, build, ...)
 
-The shell has NO pip dependencies — Python's standard library only — so
-install is a check-and-verify, and the report says exactly that. The
-installer's test run uses the fast suite; the Blender end-to-end builds
-are skipped there (DESIGNSHELL_SKIP_E2E) so installs stay quick.
+The shell's core runs on Python's standard library alone — PySide6 is
+only for the Bench window, and it lives in the private `.venv`, never
+in the system Python. The installer's test run uses the fast suite;
+the Blender end-to-end builds are skipped there (DESIGNSHELL_SKIP_E2E)
+so installs stay quick.
 
 ## Shaped parts + named materials (new in v0.4)
 
@@ -133,8 +151,8 @@ tubes — not bounding boxes. The camera system is unchanged.
 **Live seats (talk to it).** Keys come from environment variables only
 (`GEMINI_API_KEY`, `GROQ_API_KEY`), never stored:
 
-    python3 -m designshell plan <workspace> "a small market stall with a wood counter"
-    python3 -m designshell critique <workspace> <job>
+    python3 -m skullpt plan <workspace> "a small market stall with a wood counter"
+    python3 -m skullpt critique <workspace> <job>
 
 `plan` drafts a Description File from plain words via the planner seat
 and creates a job with it — the plan gate still applies: nothing builds
@@ -162,8 +180,8 @@ fails the build.
 
 **Open-and-edit: ingest.** Derive a Description File FROM an asset:
 
-    python3 -m designshell ingest model.glb model.description.json
-    python3 -m designshell ingest scene.blend scene.description.json
+    python3 -m skullpt ingest model.glb model.description.json
+    python3 -m skullpt ingest scene.blend scene.description.json
 
 `.glb` is parsed directly (node boxes, converted from Y-up metres to
 Z-up centimetres; node rotations are noted, not unfolded). `.blend`
@@ -173,7 +191,7 @@ is never modified.
 
 **Photo intake.**
 
-    python3 -m designshell intake <workspace> photo.jpg
+    python3 -m skullpt intake <workspace> photo.jpg
 
 Copies the photo into `<workspace>/intake/`, measures it (real pixel
 dimensions parsed from the file), and creates a draft job whose
@@ -186,17 +204,17 @@ The shell does not itself convert photos to meshes.
 **Recipe graduation.** Filing an approved job now also graduates its
 description into `<workspace>/recipes/<job>.recipe.json`:
 
-    python3 -m designshell recipes <workspace>
-    python3 -m designshell apply-recipe <workspace> <recipe-file> [out.json]
+    python3 -m skullpt recipes <workspace>
+    python3 -m skullpt apply-recipe <workspace> <recipe-file> [out.json]
 
 **Unreal package.**
 
-    python3 -m designshell unreal-package <workspace> <job>
+    python3 -m skullpt unreal-package <workspace> <job>
 
 Assembles `<job>/<slug>-unreal/`: the GLB/.blend/stats/LOD/collision
 files, the source `description.json`, `import_into_unreal.py` (an
 Unreal Editor Python script importing the GLB to
-`/Game/DesignShell/<slug>/` and writing `import-result.json`), and
+`/Game/SKULLPT/<slug>/` and writing `import-result.json`), and
 `lineage.json` linking the source description's SHA-256 to the Unreal
 destination. The script is generated and syntax-checked; it has not
 been run inside Unreal (no engine on the build machine), and lineage
@@ -213,10 +231,10 @@ The front half of the reference pipeline: a prompt becomes pictures,
 you pick the keeper, and the keeper becomes a job's locked reference —
 the same `reference` slot photo intake fills.
 
-    python3 -m designshell images <workspace> "a brass oil lamp, product photo" --job my-job
-    python3 -m designshell pick <workspace>/images/<batch>
-    python3 -m designshell decide <workspace>/images/<batch> cand-01.png keep
-    python3 -m designshell reroll <workspace>/images/<batch>
+    python3 -m skullpt images <workspace> "a brass oil lamp, product photo" --job my-job
+    python3 -m skullpt pick <workspace>/images/<batch>
+    python3 -m skullpt decide <workspace>/images/<batch> cand-01.png keep
+    python3 -m skullpt reroll <workspace>/images/<batch>
 
 Each prompt generates a batch of **3 candidates** at 512×512. `pick`
 serves a simple picker page (phone-friendly, same pattern as the Live
@@ -253,7 +271,7 @@ vision critic runs, it can judge the render *against that picture* —
 same object, proportions, materials, colours — as well as against the
 written rubric. This is a switch:
 
-    python3 -m designshell settings <workspace> --critic-reference on|off
+    python3 -m skullpt settings <workspace> --critic-reference on|off
 
 Default is on. A single job can override it either way with
 `"critic_reference": true/false` in its description. The build report
@@ -267,13 +285,14 @@ stack supports both, and they are later additions, not silent gaps.
 ## The Bench — the shell's window (v1.0: a native Linux desktop window)
 
     ./run.sh
-    # or: python3 -m designshell bench ~/design-shell-workspace
+    # or: python3 -m skullpt bench ~/design-shell-workspace
 
 One window where the workshop lives — a real Linux desktop app
 (Qt/PySide6), not a web page, no browser involved. (The old web
 Bench still exists as `webbench` for anyone who wants it, but it is
-no longer the default.) Needs PySide6; `install.sh` reports whether
-it is there, and the Bench says plainly if it is missing.
+no longer the default.) Needs PySide6; `install.sh` installs it into
+the shell's private `.venv`, and the Bench says plainly if it is
+missing (run `./install.sh` again).
 
 The window is laid out in three panes:
 
@@ -322,8 +341,8 @@ TRELLIS.2 demo (`microsoft/TRELLIS.2`, MIT licensed) on Hugging
 Face ZeroGPU. Free quota is about 5 minutes of GPU a day on a free
 account; a mesh takes 3–8 minutes of wall time, most of it queue.
 
-    python3 -m designshell cloud-mesh <workspace> photo.jpg
-    python3 -m designshell cloud-mesh <workspace> photo.jpg --job my-chair
+    python3 -m skullpt cloud-mesh <workspace> photo.jpg
+    python3 -m skullpt cloud-mesh <workspace> photo.jpg --job my-chair
     # or in the Bench chat:  mesh /home/xprnc/Pictures/stool.jpg
     #                        mesh this photo   (selected job's reference)
 
@@ -374,9 +393,9 @@ true scale in meters, materials from the style tokens, a point light in
 every lamp, cameras from the description's own `cameras`) and runs
 Blender headless:
 
-    python3 -m designshell new <workspace> examples/tavern-room.description.json
-    python3 -m designshell approve <workspace> <job>
-    python3 -m designshell build <workspace> <job>
+    python3 -m skullpt new <workspace> examples/tavern-room.description.json
+    python3 -m skullpt approve <workspace> <job>
+    python3 -m skullpt build <workspace> <job>
 
 Outputs in the job folder: `<name>.blend` (open it in Blender),
 `<name>.glb` (for Unreal / web), one `render-<camera>.png` per saved
@@ -392,7 +411,7 @@ plain message — it never pretends a scene was built.
 
 ## Live Render Window (new in v0.2)
 
-    python3 -m designshell view examples/tavern-room.description.json
+    python3 -m skullpt view examples/tavern-room.description.json
     # open the printed http://127.0.0.1:8760/ in a browser
 
 The window draws the description's parts at true scale (cm, z-up) and
@@ -404,7 +423,7 @@ in the Description File itself (`cameras: [{name, position_cm,
 look_at_cm}]`), so they travel with the asset. Preset views: Iso / Front
 / Side / Top. A non-live still page can be saved with:
 
-    python3 -m designshell snapshot <description.json> <out.html>
+    python3 -m skullpt snapshot <description.json> <out.html>
 
 The window draws each part's true shape (v0.6: box, cylinder, sphere,
 extrude profile, lathe, tube) — an examination layer at true scale, not
@@ -469,12 +488,19 @@ model are installed.
 
 ## Layout
 
-    designshell/   the package (description, jobs/gate, governor,
+    skullpt/   the package (description, jobs/gate, governor,
                    constraints, expand, recipes, exporters, blender_export,
                    checks, gameready, critic, seats, live, library,
                    builder, viewer, ingest, intake, graduate, unreal,
                    imagegen, picker, settings, bench, qtbench, cloudmesh,
                    cli)
+    designshell/   compatibility shim — forwards to skullpt, so the
+                   Forge bridge and old `python3 -m designshell` commands
+                   keep working
     recipes/       recipe manifests
     examples/      example Description Files
     tests/         the test suite
+    Install-SKULLPT.desktop   double-click installer (runs install.sh)
+    skullpt-icon.svg          the SKULLPT icon (skull motif)
+    .venv/         private virtualenv, created by install.sh — PySide6
+                   lives here and nowhere else

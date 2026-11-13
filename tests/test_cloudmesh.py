@@ -22,9 +22,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import bench, cli, cloudmesh, description as desc_mod
-from designshell import intake
-from designshell.jobs import Job
+from skullpt import bench, cli, cloudmesh, description as desc_mod
+from skullpt import intake
+from skullpt.jobs import Job
 
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")

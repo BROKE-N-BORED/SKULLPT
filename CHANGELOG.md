@@ -1,4 +1,42 @@
-# Design Shell — Changelog
+# SKULLPT — Changelog
+
+## v1.2 — 2026-11-12 — the installer that actually installs, the SKULLPT name, a real program
+
+v1.1's real-PC verdict: install.sh said "Done" but `./run.sh` failed —
+PySide6 was never installed, and the fix it printed (`pip install
+PySide6`) fails on Mint's externally-managed Python. The Bench had
+never opened on the target PC. v1.2 fixes the cause, renames the
+product, and makes it a program you can double-click.
+
+- install.sh now CREATES a private `.venv` in the install folder and
+  installs PySide6-Essentials into it (never `--user`, never
+  `--break-system-packages` — both are wrong on Mint 3.12). If
+  python3-venv is missing, install.sh says so plainly and names the
+  fix (`sudo apt install python3.12-venv`); it never runs apt itself.
+  run.sh prefers `.venv/bin/python` when it has PySide6, else falls
+  back to system python3 — after a plain `./install.sh`, a bare
+  `./run.sh` opens the Bench with no extra steps. The dependency
+  report shows the PySide6 version honestly. The old "pip install
+  PySide6" advice is gone from install.sh and from the Bench's
+  error text, and the qtbench docstring no longer claims PySide6 is
+  already on the machine.
+- RENAME: the product is SKULLPT everywhere user-facing — window
+  title, README, CHANGELOG, scripts, Bench, docs. The package is
+  now `skullpt/`; a thin `designshell/` shim forwards to it so the
+  Forge bridge and old `python3 -m designshell` commands keep
+  working. The zip is `skullpt-v1.2.zip`, top-level folder `skullpt/`.
+  Data paths are UNCHANGED (`~/design-shell-workspace`,
+  `~/design-shell-models/`) so no data is orphaned; the Unreal
+  destination is now `/Game/SKULLPT/<slug>/`.
+- EXECUTABLE PROGRAM: `Install-SKULLPT.desktop` in the zip root —
+  double-click it (right-click → Allow Launching first) and the
+  installer runs in a terminal. install.sh writes a `SKULLPT.desktop`
+  launcher to the Desktop and `~/.local/share/applications` (absolute
+  install path in Exec, no nested quotes), links `~/.local/bin/skullpt`
+  to run.sh so `skullpt` works as a command anywhere, and ships an
+  original skull-motif SVG icon (`skullpt-icon.svg`).
+- sd-cli + image model stay behind `--with-image-engine` (source
+  build + 2.1 GB download); the report keeps pointing at the flag.
 
 ## v1.1 — 2026-11-12 — the cloud mesh step
 

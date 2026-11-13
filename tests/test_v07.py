@@ -22,11 +22,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from designshell import cli, imagegen, picker, settings as settings_mod  # noqa: E402
-from designshell import description as desc_mod  # noqa: E402
-from designshell.critic import GeminiCritic  # noqa: E402
-from designshell.governor import GovernorError  # noqa: E402
-from designshell.jobs import Job  # noqa: E402
+from skullpt import cli, imagegen, picker, settings as settings_mod  # noqa: E402
+from skullpt import description as desc_mod  # noqa: E402
+from skullpt.critic import GeminiCritic  # noqa: E402
+from skullpt.governor import GovernorError  # noqa: E402
+from skullpt.jobs import Job  # noqa: E402
 
 TINY_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d494844520000000100000001080600000"

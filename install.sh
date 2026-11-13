@@ -1,24 +1,38 @@
 #!/usr/bin/env bash
-# Design Shell — install / update.
+# SKULLPT — install / update.
 #
 # What this does, in order:
-#   1. Checks Python >= 3.10 (the shell is standard-library only —
-#      there are deliberately NO pip packages to install or upgrade).
-#   2. Checks Blender: reports the version it finds. With --with-blender
+#   1. Checks Python >= 3.10 (the shell core is standard-library only).
+#   2. Creates a private .venv in this folder and installs PySide6 into
+#      it — the Bench window's only dependency. Mint's Python refuses
+#      `pip install` outside a venv, so the shell keeps its own. (The
+#      core shell never touches pip; only the Bench window runs from
+#      the venv.)
+#   3. Checks Blender: reports the version it finds. With --with-blender
 #      it downloads the pinned Blender LTS and installs it to
 #      /opt/blender (+ a blender command on your PATH), replacing what
 #      was there. Without the flag it never touches your Blender.
-#   3. Runs the shell's own test suite as the install proof.
-#   4. Prints a dependency report: everything checked, with versions.
+#   4. Runs the shell's own test suite as the install proof.
+#   5. Prints a dependency report: everything checked, with versions.
+#   6. Puts a SKULLPT launcher on the Desktop and in the app menu, and
+#      a `skullpt` command on your PATH.
 #
 # Usage:
-#   ./install.sh                     check + verify only
+#   ./install.sh                     install (as above)
 #   ./install.sh --with-blender      also install/upgrade Blender (needs sudo)
 #   ./install.sh --with-image-engine also build the image engine from
 #                                    source and download its model
 #                                    (needs git, cmake, a C++ compiler)
 set -euo pipefail
-cd "$(dirname "$0")"
+
+# Resolve our own real location (this script may be reached via a link).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$DIR/$SOURCE" ;; esac
+done
+cd -P "$(dirname "$SOURCE")"
 
 BLENDER_VERSION="4.5.9"
 BLENDER_TARBALL="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
@@ -36,7 +50,7 @@ for arg in "$@"; do
   esac
 done
 
-echo "== Design Shell install =="
+echo "== SKULLPT install =="
 
 # --- 1. Python -------------------------------------------------------------
 if ! command -v python3 >/dev/null 2>&1; then
@@ -50,17 +64,48 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || {
 }
 echo "python3: $PY_VER OK (the shell core is standard library only)"
 
-# --- 1b. PySide6 (the Bench window) -----------------------------------------
-if python3 -c "import PySide6" 2>/dev/null; then
-  QT_VER="$(python3 -c "import PySide6; print(PySide6.__version__)" 2>/dev/null || echo '?')"
-  echo "PySide6: $QT_VER OK (the Bench window can open)"
-else
-  echo "PySide6: NOT FOUND — the Bench window needs it (the CLI still works)."
-  echo "         Fix: pip install PySide6   (Code Forge needs it too, so it"
-  echo "         is usually already installed on this machine)"
+# --- 2. PySide6 (the Bench window) in a private .venv -----------------------
+# The Bench is a Qt window, so it needs PySide6. Mint's Python is
+# externally managed: `pip install PySide6` and `pip install --user`
+# both fail outright, so the shell keeps a private virtualenv in this
+# folder. The core shell stays standard-library only — only the Bench
+# window runs from the venv.
+VENV_PY=".venv/bin/python"
+QT_STATUS="NOT FOUND"
+QT_FIX="run ./install.sh again"
+VENV_FAILED=0
+if [ ! -x "$VENV_PY" ]; then
+  rm -rf .venv
+  echo "Creating the Bench window's private folder (.venv)..."
+  if ! python3 -m venv .venv; then
+    rm -rf .venv
+    echo "PySide6: CANNOT INSTALL — python3-venv is missing on this machine."
+    echo "         Fix: sudo apt install python3.12-venv"
+    echo "         then run ./install.sh again. (The CLI still works — only"
+    echo "         the Bench window needs the venv.)"
+    QT_FIX="sudo apt install python3.12-venv, then run ./install.sh again"
+    VENV_FAILED=1
+  fi
+fi
+if [ "$VENV_FAILED" = "0" ]; then
+  if ! "$VENV_PY" -c "import PySide6" 2>/dev/null; then
+    echo "Installing PySide6-Essentials into .venv (one time, may take a minute)..."
+    if ! "$VENV_PY" -m pip install PySide6-Essentials; then
+      echo "PySide6: install FAILED — check the network and run ./install.sh again."
+      echo "         (The CLI still works — only the Bench window needs PySide6.)"
+      QT_FIX="check the network, then run ./install.sh again"
+    fi
+  fi
+  if "$VENV_PY" -c "import PySide6" 2>/dev/null; then
+    QT_VER="$("$VENV_PY" -c "import PySide6; print(PySide6.__version__)" 2>/dev/null || echo '?')"
+    QT_STATUS="$QT_VER in .venv"
+    echo "PySide6: $QT_VER OK (in .venv — the Bench window can open)"
+  else
+    echo "PySide6: NOT FOUND — the Bench window needs it (the CLI still works)."
+  fi
 fi
 
-# --- 2. Blender ------------------------------------------------------------
+# --- 3. Blender ------------------------------------------------------------
 find_blender() {
   if [ -n "${DESIGNSHELL_BLENDER:-}" ] && [ -x "${DESIGNSHELL_BLENDER}" ]; then
     echo "$DESIGNSHELL_BLENDER"; return
@@ -93,7 +138,7 @@ else
   echo "         or set DESIGNSHELL_BLENDER to its path)"
 fi
 
-# --- 2b. Image engine (stable-diffusion.cpp + LCM model) --------------------
+# --- 3b. Image engine (stable-diffusion.cpp + LCM model) --------------------
 find_sd() {
   if [ -n "${DESIGNSHELL_SD_CLI:-}" ] && [ -x "${DESIGNSHELL_SD_CLI}" ]; then
     echo "$DESIGNSHELL_SD_CLI"; return
@@ -165,15 +210,38 @@ else
   echo "        $SD_MODEL_HOME/  or run ./install.sh --with-image-engine"
 fi
 
-# --- 3. Verify -------------------------------------------------------------
+# --- 4. Verify -------------------------------------------------------------
 echo "Running the shell's test suite (fast suite; the Blender end-to-end"
 echo "builds are skipped here — they run when Blender work is tested)..."
-DESIGNSHELL_SKIP_E2E=1 python3 -m unittest discover -s tests 2>&1 | tail -3
+# With a display, the venv python runs the suite so the Qt window tests
+# prove the Bench for real; without one, system python runs the core
+# suite (the Qt tests skip cleanly there — they need a display).
+TEST_PY=python3
+if [ -x "$VENV_PY" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+  TEST_PY="$VENV_PY"
+fi
+# The test run must never fail the install: on some machines the Qt
+# tests segfault at interpreter exit *after* printing OK (a known
+# PySide6 teardown quirk), so the result is judged by the summary line.
+TEST_LOG="$(mktemp)"
+DESIGNSHELL_SKIP_E2E=1 "$TEST_PY" -m unittest discover -s tests >"$TEST_LOG" 2>&1 || true
+tail -3 "$TEST_LOG"
+if grep -q "^OK" "$TEST_LOG"; then
+  echo "(test suite passed)"
+else
+  echo "(test suite reported a problem — see above; the install continues)"
+fi
+rm -f "$TEST_LOG"
 
-# --- 4. Dependency report --------------------------------------------------
+# --- 5. Dependency report --------------------------------------------------
 echo ""
 echo "== Dependency report =="
 echo "python3   $PY_VER (needs >= 3.10)"
+if [ "$QT_STATUS" != "NOT FOUND" ]; then
+  echo "PySide6   $QT_STATUS (Bench window ready)"
+else
+  echo "PySide6   NOT FOUND ($QT_FIX)"
+fi
 if [ -n "$BLENDER_BIN" ]; then
   echo "blender   ${BLENDER_VER:-found} at $BLENDER_BIN (pinned LTS: $BLENDER_VERSION)"
 else
@@ -189,6 +257,43 @@ if [ -n "$SD_MODEL" ]; then
 else
   echo "img model MISSING ($SD_MODEL_FILE into $SD_MODEL_HOME/)"
 fi
-echo "pip pkgs  none — the shell runs on the Python standard library alone"
+echo "core      stdlib only — no pip packages in the system Python"
+
+# --- 6. Desktop launcher + `skullpt` command -------------------------------
+# A failed launcher must never fail the install, so this runs as a
+# function whose failure only prints a note.
+make_launcher() {
+  local install_dir desktop_dir apps_dir
+  install_dir="$(pwd)"
+  desktop_dir="$HOME/Desktop"
+  if command -v xdg-user-dir >/dev/null 2>&1; then
+    local xdg_desktop
+    xdg_desktop="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+    [ -n "$xdg_desktop" ] && desktop_dir="$xdg_desktop"
+  fi
+  apps_dir="$HOME/.local/share/applications"
+  mkdir -p "$apps_dir" "$HOME/.local/bin" "$desktop_dir"
+  # The absolute path goes straight into Exec — no nested quotes (GLib's
+  # desktop parser rejects them and the whole file fails).
+  cat > "$desktop_dir/SKULLPT.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=SKULLPT
+Comment=SKULLPT — native Linux design and asset workshop
+Exec="$install_dir/run.sh"
+Icon=$install_dir/skullpt-icon.svg
+Terminal=false
+Categories=Development;Graphics;3DGraphics;
+EOF
+  cp "$desktop_dir/SKULLPT.desktop" "$apps_dir/SKULLPT.desktop"
+  chmod +x "$desktop_dir/SKULLPT.desktop" "$apps_dir/SKULLPT.desktop"
+  ln -sf "$install_dir/run.sh" "$HOME/.local/bin/skullpt"
+}
+if make_launcher; then
+  echo "launcher  SKULLPT on your Desktop and in the app menu"
+  echo "command   skullpt (works from any folder)"
+else
+  echo "launcher  NOT CREATED — start with ./run.sh instead"
+fi
 echo ""
-echo "Done. Start it with: ./run.sh"
+echo "Done. Start it from the SKULLPT launcher, with skullpt, or with ./run.sh"
