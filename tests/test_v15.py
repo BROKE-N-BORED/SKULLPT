@@ -262,10 +262,11 @@ class SeatsTests(unittest.TestCase):
     still define extra roles in seats.json."""
 
     def test_default_seats_are_planner_critic_fallback(self):
+        # v1.6 (T22): the repairer seat is back — the planner repair
+        # loop uses it. drafter and heavy_coder are still out.
         self.assertEqual(set(seats_mod.DEFAULT_SEATS),
-                         {"planner", "critic", "fallback"})
+                         {"planner", "critic", "fallback", "repairer"})
         self.assertNotIn("drafter", seats_mod.DEFAULT_SEATS)
-        self.assertNotIn("repairer", seats_mod.DEFAULT_SEATS)
         self.assertNotIn("heavy_coder", seats_mod.DEFAULT_SEATS)
 
     def test_user_defined_roles_still_load(self):

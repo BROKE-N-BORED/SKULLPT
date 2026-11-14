@@ -1,5 +1,5 @@
 ---
-version: 1.5
+version: 1.6
 name: SKULLPT-design-system
 description: The SKULLPT look, a native Linux design and asset shell. A warm near-black canvas, bone text, and amber as the one chromatic accent, sampled from the skull icon's amber crack. Warp-derived palette logic (warm dark, hairline-only elevation, tight radii), Cursor's one-accent discipline, JetBrains Mono on every code surface. Built for an 8 GB no-GPU Mint PC: cheap motion only, nothing decorative that costs a frame.
 
@@ -52,8 +52,12 @@ radii:
 
 # SKULLPT Design System
 
-Single source of truth for how the Bench looks (v1.5). The code
-follows this file: `skullpt/qtdesign.py` holds the tokens, samples
+Single source of truth for how the Bench looks (v1.5, carried into
+v1.6 unchanged — the v1.6 surfaces reuse these components: the
+render settings use the Settings window's form rows and the Render
+window's groups, the Vary button is a plain secondary button, the
+workspace/backup/update actions are plain menu items and dialogs).
+The code follows this file: `skullpt/qtdesign.py` holds the tokens, samples
 the amber from the icon at runtime, and builds the one stylesheet
 `main()` applies. If this file and the code disagree, this file wins
 and the code is wrong.

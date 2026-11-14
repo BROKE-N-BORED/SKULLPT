@@ -130,16 +130,19 @@ def seat_text(seat: dict, prompt: str, image_png: bytes | None = None) -> str:
 
 # ------------------------------------------------------- fallback (v1.5, T20)
 
-# Which seat the last plan/text call actually used, and what the
-# primary seat said when it failed — so the Bench and CLI can report
-# honestly ("drafted by the local fallback — Gemini could not be
-# reached") instead of silently switching brains.
-_LAST_PLAN: dict = {"seat": None, "primary_error": None}
+# Which seat the last plan/text call actually used, what the primary
+# seat said when it failed, and whether the draft needed a repair —
+# so the Bench and CLI can report honestly ("drafted by the local
+# fallback — Gemini could not be reached", "the repairer fixed two
+# problems in the draft") instead of silently switching brains.
+_LAST_PLAN: dict = {"seat": None, "primary_error": None,
+                    "repaired": False, "repair_seat": None}
 
 
 def last_plan_seat() -> dict:
     """The record of the most recent plan_from_words call:
-    {"seat": "planner"|"fallback"|None, "primary_error": str|None}."""
+    {"seat": "planner"|"fallback"|None, "primary_error": str|None,
+     "repaired": bool, "repair_seat": "repairer"|"planner"|"fallback"|None}."""
     return dict(_LAST_PLAN)
 
 
@@ -204,6 +207,20 @@ def _json_from_text(text: str) -> dict:
         raise SeatCallFailed(f"model returned invalid JSON: {exc}") from exc
 
 
+def _repair_text(seats: dict, prompt: str) -> tuple[str, str, str | None]:
+    """Ask the repairer seat to fix a draft; if it cannot answer (no
+    key, provider error), the planner repairs its own draft instead
+    (via text_with_fallback, which itself falls back to Ollama).
+    Returns (text, role-used, repairer-error-or-None)."""
+    repairer_error: Exception | None = None
+    try:
+        return seat_text(seats.get("repairer", {}), prompt), "repairer", None
+    except (SeatNotConfigured, SeatCallFailed) as exc:
+        repairer_error = exc
+    text, role, _ = text_with_fallback(seats, prompt)
+    return text, role, str(repairer_error)
+
+
 def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
     """Draft a Description File from plain words via the planner seat.
 
@@ -213,7 +230,15 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
     (Ollama) is tried with the same prompt; when both fail, the
     planner's error is raised. Which seat was used is recorded in
     last_plan_seat() so callers can say so honestly.
+
+    A draft that parses to JSON but fails validation gets ONE repair
+    attempt (v1.6, T22): the repairer seat is sent the draft plus the
+    validation problems and asked to fix exactly those. If the repair
+    validates, it is used and recorded; if it still fails, the error
+    names both attempts. A repair is bounded to one attempt — a draft
+    that needs two repairs is a draft to rewrite, not to patch.
     """
+    _LAST_PLAN.update(repaired=False, repair_seat=None)
     prompt = (
         "You are the planner seat of a design workshop. Turn the request "
         "into ONE Description File. Reply with ONLY the JSON object, no "
@@ -224,9 +249,31 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
     desc.setdefault("kind", kind)
     problems = desc_mod.validate(desc)
     if problems:
-        raise SeatCallFailed(
-            "the planner's draft failed validation:\n- " + "\n- ".join(problems)
-            + f"\nDraft began: {raw[:200]!r}")
+        repair_prompt = (
+            "You are the repairer seat of a design workshop. A draft "
+            "Description File failed validation. Fix ONLY the listed "
+            "problems — do not redesign, rename, or add parts. Reply "
+            "with ONLY the corrected JSON object, no commentary.\n\n"
+            + FORMAT_SPEC +
+            "\nProblems:\n- " + "\n- ".join(problems) +
+            "\n\nDraft:\n" + json.dumps(desc) + "\n")
+        try:
+            repaired_raw, repair_role, _ = _repair_text(seats, repair_prompt)
+            repaired = _json_from_text(repaired_raw)
+            repaired.setdefault("kind", kind)
+            still = desc_mod.validate(repaired)
+        except (SeatNotConfigured, SeatCallFailed) as exc:
+            raise SeatCallFailed(
+                "the planner's draft failed validation, and the repair "
+                f"attempt could not run ({exc}):\n- " + "\n- ".join(problems)
+                + f"\nDraft began: {raw[:200]!r}") from exc
+        if still:
+            raise SeatCallFailed(
+                "the planner's draft failed validation, and the repair "
+                "attempt still failed validation:\n- " + "\n- ".join(still)
+                + f"\nRepaired draft began: {repaired_raw[:200]!r}")
+        desc = repaired
+        _LAST_PLAN.update(repaired=True, repair_seat=repair_role)
     for key, default in (("style", {}), ("cameras", []), ("constraints", []),
                          ("budget", {}), ("rubric", []), ("tags", [])):
         desc.setdefault(key, default)
@@ -235,9 +282,9 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
 
 def _plan_text(seats: dict, prompt: str) -> tuple[str, str]:
     """The planner call with fallback, recording which seat answered.
-    A draft that parses to JSON but fails validation is NOT retried
-    here — that repair loop is T22 (v1.6); the fallback only covers
-    a seat that could not answer at all."""
+    The fallback only covers a seat that could not answer at all; a
+    draft that parses to JSON but fails validation is repaired by
+    plan_from_words (T22), not here."""
     try:
         text, role, primary_error = text_with_fallback(seats, prompt)
     except (SeatNotConfigured, SeatCallFailed) as exc:

@@ -51,7 +51,7 @@ _RUNS_LOCK = threading.Lock()
 _RUN_SEQ = [0]
 
 
-def _start_run(kind: str, label: str, fn) -> str:
+def _start_run(kind: str, label: str, fn, queue: str | None = None) -> str:
     """Run `fn` in a background thread; returns the run id.
 
     `fn` takes two arguments: a `cancel` threading.Event (set when
@@ -61,6 +61,13 @@ def _start_run(kind: str, label: str, fn) -> str:
     the run's result, with its "detail" or "reply" as the detail).
     A governor.Cancelled from `fn` marks the run "cancelled", not
     "error" — stopping a run is not a failure.
+
+    Queue (v1.6, T24): when `queue` names a queue and another run in
+    that queue is already running, the new run is recorded with
+    status "queued" and starts when its turn comes — the heavy-job
+    lock is one-at-a-time, so builds and image rounds wait in line
+    instead of colliding on it. The queue drains itself: every run
+    starts the next queued run in its queue when it finishes.
     """
     from .governor import Cancelled
 
@@ -68,10 +75,26 @@ def _start_run(kind: str, label: str, fn) -> str:
         _RUN_SEQ[0] += 1
         run_id = f"run-{_RUN_SEQ[0]}"
         cancel = threading.Event()
+        busy = queue is not None and any(
+            r.get("_queue") == queue and r["status"] == "running"
+            for r in _RUNS.values())
         _RUNS[run_id] = {"id": run_id, "kind": kind, "label": label,
-                         "status": "running", "detail": "",
+                         "status": "queued" if busy else "running",
+                         "detail": "waiting its turn in the queue" if busy else "",
                          "progress": None, "progress_text": "",
-                         "result": None, "_cancel": cancel}
+                         "result": None, "_cancel": cancel,
+                         "_queue": queue}
+        if busy:
+            _RUNS[run_id]["_fn"] = fn
+            return run_id
+
+    _launch_run(run_id, fn, cancel, queue)
+    return run_id
+
+
+def _launch_run(run_id: str, fn, cancel: threading.Event, queue: str | None) -> None:
+    """Start a run's thread (shared by _start_run and the queue drain)."""
+    from .governor import Cancelled
 
     def report(fraction, text: str = "") -> None:
         with _RUNS_LOCK:
@@ -84,44 +107,102 @@ def _start_run(kind: str, label: str, fn) -> str:
         try:
             value = fn(cancel, report)
             with _RUNS_LOCK:
-                if isinstance(value, dict):
-                    detail = str(value.get("detail") or value.get("reply") or "")
-                    _RUNS[run_id].update(status="done", detail=detail,
-                                         result=value, progress=1.0)
-                else:
-                    _RUNS[run_id].update(status="done", detail=str(value or ""),
-                                         progress=1.0)
+                run = _RUNS.get(run_id)
+                if run is not None:
+                    if isinstance(value, dict):
+                        detail = str(value.get("detail") or value.get("reply") or "")
+                        run.update(status="done", detail=detail,
+                                   result=value, progress=1.0)
+                    else:
+                        run.update(status="done", detail=str(value or ""),
+                                   progress=1.0)
         except Cancelled as exc:
             with _RUNS_LOCK:
-                _RUNS[run_id].update(status="cancelled", detail=str(exc))
+                run = _RUNS.get(run_id)
+                if run is not None:
+                    run.update(status="cancelled", detail=str(exc))
         except Exception as exc:  # surfaced on the page, never swallowed
             with _RUNS_LOCK:
-                _RUNS[run_id].update(status="error", detail=str(exc))
+                run = _RUNS.get(run_id)
+                if run is not None:
+                    run.update(status="error", detail=str(exc))
+        finally:
+            if queue is not None:
+                _drain_queue(queue)
 
     threading.Thread(target=target, daemon=True).start()
-    return run_id
+
+
+def _drain_queue(queue: str) -> None:
+    """Start the oldest queued run in a queue, if none is running."""
+    with _RUNS_LOCK:
+        if any(r.get("_queue") == queue and r["status"] == "running"
+               for r in _RUNS.values()):
+            return
+        waiting = [r for r in _RUNS.values()
+                   if r.get("_queue") == queue and r["status"] == "queued"]
+        if not waiting:
+            return
+        # Run ids are "run-N" in creation order — the lowest number
+        # waited longest.
+        nxt = min(waiting, key=lambda r: int(str(r["id"]).split("-")[1]))
+        fn = nxt.pop("_fn", None)
+        cancel = nxt["_cancel"]
+        run_id = nxt["id"]
+        nxt.update(status="running", detail="", progress=None, progress_text="")
+    if fn is not None:
+        _launch_run(run_id, fn, cancel, queue)
+
+
+def queue_position(queue: str, run_id: str) -> int:
+    """A queued run's position in its queue (1 = next to run), or 0
+    when the run is not queued."""
+    with _RUNS_LOCK:
+        waiting = sorted(
+            (r for r in _RUNS.values()
+             if r.get("_queue") == queue and r["status"] == "queued"),
+            key=lambda r: int(str(r["id"]).split("-")[1]))
+        for pos, run in enumerate(waiting, start=1):
+            if run["id"] == run_id:
+                return pos
+    return 0
 
 
 def cancel_run(run_id: str) -> bool:
-    """Ask a running run to stop at its next safe checkpoint.
-    Returns False when the run is not running (already finished, or
-    no such run) — cancelling a finished run is a no-op, not an error."""
+    """Ask a running run to stop at its next safe checkpoint, or drop
+    a queued run from its queue. Returns False when the run is not
+    running or queued (already finished, or no such run) —
+    cancelling a finished run is a no-op, not an error."""
+    queue: str | None = None
     with _RUNS_LOCK:
         run = _RUNS.get(run_id)
-        if run is None or run["status"] != "running":
+        if run is None or run["status"] not in ("running", "queued"):
             return False
-        event = run.get("_cancel")
-        if event is not None:
-            event.set()
-        return True
+        if run["status"] == "queued":
+            queue = run.get("_queue")
+            run.pop("_fn", None)
+            run.update(status="cancelled",
+                       detail="removed from the queue before it started")
+        else:
+            event = run.get("_cancel")
+            if event is not None:
+                event.set()
+            return True
+    # Outside the lock: dropping a queued run may free the queue for
+    # the next waiter (the drain takes the lock itself).
+    if queue is not None:
+        _drain_queue(queue)
+    return True
 
 
 def _runs() -> list[dict]:
     with _RUNS_LOCK:
         out = []
         for run in list(_RUNS.values())[-8:]:
-            # The cancel Event is not JSON-able — the page never sees it.
-            out.append({k: v for k, v in run.items() if k != "_cancel"})
+            # The cancel Event, the queued function and the queue name
+            # are not JSON-able — the page never sees them.
+            out.append({k: v for k, v in run.items()
+                        if k not in ("_cancel", "_fn", "_queue")})
         return out
 
 
@@ -383,8 +464,17 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
                 raise RuntimeError("build did not pass: "
                                    + "; ".join(report_data.get("problems", [])[:3]))
             return f"built {job.dir.name}"
-        return {"ok": True, "job": job.dir.name,
-                "run": _start_run("build", job.dir.name, do_build)}
+        # One heavy job at a time per workspace (T24): builds and image
+        # rounds share the heavy-job lock, so they share one queue.
+        queue = f"heavy:{workspace}"
+        run_id = _start_run("build", job.dir.name, do_build, queue=queue)
+        position = queue_position(queue, run_id)
+        result: dict = {"ok": True, "job": job.dir.name, "run": run_id}
+        if position:
+            result["queued"] = True
+            result["detail"] = (f"{job.dir.name} is queued at position {position} — "
+                                "it builds when the run ahead of it finishes")
+        return result
     if action == "file":
         job = _job(workspace, str(payload.get("job", "")))
         if job.state != "awaiting_review":
@@ -417,6 +507,9 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         if used.get("seat") == "fallback":
             detail += (" (drafted by the local fallback model — "
                        "the Gemini seat could not be reached)")
+        if used.get("repaired"):
+            detail += (f" (the {used.get('repair_seat')} seat repaired "
+                       "the draft before it was filed)")
         return {"ok": True, "job": job.dir.name, "detail": detail}
     if action == "new-example":
         name = str(payload.get("example", ""))
@@ -441,7 +534,8 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             return imagegen.generate(workspace, bdir, cancel=cancel,
                                      progress=on_progress)
 
-        run = _start_run("images", batch["slug"], do_images)
+        run = _start_run("images", batch["slug"], do_images,
+                         queue=f"heavy:{workspace}")
         return {"ok": True, "run": run, "batch": batch["slug"],
                 "detail": "generating — candidates appear below as they land"}
     if action == "decide":
@@ -466,8 +560,30 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             return imagegen.generate(workspace, bdir, cancel=cancel,
                                      progress=on_progress)
 
-        run = _start_run("images", slug, do_reroll)
+        run = _start_run("images", slug, do_reroll, queue=f"heavy:{workspace}")
         return {"ok": True, "run": run, "detail": "generating another round"}
+    if action == "vary":
+        slug = str(payload.get("batch", ""))
+        bdir = workspace / "images" / slug
+        if bdir.parent != workspace / "images" or not bdir.is_dir():
+            raise ValueError(f"no batch {slug!r}")
+        filename = str(payload.get("file", ""))
+        prompt = str(payload.get("prompt") or "").strip() or None
+        try:
+            strength = float(payload.get("strength", imagegen.DEFAULT_VARY_STRENGTH))
+        except (TypeError, ValueError):
+            strength = imagegen.DEFAULT_VARY_STRENGTH
+
+        def do_vary(cancel, report):
+            def on_progress(done, total, text):
+                report(done / total if total else None, text)
+            return imagegen.vary(workspace, bdir, filename, prompt=prompt,
+                                 strength=strength, cancel=cancel,
+                                 progress=on_progress)
+
+        run = _start_run("images", slug, do_vary, queue=f"heavy:{workspace}")
+        return {"ok": True, "run": run,
+                "detail": f"making variations of {filename}"}
     if action == "cloud-mesh":
         from . import cloudmesh
         photo = str(payload.get("photo", "")).strip()
@@ -524,12 +640,14 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         path = str(payload.get("file", "")).strip()
         if not path:
             raise ValueError("pick a file first")
-        desc = ingest(path)
+        desc = ingest(path, workspace)
         job = Job.create(workspace / "jobs", desc)
+        mesh_note = (" the source mesh is kept in the workspace and the "
+                     "build will import it" if desc.get("mesh") else "")
         return {"ok": True, "job": job.dir.name,
                 "detail": f"read {Path(path).name} into job {job.dir.name} — "
                           "waiting at the plan gate; the original file "
-                          "was not changed"}
+                          f"was not changed.{mesh_note}"}
     if action == "unreal-package":
         from .unreal import package_unreal
 
@@ -543,6 +661,45 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             current["critic_reference_check"] = bool(payload["critic_reference"])
             settings_mod.save_settings(workspace, current)
         return {"ok": True, "detail": "settings saved"}
+    if action == "render-settings":
+        # Per-job render override (T25): stored in the description's
+        # "render" block. Changing how a job renders is presentation,
+        # not content — it never sends the job back to the plan gate.
+        job = _job(workspace, str(payload.get("job", "")))
+        desc = job.load_description()
+        render = dict(desc.get("render") or {})
+        for key in ("engine", "resolution_px", "samples", "denoise"):
+            if key in payload:
+                render[key] = payload[key]
+        problems = desc_mod.validate({**desc, "render": render})
+        render_problems = [p for p in problems if p.startswith("render.")]
+        if render_problems:
+            raise ValueError("; ".join(render_problems))
+        desc["render"] = render
+        desc_mod.dump(desc, job.desc_path)
+        job.log("render_settings", **render)
+        return {"ok": True, "job": job.dir.name, "render": render,
+                "detail": f"render settings saved for {job.dir.name}"}
+    if action == "backup":
+        from .backup import backup_workspace
+
+        dest = payload.get("dest") or None
+        result = backup_workspace(workspace, dest)
+        return {"ok": True, "detail": result["note"], "path": result["path"],
+                "files": result["files"]}
+    if action == "update-check":
+        from . import update as update_mod
+        from . import __version__
+
+        result = update_mod.check_for_update(__version__)
+        if result["error"]:
+            return {"ok": False, "detail": result["error"], "result": result}
+        if result["update_available"]:
+            detail = (f"a newer SKULLPT is out: v{result['latest']} "
+                      f"(you are on v{result['current']})")
+        else:
+            detail = f"you are on the latest release (v{result['current']})"
+        return {"ok": True, "detail": detail, "result": result}
     raise ValueError(f"unknown action {action!r}")
 
 

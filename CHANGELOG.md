@@ -1,5 +1,102 @@
 # SKULLPT — Changelog
 
+## v1.6 — 2026-11-14 — the P2 list: mesh pipeline, queue, render settings, guidance, backup
+
+The P2 task list (T21–T30, minus T26) plus the Blender performance
+items P3 and P4. T26 Character Studio was designed and split to v1.7
+(the design note lives with the task list) — it is a second making
+engine on its own, and whether MPFB2 runs on Blender 5.3.0 is still
+unconfirmed. Character builds still fail loudly, as in v1.4.
+
+- CLOUD-MESH GLB INTO THE PIPELINE (T21): a Blender build of a
+  job with a mesh imports the mesh itself (`bpy.ops.import_scene`)
+  and skips the stand-in boxes; added parts still build normally.
+  `unreal-package` copies the job's mesh into the package and uses
+  it as the main asset when no Blender build exists yet (a .stl is
+  copied for reference but never the main asset — Unreal's importer
+  does not take STL). Lineage records the mesh source.
+- PLANNER REPAIR LOOP (T22): the repairer seat is back in the
+  defaults (Groq gpt-oss-20b). A draft that fails validation gets
+  ONE repair attempt — the repairer first, the planner seat when
+  the repairer has no key — and the plan record notes whether the
+  draft was repaired and by whom. A repair that still fails says
+  so, naming both attempts.
+- CRITIC JUDGES EVERY RENDER (T23): the vision critic looks at all
+  of a build's renders in one call and the build report records
+  which renders it judged. The Build Report dialog now shows the
+  real critique (it was reading keys the critique never had, so it
+  always showed a blank verdict — fixed in place).
+- JOB QUEUE (T24): a second build while one is running queues
+  instead of colliding on the heavy-job lock; queued builds run in
+  order, report their position, and can be cancelled before they
+  start. The Bench's run poller no longer treats a queued run as
+  finished (it used to drop it and log it as failed — fixed in
+  place). Image generation and rerolls join the same queue.
+- RENDER SETTINGS IN THE UI (T25): engine (auto, EEVEE, Cycles),
+  resolution (128–4096), samples (1–512), and denoise — workspace
+  defaults in the Settings window, per-job override in the Render
+  window, and `settings --render-*` on the CLI. The resolution
+  order is job, then the workspace defaults the user actually set,
+  then a description's budget.preview_px (older descriptions keep
+  rendering as they did), then 640. Changing settings never sends
+  a job back to the plan gate.
+- IMAGE-STEP V2 (T27): `vary` makes img2img variations of a kept
+  candidate into a new batch (the Images window has a Vary button,
+  enabled only for kept candidates). `generate` takes guidance:
+  `--init-img`/`--strength` for img2img, `--control-net`/
+  `--control-image`/`--control-strength` for ControlNet, and
+  `--ip-adapter`/`--clip_vision`/`--ip-adapter-image` for
+  IP-Adapter — all flags verified against the real source-built
+  sd-cli. Guidance models live in `~/design-shell-models/` and are
+  found by name; missing model or image is a plain refusal before
+  the lock is taken.
+- CLOUD-MESH HARDENING (T28): the upload is retried once on a
+  transient failure and the GLB extraction twice; a fallback Space
+  can be set with `DESIGNSHELL_CLOUDMESH_FALLBACK_URL` (none ships
+  by default — every public TRELLIS.2 clone checked on 2026-11-14
+  was paused or in error); the SSE queue position and wait time
+  reach the progress callback; photos bigger than 1024 px on the
+  longest side are downscaled before upload (stdlib PNG decode and
+  re-encode — no new dependency); and a quota error never falls
+  back, because the free GPU time is per-account across Spaces.
+  The cloud-mesh record now also sets the job's `mesh` block, so
+  the mesh flows into T21.
+- WORKSPACE SWITCHER, BACKUP, UPDATE CHECK (T29): File → Open
+  workspace switches now (child windows close, the choice is
+  remembered); File → Back up workspace zips the jobs, library,
+  pictures, meshes, settings, and chat with a manifest — the
+  Hugging Face token file is never in a backup, and the backup
+  says so. Help → Check for updates reads the latest SKULLPT
+  release on GitHub (read-only, 15 s timeout); it never downloads
+  anything. CLI: `backup` and `update-check`. `skullpt.__version__`
+  is now the single version source ("1.6").
+- INGEST .OBJ/.FBX/.STL + PRESERVE MESH DATA (T30): ingest takes
+  `.obj` (stdlib parse, groups/objects as parts) and `.stl`
+  (binary and ASCII) directly, and `.fbx` through Blender's own
+  importer (no hand-rolled binary FBX parser). The source file is
+  filed in the workspace's `meshes/` folder and the description
+  records it, so a build imports the real mesh; parts carry their
+  recorded triangle counts, which the budget gate uses. The
+  viewport still draws mesh parts as boxes (the right size — the
+  Blender renders show the real mesh).
+- BLENDER SCRIPT SPLIT (P3): `generate_script` is now the build
+  script (geometry, materials, stats, GLB/LOD/collision, .blend)
+  and `generate_render_script` is the render script (opens the
+  .blend, sets the engine, renders the cameras). A render-engine
+  fallback re-runs renders only, not the whole build. The vision
+  loop still re-runs both (its patches change geometry).
+- EEVEE PROBE (P4): before a full run with the engine set to auto,
+  a 64 px one-cube probe decides whether EEVEE works headless; a
+  failed probe goes straight to Cycles instead of burning the
+  600 s timeout. The result is remembered in the workspace
+  settings and shown in the Settings window. Engine "cycles"
+  skips the probe; engine "eevee" tries EEVEE as today.
+- Smaller fixes: the run machinery no longer crashes if a run
+  record is gone when its thread finishes (a KeyError found by
+  the queue tests); the Settings window's render controls and the
+  Render window's per-job controls follow the v1.5 identity
+  (DESIGN.md unchanged — the new surfaces reuse its components).
+
 ## v1.5 — 2026-11-14 — the redesign: five windows, bone and amber, native picker, job management
 
 The redesign report (2026-11-13) and the P1 task list (T8–T20) plus

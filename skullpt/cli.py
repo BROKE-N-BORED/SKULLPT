@@ -23,7 +23,9 @@ Commands:
   snapshot <description> <out.html>      write a standalone (non-live) viewer page
   plan <workspace> <words...> [--kind K] draft a description from plain words (planner seat)
   critique <workspace> <job>             run the live vision critic on a job's renders
-  ingest <file.glb|.blend> <out.json>    derive a description FROM an existing asset
+  ingest <file.glb|.obj|.stl|.fbx|.blend> <out.json>
+                                         derive a description FROM an existing asset
+                                         (the source mesh is kept; the build imports it)
   intake <workspace> <photo>             file a photo as a reference + draft job
   cloud-mesh <workspace> <photo> [--job J] [--seed N]
                                          photo -> textured 3D mesh on Hugging
@@ -37,8 +39,18 @@ Commands:
   pick <batch-dir> [--port N]            serve the Image Picker (keep / reject)
   decide <batch-dir> <file> keep|reject  decide a candidate from the terminal
   reroll <batch-dir>                     generate another round into the same batch
+  vary <batch-dir> <file> [--prompt ...] [--strength 0.6] [--count 3]
+                                         img2img variations of a kept candidate
+                                         into a new batch
   settings <workspace> [--critic-reference on|off]
+                       [--render-engine auto|eevee|cycles]
+                       [--render-resolution N] [--render-samples N]
+                       [--render-denoise on|off]
                                          show or set workspace switches
+  backup <workspace> [dest]              zip the whole workspace (the Hugging
+                                         Face token is never in a backup)
+  update-check                           is there a newer SKULLPT release?
+                                         (read-only — never downloads)
   bench [workspace]                      open the Bench — the shell's window,
                                          a native Linux desktop window
                                          (Jobs home, Render, Images, Library,
@@ -113,8 +125,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("decision", choices=("keep", "reject"))
     p = sub.add_parser("reroll"); p.add_argument("batch_dir")
     p.add_argument("--count", type=int, default=None)
+    p = sub.add_parser("vary"); p.add_argument("batch_dir"); p.add_argument("file")
+    p.add_argument("--prompt", nargs="+", default=None)
+    p.add_argument("--strength", type=float, default=0.6)
+    p.add_argument("--count", type=int, default=3)
     p = sub.add_parser("settings"); p.add_argument("workspace")
     p.add_argument("--critic-reference", choices=("on", "off"), default=None)
+    p.add_argument("--render-engine", choices=("auto", "eevee", "cycles"), default=None)
+    p.add_argument("--render-resolution", type=int, default=None)
+    p.add_argument("--render-samples", type=int, default=None)
+    p.add_argument("--render-denoise", choices=("on", "off"), default=None)
+    p = sub.add_parser("backup"); p.add_argument("workspace")
+    p.add_argument("dest", nargs="?", default=None)
+    p = sub.add_parser("update-check")
     p = sub.add_parser("bench"); p.add_argument("workspace", nargs="?", default=None)
     p = sub.add_parser("webbench"); p.add_argument("workspace")
     p.add_argument("--port", type=int, default=8770)
@@ -373,6 +396,23 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             for c in batch["candidates"]:
                 print(f"  {c['file']}  seed {c['seed']}  {c['status']}")
+        elif args.cmd == "vary":
+            from . import imagegen
+            bdir = Path(args.batch_dir)
+            ws = bdir.parent.parent if bdir.parent.name == "images" else bdir.parent
+            prompt = " ".join(args.prompt) if args.prompt else None
+            try:
+                batch = imagegen.vary(ws, bdir, args.file, prompt=prompt,
+                                      strength=args.strength, count=args.count)
+            except imagegen.ImageGenError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            except Exception as exc:
+                print(f"image generation stopped: {exc}", file=sys.stderr)
+                return 1
+            print(f"variation batch: {imagegen.batch_path(ws, batch['slug'])}")
+            for c in batch["candidates"]:
+                print(f"  {c['file']}  seed {c['seed']}  {c['status']}")
         elif args.cmd == "settings":
             from . import settings as settings_mod
             ws = _ws(args.workspace)
@@ -381,10 +421,58 @@ def main(argv: list[str] | None = None) -> int:
                 current["critic_reference_check"] = args.critic_reference == "on"
                 settings_mod.save_settings(ws, current)
                 print(f"critic_reference_check = {current['critic_reference_check']} (saved)")
+            render_updates = {}
+            if args.render_engine is not None:
+                render_updates["engine"] = args.render_engine
+            if args.render_resolution is not None:
+                render_updates["resolution_px"] = args.render_resolution
+            if args.render_samples is not None:
+                render_updates["samples"] = args.render_samples
+            if args.render_denoise is not None:
+                render_updates["denoise"] = args.render_denoise == "on"
+            if render_updates:
+                current = settings_mod.save_render_settings(ws, render_updates)
+                print("render defaults saved: "
+                      f"engine={current['render_engine']}, "
+                      f"resolution={current['render_resolution_px']}px, "
+                      f"samples={current['render_samples']}, "
+                      f"denoise={'on' if current['render_denoise'] else 'off'}")
             print(f"critic reference comparison: "
                   f"{'on' if current.get('critic_reference_check', True) else 'off'}"
                   f"  (a job can override this with \"critic_reference\": true/false "
                   f"in its description)")
+            print(f"render defaults: engine={current.get('render_engine', 'auto')}, "
+                  f"resolution={current.get('render_resolution_px', 640)}px, "
+                  f"samples={current.get('render_samples', 24)}, "
+                  f"denoise={'on' if current.get('render_denoise') else 'off'}"
+                  f"  (a job can override these in its render settings)")
+            last = settings_mod.last_render_engine(ws)
+            if last.get("engine"):
+                print(f"last render engine that worked here: {last['engine']}"
+                      + (f" ({last['at']})" if last.get("at") else ""))
+        elif args.cmd == "backup":
+            from .backup import backup_workspace
+            ws = _ws(args.workspace)
+            try:
+                result = backup_workspace(ws, args.dest)
+            except (OSError, ValueError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            print(f"backup: {result['path']} ({result['files']} files, "
+                  f"{result['bytes']} bytes)")
+            print(result["note"])
+        elif args.cmd == "update-check":
+            from . import __version__, update as update_mod
+            result = update_mod.check_for_update(__version__)
+            if result["error"]:
+                print(result["error"], file=sys.stderr)
+                return 1
+            if result["update_available"]:
+                print(f"a newer SKULLPT is out: v{result['latest']} "
+                      f"(you are on v{result['current']})")
+                print(f"get it at: {result['url']}")
+            else:
+                print(f"you are on the latest release (v{result['current']})")
         elif args.cmd == "bench":
             from .qtbench import default_workspace, main as qt_main
             ws = _ws(args.workspace) if args.workspace else _ws(default_workspace())

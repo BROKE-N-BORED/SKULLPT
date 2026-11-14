@@ -1,4 +1,4 @@
-# SKULLPT — v1.5
+# SKULLPT — v1.6
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -35,6 +35,18 @@ DESIGN.md, with a native image picker, job management
 progress and cancel on long work, a settings window with Hugging
 Face token setup, and the dead seats removed (the planner falls back
 to the local Ollama seat when Gemini cannot be reached).
+v1.6 is the P2 task list (T21–T30) plus the Blender performance
+items: the cloud mesh is a first-class build input (Blender imports
+it, Unreal packages it), the planner repairs its own bad drafts,
+the critic judges every render of a build, builds queue up instead
+of colliding, render settings (engine, resolution, samples,
+denoise) are in the Bench, pictures get img2img variations and
+ControlNet/IP-Adapter guidance, the cloud-mesh step is hardened
+(retries, a fallback Space, queue position, photo downscale),
+workspaces can be switched and backed up and the Bench can check
+for a newer release, and ingest now takes .obj/.fbx/.stl and keeps
+the mesh. Character Studio (T26) is designed but NOT built in
+v1.6 — it splits to v1.7 (see the design note in the task list).
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11; the Blender install, the
 image-engine install, the Bench's real-PC run, and the first real
@@ -277,6 +289,7 @@ the same `reference` slot photo intake fills.
     python3 -m skullpt pick <workspace>/images/<batch>
     python3 -m skullpt decide <workspace>/images/<batch> cand-01.png keep
     python3 -m skullpt reroll <workspace>/images/<batch>
+    python3 -m skullpt vary <workspace>/images/<batch> cand-01.png
 
 Each prompt generates a batch of **3 candidates** at 512×512. `pick`
 serves a simple picker page (phone-friendly, same pattern as the Live
@@ -482,6 +495,80 @@ there). The first real mesh happens on a machine with a token.
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
 
+## v1.6 — the P2 list (mesh pipeline, queue, render settings, guidance, backup)
+
+- **The cloud mesh is a first-class input (T21).** A Blender build
+  of a cloud-meshed job imports the mesh itself instead of
+  rebuilding from the ingested boxes (parts you add on top — a
+  floor, props — still build normally). And a job with a mesh but
+  no Blender build yet can still be packaged for Unreal: the mesh
+  is the main asset, and the package says so.
+- **The planner repairs its own bad drafts (T22).** When a drafted
+  description fails validation, the repairer seat gets one shot at
+  fixing exactly the listed problems (if it has no key, the planner
+  seat repairs instead, and the planner's own Ollama fallback is
+  still there). The repair is recorded in the plan record; a draft
+  that still fails says so, naming both attempts.
+- **The critic judges every render (T23).** The vision critic now
+  looks at all of a build's renders in one call (every camera
+  angle, not just the first PNG), and the build report records
+  which renders it judged.
+- **Builds queue (T24).** Starting a second build while one is
+  running queues it instead of colliding on the heavy-job lock;
+  queued builds run in order, and a queued build can be cancelled
+  before it starts.
+- **Render settings in the Bench (T25).** Engine (auto, EEVEE,
+  Cycles), resolution, samples, and denoise live in the Settings
+  window (workspace defaults) and in the Render window (per-job
+  override). Changing them does not send the job back for
+  approval — they are presentation, not content.
+- **Pictures: variations and guidance (T27).** A kept candidate can
+  be varied (img2img) from the Images window, and the image engine
+  takes ControlNet and IP-Adapter guidance models. The guidance
+  models are separate downloads that live in
+  `~/design-shell-models/` next to the base model: a ControlNet
+  model file (`.gguf`, its name contains `controlnet`) and, for
+  IP-Adapter, an IP-Adapter model (name contains `ip-adapter`) plus
+  a CLIP vision encoder (name contains `clip_vision`). Without the
+  model files, guidance is refused plainly — the base picture step
+  needs nothing new.
+- **Cloud-mesh hardening (T28).** The upload and the GLB extraction
+  are retried; a fallback Space can be set with
+  `DESIGNSHELL_CLOUDMESH_FALLBACK_URL` (none ships by default —
+  every public TRELLIS.2 clone checked on 2026-11-14 was paused or
+  in error, so there is no safe default to hardcode); the queue
+  position and wait time are shown while the free GPU is busy;
+  photos bigger than 1024 px on the longest side are downscaled
+  before upload; and a quota error never falls back (the free GPU
+  time is per-account, so a second Space would not help).
+- **Workspace switcher, backup, update check (T29).** File →
+  Open workspace switches workspaces now (not on the next start).
+  File → Back up workspace zips the jobs, library, pictures,
+  meshes, settings, and chat — the Hugging Face token file is
+  never in a backup, and the backup says so. Help → Check for
+  updates reads the latest SKULLPT release on GitHub and says
+  whether a newer one exists; it never downloads anything.
+- **Ingest .obj/.fbx/.stl and keep the mesh (T30).** Ingest now
+  takes `.obj` and `.stl` directly, and `.fbx` through Blender's
+  own importer, and the mesh is kept: the source file is filed in
+  the workspace's `meshes/` folder and the description records it,
+  so a build imports the real mesh instead of rebuilding boxes.
+  The viewport still draws mesh parts as boxes (the right size —
+  the Blender renders show the real mesh).
+- **Blender: build and render are separate phases (P3).** The
+  render-engine fallback re-runs the renders only, not the whole
+  build. And a cheap probe (P4) checks whether EEVEE will work
+  headless before a full run can burn its timeout — a failed probe
+  goes straight to Cycles, and the Settings window shows the last
+  engine that worked here.
+- **Character Studio (T26) is NOT in v1.6.** It was designed and
+  split to v1.7: it is a second making engine (the MPFB2 character
+  system, its extension and asset packs, a character description
+  vocabulary, and a sixth Bench window) on its own, and whether
+  MPFB2 runs on Blender 5.3.0 is still unconfirmed. The design
+  note lives with the task list. Character builds still fail
+  loudly, as in v1.4 — no half-working studio ships.
+
 ## The making engine — Blender scenes (new in v0.3)
 
 A description of kind `scene` now builds for real. The shell writes a
@@ -563,10 +650,6 @@ model are installed.
 
 ## What's NOT here yet (on purpose)
 
-- Image variations (img2img off a keeper) and guided generation
-  (IP-Adapter / ControlNet) are not wired yet — v0.7 is prompt →
-  candidates → pick. The local engine supports both; they are the
-  next image-step additions when asked for.
 - No call against the real Google/Groq endpoints has been run from the
   build sandbox — the live-seat wiring is verified against a local mock
   provider implementing the same response shapes. The first real call
@@ -578,9 +661,9 @@ model are installed.
   build sandbox — the cloud mesh wiring is verified against a local
   mock Gradio server implementing the same API shapes. The first real
   mesh happens on a machine with a token.
-- No Character studio yet (MPFB2 route) — characters are a later step.
-  Building a character or project job fails loudly and says so, instead
-  of "succeeding" with no outputs.
+- No Character studio yet (MPFB2 route) — designed for v1.7, not
+  built. Building a character or project job fails loudly and says
+  so, instead of "succeeding" with no outputs.
 - The standalone render window (`view`) and the image picker are
   still local web pages served by the shell itself — only the Bench
   went native in v1.0.

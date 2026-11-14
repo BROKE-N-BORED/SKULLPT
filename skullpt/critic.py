@@ -7,10 +7,13 @@ The OfflineCritic is a deterministic rubric checker that runs anywhere
 (text length vs panel width, contrast of style tokens, rubric items it
 can verify from the description itself) and honestly marks the rest as
 "needs vision". Since v0.6 the GeminiCritic makes a real vision call via
-skullpt.live: it sends the first render PNG plus the rubric and asks
-for structured fixes, each optionally carrying ONE machine-appliable
-parameter patch. It still refuses clearly when no key is configured or
-no render exists — a sandbox pass must never be sold as a vision verdict.
+skullpt.live: it sends the render PNGs plus the rubric and asks for
+structured fixes, each optionally carrying ONE machine-appliable
+parameter patch. Since v1.6 (T23) it judges EVERY render in one call —
+different camera angles of the same build — and records which images
+it judged, instead of looking at only the first PNG. It still refuses
+clearly when no key is configured or no render exists — a sandbox pass
+must never be sold as a vision verdict.
 """
 from __future__ import annotations
 
@@ -69,15 +72,20 @@ class GeminiCritic:
         if not env_key or not os.environ.get(env_key):
             raise CriticNotConfigured(
                 f"Gemini critic needs {env_key} set in the environment — refusing to fake a visual verdict")
-        image_path = None
+        # Every render, not just the first (T23): the build's cameras
+        # are different angles of the same object, and a flaw visible
+        # from one angle is a flaw in the build.
+        image_paths = []
         for name in previews:
             candidate = Path(name)
             if candidate.suffix == ".png" and candidate.exists():
-                image_path = candidate
-                break
-        if image_path is None:
+                image_paths.append(candidate)
+        if not image_paths:
             raise CriticNotConfigured(
                 "Gemini critic needs a render PNG to look at — none was produced")
+        count = len(image_paths)
+        views = (f"{count} renders of the same build, from different "
+                 "camera angles") if count > 1 else "one render"
         rubric = "\n".join(f"- {item}" for item in desc.get("rubric", [])) or "- (no rubric items)"
         parts = "\n".join(
             f"- {p['id']} ({p.get('type')}, {p.get('shape', 'box')}) "
@@ -88,27 +96,30 @@ class GeminiCritic:
             "\"issue\": \"what is wrong, briefly\", \"fix\": \"what to change\", "
             "\"patch\": {\"field\": value} or null}]}. A patch may set ONE of "
             "position_cm, size_cm, material, bevel_cm, radius_cm on that part — "
-            "parameter changes only. If the render satisfies the rubric, "
+            "parameter changes only. If the renders satisfy the rubric, "
             "return {\"fixes\": []}.")
+        render_bytes = [p.read_bytes() for p in image_paths]
         if reference_png is not None:
             prompt = (
-                "You are the vision critic of a design workshop. TWO images "
-                "are attached: the FIRST is the reference picture the user "
-                "chose for this job; the SECOND is a render of what was "
-                "built. Judge the render against the reference first — does "
-                "it show the same object, proportions, materials and "
+                "You are the vision critic of a design workshop. "
+                f"{count + 1} images are attached: the FIRST is the reference "
+                "picture the user chose for this job; the rest are "
+                f"{views}. Judge the renders against the reference first — "
+                "do they show the same object, proportions, materials and "
                 "colours? — and also against this rubric:\n"
                 f"{rubric}\n\nThe description's parts (centimetres, z-up):\n{parts}\n\n"
                 + reply_spec)
             text = live.gemini_text(self.seat, prompt, image_png=reference_png,
-                                    extra_images=[image_path.read_bytes()])
+                                    extra_images=render_bytes)
         else:
             prompt = (
-                "You are the vision critic of a design workshop. Look at the "
-                "attached render and judge it ONLY against this rubric:\n"
+                "You are the vision critic of a design workshop. "
+                f"{count} image{'s are' if count > 1 else ' is'} attached: "
+                f"{views}. Judge them ONLY against this rubric:\n"
                 f"{rubric}\n\nThe description's parts (centimetres, z-up):\n{parts}\n\n"
                 + reply_spec)
-            text = live.gemini_text(self.seat, prompt, image_png=image_path.read_bytes())
+            text = live.gemini_text(self.seat, prompt, image_png=render_bytes[0],
+                                    extra_images=render_bytes[1:])
         try:
             data = live._json_from_text(text)
         except live.SeatCallFailed as exc:
@@ -116,12 +127,14 @@ class GeminiCritic:
         fixes = data.get("fixes")
         if not isinstance(fixes, list):
             raise CriticNotConfigured("Gemini critique carried no fixes list")
+        judged = [p.name for p in image_paths]
         return {"critic": self.name, "vision": True, "fixes": fixes,
-                "image": image_path.name,
+                "image": judged[0], "images": judged,
                 "reference_compared": reference_png is not None,
-                "note": ("live Gemini vision critique of the render against "
-                         "the chosen reference" if reference_png is not None else
-                         "live Gemini vision critique of the render")}
+                "note": ("live Gemini vision critique of "
+                         + (f"{count} renders" if count > 1 else "the render")
+                         + (" against the chosen reference"
+                            if reference_png is not None else ""))}
 
 
 def get_critic(seats: dict, prefer: str = "offline"):

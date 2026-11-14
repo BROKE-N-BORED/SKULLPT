@@ -260,8 +260,9 @@ class IngestTests(unittest.TestCase):
         self.assertEqual(part["position_cm"], [100.0, -60.0, 200.0])
 
     def test_ingest_rejects_other_files(self):
+        # .obj/.stl/.fbx joined in v1.6 (T30); .dae is still unsupported.
         with self.assertRaises(ValueError):
-            ingest.ingest("model.obj")
+            ingest.ingest("model.dae")
 
 
 class IntakeTests(unittest.TestCase):

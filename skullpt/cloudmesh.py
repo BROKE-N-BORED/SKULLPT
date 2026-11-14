@@ -51,9 +51,23 @@ does NOT check the free-RAM floor — it loads no local model and runs
 no local compute; it is network-bound. (The governor floor itself is
 untouched; builds and image generation still go through it.)
 
-Stdlib only (urllib, json) — no new dependencies. The Space base URL
-can be overridden with DESIGNSHELL_CLOUDMESH_URL (the test suite's
-mock Gradio server uses this, same pattern as DESIGNSHELL_GEMINI_URL).
+Hardening (v1.6, T28): the upload is retried once on a transient
+failure, the GLB extract is retried twice, the queue position from
+the Space's SSE estimation events is reported as progress, and a
+photo PNG wider than 1024 px is shrunk before upload (the Space
+resizes to 512 server-side anyway). A fallback Space can be set with
+DESIGNSHELL_CLOUDMESH_FALLBACK_URL: when the primary Space cannot be
+reached at all (upload or background-removal stage), the whole flow
+runs once against the fallback instead. No fallback Space ships by
+default — every public TRELLIS.2 clone checked on 2026-11-14 was
+paused or in error, so a hardcoded clone would be a fake fallback.
+Quota errors never trigger the fallback: the ZeroGPU quota is
+per-account across all Spaces, so a second Space would not help.
+
+Stdlib only (urllib, json, zlib) — no new dependencies. The Space base
+URL can be overridden with DESIGNSHELL_CLOUDMESH_URL (the test
+suite's mock Gradio server uses this, same pattern as
+DESIGNSHELL_GEMINI_URL).
 """
 from __future__ import annotations
 
@@ -61,12 +75,14 @@ import json
 import mimetypes
 import os
 import random
+import struct
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zlib
 from pathlib import Path
 
 from . import description as desc_mod
@@ -81,6 +97,10 @@ SPACE_URL = "https://microsoft-trellis-2.hf.space"
 
 TOKEN_ENV = "HF_TOKEN"
 URL_ENV_OVERRIDE = "DESIGNSHELL_CLOUDMESH_URL"
+# A second Space to try when the primary cannot be reached at all
+# (T28). No default: every public TRELLIS.2 clone checked on
+# 2026-11-14 was paused or in error.
+FALLBACK_URL_ENV = "DESIGNSHELL_CLOUDMESH_FALLBACK_URL"
 
 # Generation defaults — the Space's own UI defaults, at the cheapest
 # resolution (512 saves ZeroGPU quota; 1024/1536 cost more per mesh).
@@ -96,8 +116,13 @@ TEXTURE_SIZE = 2048              # range 1024-4096
 DEFAULT_TIMEOUT = 900
 # A single read that stalls this long with no SSE event is a dead stream.
 READ_TIMEOUT = 120
-# /extract_glb is the fragile step; one retry in the same session.
-EXTRACT_RETRIES = 1
+# /extract_glb is the fragile step; two retries in the same session.
+EXTRACT_RETRIES = 2
+# The photo upload is retried once on a transient failure.
+UPLOAD_RETRIES = 1
+# A PNG wider than this on its longest side is shrunk before upload
+# (the Space resizes to 512 server-side anyway).
+MAX_UPLOAD_DIMENSION = 1024
 
 TOKEN_FIX = (
     "the cloud mesh step needs a Hugging Face token: make a free account at "
@@ -133,6 +158,22 @@ class QuotaExhaustedError(CloudMeshError):
 
 def base_url() -> str:
     return os.environ.get(URL_ENV_OVERRIDE) or SPACE_URL
+
+
+def fallback_url() -> str | None:
+    """The fallback Space's base URL, if one is configured — else None."""
+    value = os.environ.get(FALLBACK_URL_ENV, "").strip()
+    return value.rstrip("/") if value else None
+
+
+def _is_connection_failure(exc: CloudMeshError) -> bool:
+    """True when the Space could not be reached at all (network down,
+    Space paused or erroring, stream dead) — the failures a fallback
+    Space can actually help with. A malformed answer from a reachable
+    Space is not one of these."""
+    text = str(exc)
+    return ("could not reach" in text or "stopped answering" in text
+            or "timed out" in text or "HTTP 5" in text)
 
 
 def token_value(token: str | None = None, workspace: str | Path | None = None) -> str:
@@ -211,11 +252,136 @@ def _multipart(field: str, filename: str, payload: bytes, mime: str,
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
+# PNG colour types -> channels per pixel (bit depth 8 only; the
+# downscaler declines anything else and the original uploads as-is).
+_PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+
+
+def _png_chunks(data: bytes):
+    """(type, payload) for each chunk of a PNG file."""
+    pos = 8
+    while pos + 8 <= len(data):
+        length, ctype = struct.unpack_from(">I4s", data, pos)
+        yield ctype.decode("latin-1"), data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+
+
+def _downscale_png(data: bytes, max_dim: int) -> bytes | None:
+    """Shrink a PNG to at most max_dim on its longest side, stdlib-only
+    (zlib decode, unfilter, nearest-neighbour resample, re-encode).
+    Returns None for anything it cannot handle safely (16-bit,
+    interlaced, truncated) — the caller then uploads the original."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    try:
+        ihdr = None
+        palette = None
+        idat = bytearray()
+        for ctype, payload in _png_chunks(data):
+            if ctype == "IHDR":
+                ihdr = payload
+            elif ctype == "PLTE":
+                palette = payload
+            elif ctype == "IDAT":
+                idat += payload
+            elif ctype == "IEND":
+                break
+        if ihdr is None or len(ihdr) != 13:
+            return None
+        width, height, bit_depth, color_type, _comp, _filt, interlace = \
+            struct.unpack(">IIBBBBB", ihdr)
+        if bit_depth != 8 or interlace != 0 or color_type not in _PNG_CHANNELS:
+            return None
+        channels = _PNG_CHANNELS[color_type]
+        raw = zlib.decompress(bytes(idat))
+        stride = width * channels
+        if len(raw) < (stride + 1) * height:
+            return None
+        # Unfilter (PNG filter types 0-4) into plain scanlines.
+        rows = []
+        prev = bytearray(stride)
+        bpp = channels
+        for y in range(height):
+            ftype = raw[y * (stride + 1)]
+            line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+            if ftype == 1:
+                for i in range(bpp, stride):
+                    line[i] = (line[i] + line[i - bpp]) & 0xFF
+            elif ftype == 2:
+                for i in range(stride):
+                    line[i] = (line[i] + prev[i]) & 0xFF
+            elif ftype == 3:
+                for i in range(stride):
+                    left = line[i - bpp] if i >= bpp else 0
+                    line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+            elif ftype == 4:
+                for i in range(stride):
+                    a = line[i - bpp] if i >= bpp else 0
+                    b = prev[i]
+                    c = prev[i - bpp] if i >= bpp else 0
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                    line[i] = (line[i] + pr) & 0xFF
+            elif ftype != 0:
+                return None
+            rows.append(bytes(line))
+            prev = line
+        new_w = max(1, round(width * max_dim / max(width, height)))
+        new_h = max(1, round(height * max_dim / max(width, height)))
+        out = bytearray()
+        for y in range(new_h):
+            src_y = min(height - 1, y * height // new_h)
+            out.append(0)  # filter type 0: none
+            row = rows[src_y]
+            for x in range(new_w):
+                src_x = min(width - 1, x * width // new_w)
+                out += row[src_x * channels:(src_x + 1) * channels]
+        new_ihdr = struct.pack(">IIBBBBB", new_w, new_h, 8, color_type, 0, 0, 0)
+
+        def chunk(ctype: bytes, payload: bytes) -> bytes:
+            return (struct.pack(">I", len(payload)) + ctype + payload
+                    + struct.pack(">I", zlib.crc32(ctype + payload) & 0xFFFFFFFF))
+
+        result = bytearray(b"\x89PNG\r\n\x1a\n")
+        result += chunk(b"IHDR", new_ihdr)
+        if palette is not None:
+            result += chunk(b"PLTE", palette)
+        result += chunk(b"IDAT", zlib.compress(bytes(out), level=6))
+        result += chunk(b"IEND", b"")
+        return bytes(result)
+    except (ValueError, struct.error, zlib.error, IndexError):
+        return None
+
+
+def prepare_upload_photo(photo: Path) -> tuple[bytes, bool]:
+    """The bytes to upload for a photo. A PNG larger than
+    MAX_UPLOAD_DIMENSION on its longest side is shrunk first (the
+    Space resizes to 512 server-side anyway; a 4000 px phone photo is
+    upload time for nothing). JPEGs and GIFs upload as-is — the shell
+    has no JPEG encoder, and the Space resizes server-side; the cost
+    is upload bandwidth, not GPU quota. Returns (payload, scaled)."""
+    data = photo.read_bytes()
+    if photo.suffix.lower() != ".png":
+        return data, False
+    try:
+        width, height, _fmt = image_size(photo)
+    except OSError:
+        return data, False
+    if width is None or max(width, height) <= MAX_UPLOAD_DIMENSION:
+        return data, False
+    scaled = _downscale_png(data, MAX_UPLOAD_DIMENSION)
+    if scaled is None:
+        return data, False
+    return scaled, True
+
+
 def upload_image(base: str, token: str, photo: Path, session_hash: str,
                  timeout: int = READ_TIMEOUT) -> str:
     """Upload the photo; returns the server-side path Gradio gives back."""
     mime, _ = mimetypes.guess_type(photo.name)
-    body, ctype = _multipart("files", photo.name, photo.read_bytes(),
+    payload, _scaled = prepare_upload_photo(photo)
+    body, ctype = _multipart("files", photo.name, payload,
                              mime or "application/octet-stream",
                              {"session_hash": session_hash})
     raw = _request(f"{base}/gradio_api/upload", token, data=body,
@@ -237,8 +403,10 @@ def upload_image(base: str, token: str, photo: Path, session_hash: str,
 
 
 def _call(base: str, token: str, session_hash: str, fn: str,
-          data: list, deadline: float) -> list:
-    """Call one Gradio endpoint and wait for its output data list."""
+          data: list, deadline: float, progress=None) -> list:
+    """Call one Gradio endpoint and wait for its output data list.
+    `progress`, when given, is called with ("queue", detail) when the
+    Space reports a queue position, so the user sees the wait move."""
     payload = json.dumps({"data": data, "session_hash": session_hash}).encode()
     event_id: str | None = None
     last_error: CloudMeshError | None = None
@@ -268,12 +436,15 @@ def _call(base: str, token: str, session_hash: str, fn: str,
         raise last_error
     if not event_id:
         raise CloudMeshError(f"the Space's {fn} call did not start")
-    return _poll_events(base, token, fn, event_id, deadline)
+    return _poll_events(base, token, fn, event_id, deadline, progress=progress)
 
 
 def _poll_events(base: str, token: str, fn: str, event_id: str,
-                 deadline: float) -> list:
-    """Read the SSE stream until the call completes, errors, or times out."""
+                 deadline: float, progress=None) -> list:
+    """Read the SSE stream until the call completes, errors, or times out.
+    Queue-position ("estimation") events are reported through progress
+    as ("queue", detail) — the free queue is most of the wait, and a
+    silent 5-minute wait looks like a hang."""
     url = f"{base}/gradio_api/call/{event_id}"
     req = urllib.request.Request(url, headers=_headers(token))
     try:
@@ -330,7 +501,26 @@ def _poll_events(base: str, token: str, fn: str, event_id: str,
                     detail = payload
                 _check_quota(detail)
                 raise CloudMeshError(f"the Space's {fn} step failed: {detail}")
-            # "generating", "estimation", heartbeats: wait for the end.
+            if event_name == "estimation" and progress is not None:
+                # Gradio queue estimate: {"rank": N, "queue_size": M,
+                # "avg_event_process_time": seconds, ...}. The rank is
+                # the position in line; the ETA is rank x average time.
+                try:
+                    est = json.loads(payload)
+                    rank = est.get("rank")
+                    size = est.get("queue_size")
+                    avg = est.get("avg_event_process_time")
+                    if isinstance(rank, (int, float)):
+                        detail = f"in the queue: position {int(rank) + 1}"
+                        if isinstance(size, (int, float)):
+                            detail += f" of {int(size)}"
+                        if isinstance(avg, (int, float)) and avg > 0:
+                            eta = int((int(rank) + 1) * avg)
+                            detail += f" — about {eta // 60}m {eta % 60:02d}s to go"
+                        progress("queue", detail)
+                except ValueError:
+                    pass
+            # "generating", heartbeats: wait for the end.
     except TimeoutError as exc:
         raise CloudMeshError(
             f"the mesh step timed out waiting for {fn} — the Space is slow "
@@ -387,64 +577,112 @@ def generate_mesh(photo: str | Path, token: str | None = None,
     (stage, detail) as each step lands — the CLI and the Bench log it.
     `cancel`, when given, is a threading.Event checked between stages;
     a set event raises governor.Cancelled and nothing is written.
+
+    Fallback (T28): when the primary Space cannot be reached at all
+    during the upload or background-removal stages — before any GPU
+    quota is spent — and DESIGNSHELL_CLOUDMESH_FALLBACK_URL names a
+    second Space, the whole flow runs once against the fallback. A
+    failure during generation or extraction does NOT fall back (the
+    quota may already be spent on the primary), and neither does a
+    quota error (the quota is per-account across all Spaces).
     """
     photo_path = validate_photo(photo)
     token = token_value(token, workspace=workspace)
     base = (base or base_url()).rstrip("/")
     seed = random.randint(0, 2147483647) if seed is None else int(seed)
     deadline = time.monotonic() + timeout
-    session_hash = uuid.uuid4().hex
+    stage = {"name": "upload"}
 
     def check_cancel() -> None:
         if cancel is not None and cancel.is_set():
             raise Cancelled("cloud mesh cancelled")
 
-    def note(stage: str, detail: str = "") -> None:
+    def note(stage_name: str, detail: str = "") -> None:
+        # "queue" is a progress whisper inside a stage, not a stage of
+        # its own — it must not move the stage the fallback decision
+        # reads (a queue report during preprocess is still preprocess).
+        if stage_name != "queue":
+            stage["name"] = stage_name
         if progress is not None:
-            progress(stage, detail)
+            progress(stage_name, detail)
 
-    check_cancel()
-    note("upload", f"sending {photo_path.name} to {SPACE_ID}")
-    server_path = upload_image(base, token, photo_path, session_hash,
-                               timeout=max(1, int(deadline - time.monotonic())))
-    check_cancel()
-    note("preprocess", "removing the background on the Space")
-    masked = _call(base, token, session_hash, "/preprocess_image",
-                   [_image_data(server_path, photo_path)], deadline)
-    if not masked or not isinstance(masked[0], dict):
-        raise CloudMeshError(
-            "the Space's background-removal step gave back no image")
-    check_cancel()
-    note("generate", "building the 3D shape — this is the slow part "
-                     "(a few minutes on the free queue)")
-    _call(base, token, session_hash, "/image_to_3d",
-          [masked[0], seed, RESOLUTION,
-           *STAGE_1, *STAGE_2, *STAGE_3], deadline)
-    glb_bytes: bytes | None = None
-    last_error: CloudMeshError | None = None
-    for attempt in range(EXTRACT_RETRIES + 1):
+    def run_flow(flow_base: str) -> tuple[bytes, int]:
+        session_hash = uuid.uuid4().hex
         check_cancel()
-        note("extract", "pulling the textured GLB down"
-             + (" (retry)" if attempt else ""))
-        try:
-            files = _call(base, token, session_hash, "/extract_glb",
-                          [DECIMATION_TARGET, TEXTURE_SIZE], deadline)
-            if not files or not isinstance(files[0], dict):
-                raise CloudMeshError(
-                    "the Space's GLB step gave back no file")
-            glb_bytes = download_file(base, token, files[0], deadline)
-            break
-        except CloudMeshError as exc:
-            last_error = exc
-            if isinstance(exc, QuotaExhaustedError):
-                raise
-    if glb_bytes is None:
-        raise last_error or CloudMeshError("the GLB step failed")
-    if len(glb_bytes) < 100 or glb_bytes[:4] != b"glTF":
-        raise CloudMeshError(
-            "what came back from the Space is not a GLB file — try again")
-    note("done", f"{len(glb_bytes)} bytes of textured mesh")
-    return glb_bytes, seed
+        note("upload", f"sending {photo_path.name} to {SPACE_ID}")
+        upload_error: CloudMeshError | None = None
+        server_path = None
+        for attempt in range(UPLOAD_RETRIES + 1):
+            try:
+                server_path = upload_image(
+                    flow_base, token, photo_path, session_hash,
+                    timeout=max(1, int(deadline - time.monotonic())))
+                break
+            except CloudMeshError as exc:
+                if isinstance(exc, QuotaExhaustedError):
+                    raise
+                upload_error = exc
+                if attempt < UPLOAD_RETRIES:
+                    note("upload", "the upload stumbled — trying once more")
+                    time.sleep(5)
+        if server_path is None:
+            raise upload_error or CloudMeshError("the photo upload failed")
+        check_cancel()
+        note("preprocess", "removing the background on the Space")
+        masked = _call(flow_base, token, session_hash, "/preprocess_image",
+                       [_image_data(server_path, photo_path)], deadline,
+                       progress=note)
+        if not masked or not isinstance(masked[0], dict):
+            raise CloudMeshError(
+                "the Space's background-removal step gave back no image")
+        check_cancel()
+        note("generate", "building the 3D shape — this is the slow part "
+                         "(a few minutes on the free queue)")
+        _call(flow_base, token, session_hash, "/image_to_3d",
+              [masked[0], seed, RESOLUTION,
+               *STAGE_1, *STAGE_2, *STAGE_3], deadline, progress=note)
+        glb_bytes: bytes | None = None
+        last_error: CloudMeshError | None = None
+        for attempt in range(EXTRACT_RETRIES + 1):
+            check_cancel()
+            note("extract", "pulling the textured GLB down"
+                 + (" (retry)" if attempt else ""))
+            try:
+                files = _call(flow_base, token, session_hash, "/extract_glb",
+                              [DECIMATION_TARGET, TEXTURE_SIZE], deadline,
+                              progress=note)
+                if not files or not isinstance(files[0], dict):
+                    raise CloudMeshError(
+                        "the Space's GLB step gave back no file")
+                glb_bytes = download_file(flow_base, token, files[0], deadline)
+                break
+            except CloudMeshError as exc:
+                last_error = exc
+                if isinstance(exc, QuotaExhaustedError):
+                    raise
+        if glb_bytes is None:
+            raise last_error or CloudMeshError("the GLB step failed")
+        if len(glb_bytes) < 100 or glb_bytes[:4] != b"glTF":
+            raise CloudMeshError(
+                "what came back from the Space is not a GLB file — try again")
+        note("done", f"{len(glb_bytes)} bytes of textured mesh")
+        return glb_bytes, seed
+
+    try:
+        return run_flow(base)
+    except CloudMeshError as exc:
+        if isinstance(exc, QuotaExhaustedError):
+            raise
+        fallback = fallback_url()
+        if fallback is None or fallback == base:
+            raise
+        if stage["name"] not in ("upload", "preprocess"):
+            raise
+        if not _is_connection_failure(exc):
+            raise
+        note("fallback",
+             "the main Space could not be reached — trying the fallback Space")
+        return run_flow(fallback)
 
 
 def _glb_name(photo: Path) -> str:
@@ -511,6 +749,12 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
         "glb": _glb_name(photo_path),
         "generated_at": stamp(),
     }
+    # The mesh block ingest wrote points at the temp GLB, which is
+    # already gone — point it at the GLB that lands in the job folder
+    # instead (T21): the Blender build imports it, and the Unreal
+    # package carries it.
+    desc["mesh"] = {"file": _glb_name(photo_path), "format": "glb",
+                    "import_scale": 1.0}
     problems = desc_mod.validate(desc)
     if problems:
         raise CloudMeshError(

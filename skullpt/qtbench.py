@@ -1035,6 +1035,11 @@ if QT_AVAILABLE:
         def _build_menus(self) -> None:
             menu_bar = self.menuBar()
             file_menu = menu_bar.addMenu("File")
+            file_menu.addAction("Open workspace...",
+                                self._switch_workspace)
+            file_menu.addAction("Back up workspace...",
+                                self._backup_workspace)
+            file_menu.addSeparator()
             quit_action = QtGui.QAction("Quit", self)
             quit_action.setShortcut(QtGui.QKeySequence.Quit)
             quit_action.triggered.connect(self.close)
@@ -1064,6 +1069,8 @@ if QT_AVAILABLE:
             help_menu.addAction("How to Use",
                                 lambda: self._open_window("help"))
             help_menu.addAction("Debug report", self._show_debug_report)
+            help_menu.addAction("Check for updates...",
+                                self._check_for_updates)
             help_menu.addAction("About SKULLPT", self._show_about)
 
         def _build_status_bar(self) -> None:
@@ -1393,6 +1400,97 @@ if QT_AVAILABLE:
                     f"reroll {Path(batch_dir).name}")
                 self._log("Bench", "Rolling another round.")
 
+        def start_vary(self, batch_dir, filename: str) -> None:
+            """Make variations of a kept candidate (called by the
+            Images window). Runs in the background like every long job."""
+            try:
+                result = bench_mod.act(self.workspace, "vary",
+                                       {"batch": Path(batch_dir).name,
+                                        "file": filename})
+            except Exception as exc:
+                self._log("Bench", str(exc))
+                return
+            if result.get("run"):
+                self._pending_runs[result["run"]] = f"vary {filename}"
+                self._log("Bench", f"Making variations of {filename}.")
+
+        # -- workspace switching, backup, updates (v1.6, T29) -----------
+        def _switch_workspace(self) -> None:
+            """Switch to another workspace folder right now (the
+            Settings chooser only sets the default for next launch)."""
+            active = [r for r in bench_mod._runs()
+                      if r["id"] in self._pending_runs
+                      and r["status"] in ("running", "queued")]
+            if active:
+                QtWidgets.QMessageBox.warning(
+                    self, "A run is going",
+                    "Wait for the running job to finish before switching "
+                    "workspaces.")
+                return
+            folder = QtWidgets.QFileDialog.getExistingDirectory(
+                self, "Open workspace", str(self.workspace))
+            if not folder:
+                return
+            new_ws = Path(folder)
+            (new_ws / "jobs").mkdir(parents=True, exist_ok=True)
+            (new_ws / "library").mkdir(parents=True, exist_ok=True)
+            for window in list(self._child_windows.values()):
+                window.close()
+            self._child_windows.clear()
+            from .qtwindows import RenderWindow
+
+            self._render_window = RenderWindow(self, new_ws)
+            self.workspace = new_ws
+            self._selected = None
+            self._pending_runs.clear()
+            self._current_run_id = None
+            QtCore.QSettings("BrokeNBored", "SKULLPT").setValue(
+                "workspace", str(new_ws))
+            self._refresh()
+            self._log("Bench", f"Workspace: {new_ws}")
+
+        def _backup_workspace(self) -> None:
+            from .qtwindows import Toast
+
+            default = str(self.workspace.parent
+                          / f"{self.workspace.name}-backup.zip")
+            dest, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Back up workspace", default, "Zip files (*.zip)")
+            if not dest:
+                return
+            try:
+                result = bench_mod.act(self.workspace, "backup",
+                                       {"dest": dest})
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, "Backup failed", str(exc))
+                return
+            Toast.show_toast(self, result["detail"])
+
+        def _check_for_updates(self) -> None:
+            """Ask GitHub whether a newer SKULLPT is out. The check is
+            read-only: nothing is downloaded or installed by it."""
+            from . import __version__, update as update_mod
+
+            result = update_mod.check_for_update(__version__)
+            if result["error"]:
+                QtWidgets.QMessageBox.warning(
+                    self, "Could not check for updates", result["error"])
+                return
+            if not result["update_available"]:
+                QtWidgets.QMessageBox.information(
+                    self, "No update",
+                    f"You are on the latest release (v{result['current']}).")
+                return
+            answer = QtWidgets.QMessageBox.question(
+                self, "A newer SKULLPT is out",
+                f"SKULLPT v{result['latest']} is out. You are on "
+                f"v{result['current']}. Open the release page?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes)
+            if answer == QtWidgets.QMessageBox.Yes:
+                QtGui.QDesktopServices.openUrl(
+                    QtCore.QUrl(result["url"]))
+
         def _cancel_current_run(self) -> None:
             if self._current_run_id is not None:
                 bench_mod.cancel_run(self._current_run_id)
@@ -1400,21 +1498,30 @@ if QT_AVAILABLE:
         def _poll_runs(self) -> None:
             from .qtwindows import Toast
 
+            # A queued run is still active (T24): it waits its turn,
+            # it has not finished. Only done/cancelled/error leave the
+            # pending list.
             running = [r for r in bench_mod._runs()
-                       if r["status"] == "running"
+                       if r["status"] in ("running", "queued")
                        and r["id"] in self._pending_runs]
             if running:
                 run = running[0]
                 self._current_run_id = run["id"]
-                text = run.get("progress_text") or run["label"]
-                self._run_label.setText(f"{run['kind']}: {text}")
-                self._run_progress.setVisible(True)
-                if run.get("progress") is not None:
-                    self._run_progress.setRange(0, 100)
-                    self._run_progress.setValue(int(run["progress"] * 100))
+                if run["status"] == "queued":
+                    text = run.get("detail") or "waiting its turn"
+                    self._run_label.setText(f"queued: {text}")
+                    self._run_progress.setVisible(False)
+                    self._cancel_btn.setVisible(True)
                 else:
-                    self._run_progress.setRange(0, 0)
-                self._cancel_btn.setVisible(True)
+                    text = run.get("progress_text") or run["label"]
+                    self._run_label.setText(f"{run['kind']}: {text}")
+                    self._run_progress.setVisible(True)
+                    if run.get("progress") is not None:
+                        self._run_progress.setRange(0, 100)
+                        self._run_progress.setValue(int(run["progress"] * 100))
+                    else:
+                        self._run_progress.setRange(0, 0)
+                    self._cancel_btn.setVisible(True)
             else:
                 self._current_run_id = None
                 self._run_label.setText("Idle")
@@ -1422,7 +1529,7 @@ if QT_AVAILABLE:
                 self._cancel_btn.setVisible(False)
             finished = [r for r in bench_mod._runs()
                         if r["id"] in self._pending_runs
-                        and r["status"] != "running"]
+                        and r["status"] not in ("running", "queued")]
             if not finished:
                 return
             for run in finished:
@@ -1602,7 +1709,7 @@ if QT_AVAILABLE:
         def _show_about(self) -> None:
             QtWidgets.QMessageBox.about(
                 self, "About SKULLPT",
-                "SKULLPT v1.5\nA standalone Linux design and asset shell,\n"
+                "SKULLPT v1.6\nA standalone Linux design and asset shell,\n"
                 "by Broke n Bored Studio.")
 
 

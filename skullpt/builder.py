@@ -114,6 +114,15 @@ def build_job(job: Job, workspace: Path, seats_path=None,
     job.require_approved()  # the Plan Gate — nothing builds unapproved
     desc = job.load_description()
 
+    # Render settings (T25): the job's own block wins, then the
+    # workspace defaults, then the code defaults. Stamped onto the
+    # in-memory description only — the file keeps the user's own
+    # partial block, and the resolved values ride into the build
+    # report so the user can see what was actually used.
+    from . import settings as settings_mod
+    render = settings_mod.resolve_render_settings(workspace, desc)
+    desc["render"] = render
+
     budget_problems = governor.check_budget(desc)
     if budget_problems:
         job.fail("budget: " + "; ".join(budget_problems))
@@ -210,6 +219,7 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         "ok": overall_ok,
         "outputs": outputs,
         "recipes": used_recipes,
+        "render": render,
         "machine_checks": report_checks,
         "critique": critique,
     }

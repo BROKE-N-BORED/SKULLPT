@@ -18,6 +18,13 @@ from pathlib import Path
 KINDS = ("ui_component", "website", "graphic", "character", "scene", "project")
 SHAPES = ("box", "cylinder", "sphere", "extrude", "lathe", "tube")
 TEXTURES = ("none", "wood_grain", "brushed_metal", "worn_leather")
+# Render engines the Blender exporter knows (v1.6, T25): "auto" probes
+# EEVEE and falls back to Cycles when it cannot run; the other two
+# pin one engine (Cycles never tries EEVEE at all).
+RENDER_ENGINES = ("auto", "eevee", "cycles")
+# Mesh formats ingest understands and the Blender build can import
+# (v1.6, T21/T30). The description's top-level "mesh" block names one.
+MESH_FORMATS = ("glb", "obj", "fbx", "stl")
 REQUIRED_TOP = ("name", "kind", "parts")
 PART_REQUIRED = ("id", "type")
 
@@ -120,6 +127,25 @@ def validate(desc: dict) -> list[str]:
                 material = part.get("material")
                 if material is not None and not isinstance(material, str):
                     problems.append(f"parts[{i}].material must be a preset name or #hex string")
+                # A part ingested from a real mesh carries its measured
+                # mesh data (v1.6, T30): the triangle count is real, not
+                # an estimate, and the budget gate uses it as such.
+                mesh = part.get("mesh")
+                if mesh is not None:
+                    if not isinstance(mesh, dict):
+                        problems.append(f"parts[{i}] ({pid!r}) mesh must be an object")
+                    else:
+                        for num_key in ("triangles", "vertices", "node"):
+                            val = mesh.get(num_key)
+                            if val is not None and (not isinstance(val, int) or val < 0):
+                                problems.append(
+                                    f"parts[{i}] ({pid!r}) mesh.{num_key} must be "
+                                    "a non-negative int")
+                        src = mesh.get("source")
+                        if src is not None and src not in MESH_FORMATS:
+                            problems.append(
+                                f"parts[{i}] ({pid!r}) mesh.source must be one of "
+                                f"{MESH_FORMATS}, got {src!r}")
     part_ids = {p.get("id") for p in parts if isinstance(p, dict)} if isinstance(parts, list) else set()
     for i, con in enumerate(desc.get("constraints", []) or []):
         if not isinstance(con, dict) or "type" not in con:
@@ -150,6 +176,40 @@ def validate(desc: dict) -> list[str]:
     rubric = desc.get("rubric", []) or []
     if not isinstance(rubric, list) or not all(isinstance(r, str) for r in rubric):
         problems.append("rubric must be a list of strings")
+    # Render settings (v1.6, T25): how the renders are made, not what
+    # is built — so changing them never re-opens the plan gate.
+    render = desc.get("render")
+    if render is not None:
+        if not isinstance(render, dict):
+            problems.append("render must be an object")
+        else:
+            engine = render.get("engine")
+            if engine is not None and engine not in RENDER_ENGINES:
+                problems.append(f"render.engine must be one of {RENDER_ENGINES}, got {engine!r}")
+            res = render.get("resolution_px")
+            if res is not None and (not isinstance(res, int) or res < 128 or res > 4096):
+                problems.append("render.resolution_px must be an int from 128 to 4096")
+            samples = render.get("samples")
+            if samples is not None and (not isinstance(samples, int) or samples < 1 or samples > 512):
+                problems.append("render.samples must be an int from 1 to 512")
+            denoise = render.get("denoise")
+            if denoise is not None and not isinstance(denoise, bool):
+                problems.append("render.denoise must be true or false")
+    # The real mesh behind an ingested job (v1.6, T21/T30): the file
+    # the Blender build imports instead of rebuilding from boxes.
+    mesh = desc.get("mesh")
+    if mesh is not None:
+        if not isinstance(mesh, dict):
+            problems.append("mesh must be an object")
+        else:
+            if not isinstance(mesh.get("file"), str) or not mesh.get("file", "").strip():
+                problems.append("mesh.file must be a non-empty path string")
+            fmt = mesh.get("format")
+            if fmt is not None and fmt not in MESH_FORMATS:
+                problems.append(f"mesh.format must be one of {MESH_FORMATS}, got {fmt!r}")
+            scale = mesh.get("import_scale")
+            if scale is not None and (not isinstance(scale, (int, float)) or scale <= 0):
+                problems.append("mesh.import_scale must be a positive number")
     return problems
 
 
@@ -180,7 +240,14 @@ _TUBE_SEGMENTS = 10
 
 def estimate_triangles(part: dict) -> int:
     """Triangles the Blender exporter will build for one part (base mesh,
-    before bevel modifiers — a lower bound on the real count)."""
+    before bevel modifiers — a lower bound on the real count). A part
+    ingested from a real mesh carries its measured count (T30) — that
+    is what Blender imports, so it is used as-is instead of the box
+    estimate of 12, and the budget gate stops under-counting imports."""
+    mesh = part.get("mesh") or {}
+    measured = mesh.get("triangles")
+    if isinstance(measured, int) and measured >= 0:
+        return measured
     shape = part.get("shape", "box")
     if shape == "cylinder":
         v = _CYLINDER_VERTICES

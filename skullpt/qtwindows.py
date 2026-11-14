@@ -366,6 +366,33 @@ class RenderWindow(_GeometryWindow):
         right.addWidget(renders_title)
         self._renders_row = QtWidgets.QHBoxLayout()
         right.addLayout(self._renders_row)
+        render_title = QtWidgets.QLabel("Render settings")
+        render_title.setObjectName("heading")
+        right.addWidget(render_title)
+        render_form = QtWidgets.QFormLayout()
+        self._engine_combo = QtWidgets.QComboBox()
+        self._engine_combo.addItem("Auto (try EEVEE, fall back to Cycles)", "auto")
+        self._engine_combo.addItem("EEVEE (fast, needs a GPU context)", "eevee")
+        self._engine_combo.addItem("Cycles (slow, always works)", "cycles")
+        render_form.addRow("Engine", self._engine_combo)
+        self._res_spin = QtWidgets.QSpinBox()
+        self._res_spin.setRange(128, 4096)
+        self._res_spin.setSingleStep(64)
+        self._res_spin.setSuffix(" px")
+        render_form.addRow("Resolution", self._res_spin)
+        self._samples_spin = QtWidgets.QSpinBox()
+        self._samples_spin.setRange(1, 512)
+        render_form.addRow("Cycles samples", self._samples_spin)
+        self._denoise_check = QtWidgets.QCheckBox("Denoise (Cycles only)")
+        render_form.addRow("", self._denoise_check)
+        right.addLayout(render_form)
+        self._save_render_btn = QtWidgets.QPushButton("Save render settings")
+        self._save_render_btn.setEnabled(False)
+        self._save_render_btn.clicked.connect(self._save_render_settings)
+        right.addWidget(self._save_render_btn)
+        right.addWidget(QtWidgets.QLabel(
+            "These are this job's own settings. Changing them does not "
+            "send the job back for approval."))
         right.addStretch(1)
         main.addLayout(right, 1)
 
@@ -391,6 +418,7 @@ class RenderWindow(_GeometryWindow):
         self._viewport.set_selected_part(None)
         self._parts_list.clear()
         self._save_part_btn.setEnabled(False)
+        self._save_render_btn.setEnabled(False)
         self._editor_note.setText("Select a part to edit it.")
         self._clear_renders()
         while self._camera_buttons.count():
@@ -416,6 +444,7 @@ class RenderWindow(_GeometryWindow):
         self._update_legend()
         self._update_tri_count()
         self._load_renders(job)
+        self._load_render_settings()
         for camera in self._desc.get("cameras", []) or []:
             btn = QtWidgets.QPushButton(camera.get("name", "Camera"))
             btn.clicked.connect(
@@ -583,13 +612,45 @@ class RenderWindow(_GeometryWindow):
         Toast.show_toast(self, f"Part {base_id} saved. The job needs approval again.")
         self.refresh()
 
+    def _load_render_settings(self) -> None:
+        """Fill the render controls with this job's effective settings
+        (its own block, else the workspace defaults)."""
+        if self._desc is None:
+            return
+        resolved = settings_mod.resolve_render_settings(self._workspace, self._desc)
+        index = self._engine_combo.findData(resolved["engine"])
+        self._engine_combo.setCurrentIndex(max(0, index))
+        self._res_spin.setValue(resolved["resolution_px"])
+        self._samples_spin.setValue(resolved["samples"])
+        self._denoise_check.setChecked(resolved["denoise"])
+        self._save_render_btn.setEnabled(True)
+
+    def _save_render_settings(self) -> None:
+        if self._job_name is None:
+            return
+        result = self._bench.do_action("render-settings", {
+            "job": self._job_name,
+            "engine": self._engine_combo.currentData(),
+            "resolution_px": self._res_spin.value(),
+            "samples": self._samples_spin.value(),
+            "denoise": self._denoise_check.isChecked()})
+        if result is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save",
+                "The render settings did not save. The chat panel on "
+                "the Jobs window says why.")
+            return
+        Toast.show_toast(self, "Render settings saved for this job.")
+
 
 # ------------------------------------------------------------ images window
 
 class _CandidateCard(QtWidgets.QFrame):
-    """One generated picture: the image, its state, Keep / Reject."""
+    """One generated picture: the image, its state, Keep / Reject, and
+    Vary (variations of a kept picture, v1.6 T27)."""
 
     decided = QtCore.Signal(str, str)  # filename, decision
+    vary = QtCore.Signal(str)  # filename
 
     def __init__(self, batch_dir: Path, candidate: dict, parent=None):
         super().__init__(parent)
@@ -625,6 +686,12 @@ class _CandidateCard(QtWidgets.QFrame):
             lambda: self.decided.emit(self._file, "reject"))
         buttons.addWidget(reject_btn)
         layout.addLayout(buttons)
+        vary_btn = QtWidgets.QPushButton("Vary this picture")
+        vary_btn.setEnabled(status == "kept")
+        vary_btn.setToolTip("Make variations of this kept picture "
+                            "into a new batch.")
+        vary_btn.clicked.connect(lambda: self.vary.emit(self._file))
+        layout.addWidget(vary_btn)
 
 
 class ImagesWindow(_GeometryWindow):
@@ -725,6 +792,7 @@ class ImagesWindow(_GeometryWindow):
                 continue
             card = _CandidateCard(self._batch_dir, candidate)
             card.decided.connect(self._decide)
+            card.vary.connect(self._vary)
             self._grid.addWidget(card, row, col)
             col += 1
             if col >= 3:
@@ -759,6 +827,13 @@ class ImagesWindow(_GeometryWindow):
             return
         self._bench.start_reroll(self._batch_dir)
         Toast.show_toast(self, "Rolling another round. It runs in the background.")
+
+    def _vary(self, filename: str) -> None:
+        if self._batch_dir is None:
+            return
+        self._bench.start_vary(self._batch_dir, filename)
+        Toast.show_toast(self, f"Making variations of {filename}. "
+                               "They land in a new batch.")
 
 
 # ----------------------------------------------------------- library window
@@ -938,6 +1013,38 @@ class SettingsWindow(_GeometryWindow):
         self._critic_check.toggled.connect(self._save_critic_toggle)
         main.addWidget(self._critic_check)
 
+        render_title = QtWidgets.QLabel("Render settings")
+        render_title.setObjectName("heading")
+        main.addWidget(render_title)
+        main.addWidget(QtWidgets.QLabel(
+            "Defaults for every build. A job can set its own in the "
+            "Render window."))
+        render_form = QtWidgets.QFormLayout()
+        self._engine_combo = QtWidgets.QComboBox()
+        self._engine_combo.addItem("Auto (try EEVEE, fall back to Cycles)", "auto")
+        self._engine_combo.addItem("EEVEE (fast, needs a GPU context)", "eevee")
+        self._engine_combo.addItem("Cycles (slow, always works)", "cycles")
+        self._engine_combo.currentIndexChanged.connect(self._save_render_settings)
+        render_form.addRow("Engine", self._engine_combo)
+        self._res_spin = QtWidgets.QSpinBox()
+        self._res_spin.setRange(128, 4096)
+        self._res_spin.setSingleStep(64)
+        self._res_spin.setSuffix(" px")
+        self._res_spin.valueChanged.connect(self._save_render_settings)
+        render_form.addRow("Resolution", self._res_spin)
+        self._samples_spin = QtWidgets.QSpinBox()
+        self._samples_spin.setRange(1, 512)
+        self._samples_spin.valueChanged.connect(self._save_render_settings)
+        render_form.addRow("Cycles samples", self._samples_spin)
+        self._denoise_check = QtWidgets.QCheckBox("Denoise (Cycles only)")
+        self._denoise_check.toggled.connect(self._save_render_settings)
+        render_form.addRow("", self._denoise_check)
+        main.addLayout(render_form)
+        self._last_engine_label = QtWidgets.QLabel()
+        self._last_engine_label.setObjectName("muted")
+        self._last_engine_label.setWordWrap(True)
+        main.addWidget(self._last_engine_label)
+
         token_title = QtWidgets.QLabel("Hugging Face token")
         token_title.setObjectName("heading")
         main.addWidget(token_title)
@@ -976,12 +1083,67 @@ class SettingsWindow(_GeometryWindow):
         main.addWidget(folder_btn)
         main.addWidget(QtWidgets.QLabel(
             "A new folder takes effect the next time SKULLPT opens."))
+        backup_title = QtWidgets.QLabel("Backup")
+        backup_title.setObjectName("heading")
+        main.addWidget(backup_title)
+        main.addWidget(QtWidgets.QLabel(
+            "Back up the whole workspace into one zip file. The Hugging "
+            "Face token is never in a backup."))
+        backup_btn = QtWidgets.QPushButton("Back up workspace")
+        backup_btn.clicked.connect(self._backup_workspace)
+        main.addWidget(backup_btn)
         main.addStretch(1)
 
         restore_geometry(self, self.GEOMETRY_KEY)
         if self.width() < 520:
             self.resize(620, 560)
+        self._load_render_settings()
         self.refresh()
+
+    def _load_render_settings(self) -> None:
+        """Fill the render controls from the saved workspace defaults
+        (signals blocked: loading must not re-save)."""
+        saved = settings_mod.load_settings(self._workspace)
+        for widget in (self._engine_combo, self._res_spin,
+                       self._samples_spin, self._denoise_check):
+            widget.blockSignals(True)
+        try:
+            index = self._engine_combo.findData(
+                saved.get("render_engine", "auto"))
+            self._engine_combo.setCurrentIndex(max(0, index))
+            self._res_spin.setValue(
+                int(saved.get("render_resolution_px", 640)))
+            self._samples_spin.setValue(
+                int(saved.get("render_samples", 24)))
+            self._denoise_check.setChecked(
+                bool(saved.get("render_denoise", False)))
+        finally:
+            for widget in (self._engine_combo, self._res_spin,
+                           self._samples_spin, self._denoise_check):
+                widget.blockSignals(False)
+
+    def _save_render_settings(self) -> None:
+        settings_mod.save_render_settings(self._workspace, {
+            "engine": self._engine_combo.currentData(),
+            "resolution_px": self._res_spin.value(),
+            "samples": self._samples_spin.value(),
+            "denoise": self._denoise_check.isChecked()})
+
+    def _backup_workspace(self) -> None:
+        from .backup import backup_workspace
+
+        default = str(Path(self._workspace).parent
+                      / f"{self._workspace.name}-backup.zip")
+        dest, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Back up workspace", default, "Zip files (*.zip)")
+        if not dest:
+            return
+        try:
+            result = backup_workspace(self._workspace, dest)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Backup failed", str(exc))
+            return
+        Toast.show_toast(self, result["note"])
 
     def refresh(self) -> None:
         """Re-read the engine status and the token state."""
@@ -998,6 +1160,15 @@ class SettingsWindow(_GeometryWindow):
             self._token_status.setText("Token set in the environment.")
         else:
             self._token_status.setText("No token saved.")
+        last = settings_mod.last_render_engine(self._workspace)
+        if last.get("engine"):
+            self._last_engine_label.setText(
+                "Last render engine that worked here: "
+                f"{last['engine']}"
+                + (f" ({last['at']})" if last.get("at") else ""))
+        else:
+            self._last_engine_label.setText(
+                "No render has run yet, so the working engine is not known.")
 
     def _save_critic_toggle(self, checked: bool) -> None:
         current = settings_mod.load_settings(self._workspace)
@@ -1062,15 +1233,30 @@ Library, and its recipe is saved for next time.</li>
 <h3>Pictures</h3>
 <p>Type "picture of a wooden sign" in the chat to generate reference
 pictures. Keep the ones you like in the Images window; the first kept
-picture becomes the job's reference.</p>
+picture becomes the job's reference. A kept picture can be varied
+("Vary this picture") into a new batch of pictures like it.</p>
 <h3>Mesh from a photo</h3>
 <p>Use Jobs, then Mesh from photo, and pick a photo. SKULLPT sends it
 to Hugging Face's free GPU and files the textured mesh in a job. You
-need a Hugging Face token (Settings) and an internet connection.</p>
+need a Hugging Face token (Settings) and an internet connection. The
+mesh is kept and the build imports it; a meshed job can also be
+packaged for Unreal without a Blender build first.</p>
 <h3>Opening an existing asset</h3>
-<p>Use Jobs, then Open an asset, and pick a .glb or .blend file.
-SKULLPT reads it into a description you can edit. The original file
-is never changed; edited versions are filed next to it.</p>
+<p>Use Jobs, then Open an asset, and pick a .glb, .obj, .stl, .fbx or
+.blend file. SKULLPT reads it into a description you can edit. The
+original file is never changed; edited versions are filed next to it.
+The source mesh is kept in the workspace and the build imports it,
+instead of rebuilding from boxes.</p>
+<h3>Render settings</h3>
+<p>Settings holds the render defaults: engine (Auto tries EEVEE and
+falls back to Cycles when EEVEE cannot run on this machine),
+resolution, Cycles samples, and denoise. A job can set its own in the
+Render window. Changing render settings never sends a job back for
+approval.</p>
+<h3>Builds in a queue</h3>
+<p>Only one heavy job runs at a time. If you start a build while
+another is running, yours waits in the queue and starts when its turn
+comes. Queued builds can be cancelled from the status bar.</p>
 <h3>Unreal</h3>
 <p>A built job can be packaged for Unreal: open the job, press
 Unreal package, and pick a folder. The package has the .fbx, the
@@ -1081,9 +1267,14 @@ and the game-ready model come from Blender; without it, SKULLPT can
 still draft descriptions and show the viewport.</p>
 <h3>Your workspace</h3>
 <p>Everything lives in your workspace folder: jobs, the library,
-image batches, and settings. The folder is shown in Settings.</p>
+image batches, and settings. The folder is shown in Settings. File,
+then Back up workspace, to zip the whole workspace into one file
+(the Hugging Face token is never in a backup). File, then Open
+workspace, switches to another folder right away. Help, then Check
+for updates, asks GitHub whether a newer SKULLPT is out; it never
+downloads anything by itself.</p>
 <h3>About</h3>
-<p>SKULLPT v1.5. A standalone Linux design and asset shell, by
+<p>SKULLPT v1.6. A standalone Linux design and asset shell, by
 Broke n Bored Studio. Source: github.com/BROKE-N-BORED/SKULLPT</p>
 </body></html>"""
 
@@ -1195,14 +1386,31 @@ def _format_build_report(workspace: Path, job_name: str) -> str:
         lines.append(f"Triangles: {report['total_tris']:,} (measured)")
         for name, part in (report.get("tris_by_part") or {}).items():
             lines.append(f"  {name}: {part.get('tris', '-')} tris")
+    render = report.get("render") or {}
+    if render:
+        lines.append("Render:")
+        lines.append(f"  engine: {render.get('engine', '-')}")
+        lines.append(f"  resolution: {render.get('resolution_px', '-')} px")
+        lines.append(f"  samples: {render.get('samples', '-')}")
+        lines.append(f"  denoise: {'on' if render.get('denoise') else 'off'}")
     critique = report.get("critique") or {}
     if critique:
         lines.append("Critic:")
-        lines.append(f"  verdict: {critique.get('verdict', '-')}")
-        notes = critique.get("notes") or critique.get("issues") or []
-        if isinstance(notes, str):
-            notes = [notes]
-        lines.extend(f"  - {note}" for note in notes[:10])
+        if critique.get("note"):
+            lines.append(f"  {critique['note']}")
+        images = critique.get("images") or []
+        if images:
+            lines.append(f"  renders judged: {', '.join(images)}")
+        fixes = critique.get("fixes") or []
+        if fixes:
+            lines.append(f"  fixes ({len(fixes)}):")
+            for fix in fixes[:10]:
+                part = fix.get("part") or "whole build"
+                lines.append(f"  - {part}: {fix.get('issue', '')}")
+                if fix.get("fix"):
+                    lines.append(f"    change: {fix['fix']}")
+        elif critique.get("vision"):
+            lines.append("  no fixes: the renders satisfied the rubric")
     problems = report.get("problems") or []
     if problems:
         lines.append("Problems:")
