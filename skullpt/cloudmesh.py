@@ -492,6 +492,9 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
     if target is None:
         target = Job.create(ws / "jobs", desc)
     else:
+        # The mesh overwrites the job's description wholesale — freeze
+        # what was there first, so it can be recovered.
+        target.snapshot_description("description.before-cloud-mesh.json")
         desc_mod.dump(desc, target.desc_path)
     glb_path = target.dir / _glb_name(photo_path)
     glb_path.write_bytes(glb_bytes)

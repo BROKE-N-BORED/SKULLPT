@@ -22,14 +22,26 @@ class GovernorError(RuntimeError):
 
 
 def check_budget(desc: dict) -> list[str]:
-    """Return budget violations (empty = within budget)."""
+    """Return budget violations (empty = within budget).
+
+    The triangle key is `max_tris` (what the planner writes, what the
+    game-ready gate reads, what the examples use). `max_triangles` is
+    still honored when `max_tris` is absent, for descriptions written
+    before v1.4 — it is a legacy alias, not a second key. The total is
+    estimated from the shapes (description.estimate_triangles, over
+    the repeat/mirror expansion), so the pre-build gate means
+    something instead of summing zeros.
+    """
     budget = desc.get("budget", {}) or {}
     problems: list[str] = []
-    if "max_triangles" in budget:
-        total = sum(int(p.get("triangles", 0) or 0) for p in desc.get("parts", []))
-        if total > budget["max_triangles"]:
+    max_tris = budget.get("max_tris", budget.get("max_triangles"))
+    if max_tris is not None:
+        from . import description as desc_mod
+
+        total = desc_mod.estimate_description_triangles(desc)
+        if total > max_tris:
             problems.append(
-                f"triangles: parts total {total} > budget {budget['max_triangles']}"
+                f"triangles: parts total ~{total} (estimated) > budget {max_tris}"
             )
     if "max_texture_px" in budget:
         for part in desc.get("parts", []):
@@ -64,25 +76,49 @@ class HeavyJobLock:
     def __init__(self, lock_path: str | Path):
         self.lock_path = Path(lock_path)
         self._held = False
+        self._min_free_mb = DEFAULT_MIN_FREE_MB
 
     def acquire(self, min_free_mb: int = DEFAULT_MIN_FREE_MB) -> None:
+        self._check_ram(min_free_mb)
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic creation: two processes starting at once cannot both
+        # win — O_EXCL makes exactly one of them the holder, and the
+        # loser sees the file and reads a live pid. A stale lock (dead
+        # holder) is removed and the create retried once.
+        for _attempt in range(2):
+            try:
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    holder = int(self.lock_path.read_text().strip() or "0")
+                except ValueError:
+                    holder = 0
+                alive = holder > 0 and Path(f"/proc/{holder}").exists()
+                if alive:
+                    raise GovernorError(
+                        f"another heavy job is already running (pid {holder})")
+                self.lock_path.unlink(missing_ok=True)  # stale lock from a dead job
+                continue
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            self._held = True
+            self._min_free_mb = min_free_mb
+            return
+        raise GovernorError("could not take the heavy-job lock — try again")
+
+    def _check_ram(self, min_free_mb: int) -> None:
         free = free_ram_mb()
         if free is not None and free < min_free_mb:
             raise GovernorError(
                 f"only {free} MB RAM free (floor is {min_free_mb} MB) — wait, don't thrash"
             )
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.lock_path.exists():
-            try:
-                holder = int(self.lock_path.read_text().strip() or "0")
-            except ValueError:
-                holder = 0
-            alive = holder > 0 and Path(f"/proc/{holder}").exists()
-            if alive:
-                raise GovernorError(f"another heavy job is already running (pid {holder})")
-            self.lock_path.unlink(missing_ok=True)  # stale lock from a dead job
-        self.lock_path.write_text(str(os.getpid()))
-        self._held = True
+
+    def recheck(self) -> None:
+        """Re-check the RAM floor mid-run (the floor is checked at
+        acquire time too; a build that grows past it is stopped
+        rather than allowed to thrash the machine)."""
+        if self._held:
+            self._check_ram(getattr(self, "_min_free_mb", DEFAULT_MIN_FREE_MB))
 
     def release(self) -> None:
         if self._held:

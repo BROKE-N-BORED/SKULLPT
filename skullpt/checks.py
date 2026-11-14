@@ -29,6 +29,13 @@ def run_machine_checks(desc: dict, out_dir: str | Path, outputs: list[str]) -> d
     out = Path(out_dir)
     checks: list[dict] = []
 
+    # A build that produced nothing is never ok — without this, the
+    # checks below pass vacuously on an empty output list (a kind
+    # with no exporters used to "build successfully" with no files).
+    checks.append({"check": "outputs_present", "ok": len(outputs) > 0,
+                   "detail": f"{len(outputs)} outputs" if outputs
+                             else "no outputs at all — nothing was built"})
+
     missing = [name for name in outputs if not (out / name).exists() or (out / name).stat().st_size == 0]
     checks.append({"check": "outputs_exist", "ok": not missing,
                    "detail": f"missing/empty: {missing}" if missing else f"{len(outputs)} files"})

@@ -72,7 +72,7 @@ class GovernorTests(unittest.TestCase):
     def test_budget_pass_and_fail(self):
         self.assertEqual(governor.check_budget(ROOM), [])
         bad = json.loads(json.dumps(ROOM))
-        bad["budget"]["max_triangles"] = 100
+        bad["budget"]["max_tris"] = 10  # the room estimates 36 triangles
         self.assertTrue(governor.check_budget(bad))
 
     def test_heavy_lock_blocks_second_holder(self):
@@ -130,7 +130,7 @@ class GateAndBuildTests(unittest.TestCase):
             ws = Path(td)
             (ws / "jobs").mkdir()
             bad = json.loads(json.dumps(ROOM))
-            bad["budget"] = {"max_triangles": 10}
+            bad["budget"] = {"max_tris": 10}
             bad["kind"] = "ui_component"  # exporters irrelevant; budget gate fires first
             job = Job.create(ws / "jobs", bad)
             job.approve()

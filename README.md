@@ -1,4 +1,4 @@
-# SKULLPT — v1.3
+# SKULLPT — v1.4
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -20,7 +20,14 @@ and a `skullpt` command), and the v1.3 GUI installer (double-click →
 progress window → "Open it now?"; if python3-venv is missing the
 installer adds that one system package itself with a GUI password
 prompt, so installing and running need no terminal at all) are built
-and tested in the build sandbox.
+and tested in the build sandbox. v1.4 fixes the defects the audit
+found: a governor refusal no longer strands a job (it stays approved,
+and a failed job can retry), open conversation works with a key,
+kinds with no exporters (character, project) fail loudly instead of
+"building" nothing, the triangle budget is one key (`max_tris`,
+estimated from the shapes before the build), the description is
+snapshotted before anything mutates it, and the installer's downloads
+resume and verify (a newer installed Blender is never downgraded).
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11; the Blender install, the
 image-engine install, the Bench's real-PC run, and the first real
@@ -33,7 +40,10 @@ cloud mesh are still open verdicts.
    a budget sized for a small PC, and the rubric it will be judged on.
    You approve the *description*, not raw code.
 2. **Plan → Approve → Build.** The gate is enforced in code: `build` refuses
-   to run until the job is approved.
+   to run until the job is approved. A build the governor refuses (low
+   RAM, another heavy job running) leaves the job approved, not failed —
+   and a failed job can **retry** back to approved (Retry button, the
+   "retry" chat verb, or `retry` on the CLI) and build again.
 3. **Recipes, not raw generation.** Tested building blocks render each part;
    models (in later steps) will choose recipes and fill parameters.
 4. **Machines check facts, vision checks looks.** Constraints (text fits,
@@ -113,7 +123,10 @@ run path requires them.
     ./install.sh --with-blender  also download + install the pinned Blender LTS
                                  (4.5.9) into /opt/blender (needs admin
                                  permission — it will ask; replaces an
-                                 existing /opt/blender)
+                                 existing /opt/blender, but never
+                                 downgrades: a newer installed Blender
+                                 is left alone. The download resumes if
+                                 interrupted and is SHA-256 verified.)
     ./install.sh --with-image-engine
                                  also build the image engine from source and
                                  download its model (see the image step below;
@@ -342,11 +355,13 @@ The window is laid out in three panes:
   brass lamp" generates candidates; "mesh /home/xprnc/Pictures/stool.jpg"
   turns a photo into a textured 3D mesh on Hugging Face's free GPU
   ("mesh this photo" uses the selected job's reference photo);
-  "approve" / "build" / "file" act on the selected job; "status"
+  "approve" / "build" / "file" act on the selected job; "retry" sends a
+  failed job back to approved so it can build again; "status"
   reports. Commands work with no key at all, except the mesh step,
   which needs HF_TOKEN. Open conversation goes to the planner seat
   (Gemini) when its key is set — without it, the chat says so plainly
-  instead of faking a brain.
+  instead of faking a brain. The transcript is saved in the workspace
+  (`chat.jsonl`), so it survives a restart.
 
 Builds and generations run in the background; the chat reports back
 when one finishes, and a failure (say, the governor refusing
@@ -408,6 +423,57 @@ server implementing the same API shapes the real Space exposes (its
 `/gradio_api/info` was read live on 2026-11-12); no call against the
 real Hugging Face Space has been run from the build sandbox (no token
 there). The first real mesh happens on a machine with a token.
+
+## v1.4 — the audit fixes (governor, conversation, budgets, snapshots)
+
+- **A governor refusal is not a failure.** When the governor refuses
+  a build (low RAM, another heavy job running), the job stays
+  approved and the refusal is logged — it used to be marked failed,
+  which stranded it in a state no approval could rescue. A failed
+  job can **retry** back to approved: the Retry button in the Bench,
+  the "retry" chat verb, or `python3 -m skullpt retry <workspace>
+  <job>`. The heavy-job lock is now taken atomically (two processes
+  starting at once cannot both win it), and the RAM floor is
+  re-checked between exporters mid-build.
+- **Open conversation works.** The chat's open-conversation path was
+  dead (it called a key check that did not exist and passed the
+  planner seat the wrong arguments). With GEMINI_API_KEY set, plain
+  talk now goes to the planner seat with the workshop's jobs as
+  context; without the key it still says so plainly.
+- **Zero exporters fail loudly.** Character and project kinds have no
+  studio yet, so their builds used to "succeed" with no outputs at
+  all. They now fail before the build loop with a plain reason, and
+  the machine checks refuse a build with zero outputs.
+- **One budget key: `max_tris`.** The governor read `max_triangles`
+  while the planner, the game-ready gate, and the examples used
+  `max_tris`, so the pre-build gate summed zeros and never fired.
+  The key is `max_tris` everywhere now (`max_triangles` is still
+  honored as a legacy alias), and the gate estimates triangles from
+  the shapes — box 12, cylinder 92, sphere 528, extrude/lathe/tube
+  from their profiles — counting every repeat/mirror copy. The
+  estimate mirrors Blender's base-mesh builders, so it is a lower
+  bound: the gate refuses only when the build is certainly over
+  budget, and the game-ready gate enforces the exact count
+  after the build.
+- **Descriptions are snapshotted before mutation.** Approving a job
+  freezes `description.approved.json`; the vision critic's patches
+  freeze `description.before-vision-patch.json` first; cloud-mesh
+  freezes `description.before-cloud-mesh.json` before overwriting.
+  What was approved (or what was there before a rewrite) stays
+  recoverable.
+- **Installer downloads resume and verify.** The Blender tarball and
+  the image model download with resume (an interrupted run picks up
+  where it left off) and are SHA-256 verified against hashes
+  recorded in install.sh. A newer installed Blender is never
+  downgraded — `--with-blender` leaves it alone and says so. The
+  image-engine compile is capped at `-j2` on machines with 8 GB of
+  RAM or less.
+- **Smaller fixes.** The chat transcript is saved to the workspace
+  (`chat.jsonl`) and survives a restart. Library thumbnails use the
+  first render PNG, not the SVG mock. Jobs and image batches the
+  Bench cannot read are listed with their reasons ("Couldn't read")
+  instead of silently vanishing. The unauthorized skull example is
+  gated in code — the Bench never offers it.
 
 ## The making engine — Blender scenes (new in v0.3)
 
@@ -506,6 +572,8 @@ model are installed.
   mock Gradio server implementing the same API shapes. The first real
   mesh happens on a machine with a token.
 - No Character studio yet (MPFB2 route) — characters are a later step.
+  Building a character or project job fails loudly and says so, instead
+  of "succeeding" with no outputs.
 - The standalone render window (`view`) and the image picker are
   still local web pages served by the shell itself — only the Bench
   went native in v1.0.

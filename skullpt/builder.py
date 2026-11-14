@@ -63,6 +63,7 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     if not critique.get("vision") or desc.get("kind") != "scene":
         return critique, rounds
     from . import live
+    snapshot_saved = False
     for round_no in range(1, MAX_VISION_ROUNDS + 1):
         patches = live.extract_patches(critique.get("fixes", []))
         if not patches:
@@ -70,6 +71,11 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
         applied = live.apply_patches(desc, patches)
         if not applied:
             break
+        if not snapshot_saved:
+            # The patches rewrite the approved description in place —
+            # freeze what was there first, so it can be recovered.
+            job.snapshot_description("description.before-vision-patch.json")
+            snapshot_saved = True
         desc_mod.dump(desc, job.desc_path)
         job.log("vision_patch", round=round_no, applied=applied)
         rounds.append({"round": round_no, "applied": applied})
@@ -96,19 +102,39 @@ def build_job(job: Job, workspace: Path, seats_path=None) -> dict:
         job.fail("budget: " + "; ".join(budget_problems))
         return {"ok": False, "stage": "budget", "problems": budget_problems}
 
+    # A kind with no exporters (character, project — no studio yet)
+    # used to "build successfully" with zero outputs. Fail loudly
+    # instead, before the lock is even taken.
+    kind_exporters = exporters.DEFAULT_EXPORTERS.get(desc["kind"], ())
+    if not kind_exporters:
+        reason = (f"no exporter for kind {desc['kind']!r} yet — "
+                  "nothing was built, so there is nothing to check")
+        job.fail(reason)
+        return {"ok": False, "stage": "exporters", "problems": [reason]}
+
     lock = governor.HeavyJobLock(workspace / ".heavy.lock")
     job.transition("building")
     outputs: list[str] = []
     used_recipes: list[str] = []
     try:
         with lock:
-            for name in exporters.DEFAULT_EXPORTERS.get(desc["kind"], ()):
+            for name in kind_exporters:
                 fn = exporters.EXPORTERS[name]
                 outputs.extend(fn(desc, job.output_dir))
                 job.log("export", exporter=name)
+                # The RAM floor is checked at acquire time; re-check
+                # between exporters so a build that grows past it is
+                # stopped rather than allowed to thrash the machine.
+                lock.recheck()
             used_recipes = sorted({p["type"] for p in desc["parts"]})
     except governor.GovernorError as exc:
-        job.fail(f"governor: {exc}")
+        # A governor REFUSAL is not a build failure — nothing ran (or
+        # nothing finished), so the job stays approved and can be
+        # retried when the machine is free. (Marking it failed here
+        # used to strand approved jobs in a dead state no approval
+        # could rescue.)
+        job.log("governor_refused", reason=str(exc))
+        job.transition("approved")
         return {"ok": False, "stage": "governor", "problems": [str(exc)]}
     except Exception as exc:  # exporter blew up — record it, don't hide it
         job.fail(f"export: {type(exc).__name__}: {exc}")

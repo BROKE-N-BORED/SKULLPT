@@ -38,6 +38,13 @@ from .library import Library
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
+# Examples that must never be offered, even though the file exists in
+# the tree. The skull was never authorized work (Joshua: "I didnt tell
+# you to make it", 2026-11-11) — it stays in the tree untouched, but
+# the Bench must not offer it as a one-click starting point. The packer
+# also excludes it from zips; this gate is the in-code backstop.
+EXCLUDED_EXAMPLES = {"skull.description.json"}
+
 _RUNS: dict[str, dict] = {}
 _RUNS_LOCK = threading.Lock()
 _RUN_SEQ = [0]
@@ -95,13 +102,18 @@ def engine_status(workspace: Path) -> dict:
 
 def workspace_state(workspace: Path) -> dict:
     jobs = []
+    skipped: list[dict] = []
     jobs_root = workspace / "jobs"
     if jobs_root.exists():
         for job_dir in sorted(p for p in jobs_root.iterdir() if p.is_dir()):
             try:
                 job = Job(job_dir)
                 desc = job.load_description()
-            except Exception:
+            except Exception as exc:
+                # Never silently skip (U32): a job the Bench cannot
+                # read is listed with its reason, not vanished.
+                skipped.append({"where": "jobs", "name": job_dir.name,
+                                "reason": str(exc)[:200]})
                 continue
             outputs = []
             if job.output_dir.exists():
@@ -136,7 +148,11 @@ def workspace_state(workspace: Path) -> dict:
                            reverse=True):
             try:
                 batch = imagegen.load_batch(bdir)
-            except Exception:
+            except Exception as exc:
+                # Never silently skip (U32): an unreadable batch is
+                # listed with its reason, not vanished.
+                skipped.append({"where": "images", "name": bdir.name,
+                                "reason": str(exc)[:200]})
                 continue
             batches.append({
                 "slug": batch["slug"], "prompt": batch["prompt"],
@@ -156,8 +172,10 @@ def workspace_state(workspace: Path) -> dict:
         "batches": batches,
         "library": [{"slug": h["slug"], "name": h["name"], "kind": h["kind"],
                      "files": h["files"]} for h in library],
-        "examples": sorted(p.name for p in EXAMPLES_DIR.glob("*.description.json")),
+        "examples": sorted(p.name for p in EXAMPLES_DIR.glob("*.description.json")
+                           if p.name not in EXCLUDED_EXAMPLES),
         "settings": settings_mod.load_settings(workspace),
+        "skipped": skipped,
         "folders": {
             "library": [h["slug"] for h in library],
             "images": [b["slug"] for b in batches],
@@ -185,7 +203,13 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
     if action == "approve":
         job = _job(workspace, str(payload.get("job", "")))
         job.approve()
-        return {"ok": True, "detail": f"approved {job.dir.name}"}
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"approved {job.dir.name}"}
+    if action == "retry":
+        job = _job(workspace, str(payload.get("job", "")))
+        job.retry()
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"{job.dir.name} is approved again — build when ready"}
     if action == "build":
         job = _job(workspace, str(payload.get("job", "")))
 
@@ -198,7 +222,8 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
                 raise RuntimeError("build did not pass: "
                                    + "; ".join(report.get("problems", [])[:3]))
             return f"built {job.dir.name}"
-        return {"ok": True, "run": _start_run("build", job.dir.name, do_build)}
+        return {"ok": True, "job": job.dir.name,
+                "run": _start_run("build", job.dir.name, do_build)}
     if action == "file":
         job = _job(workspace, str(payload.get("job", "")))
         if job.state != "awaiting_review":
@@ -206,11 +231,16 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         report_path = job.dir / "build-report.json"
         report = (json.loads(report_path.read_text()) if report_path.exists()
                   else {"outputs": sorted(p.name for p in job.output_dir.iterdir())})
-        thumb = next((o for o in report.get("outputs", []) if o.endswith(".svg")), None)
+        # The thumbnail is the first render PNG when there is one — a
+        # picture of the thing, not the SVG mock. (v1.3 took the .svg.)
+        thumb = next((o for o in report.get("outputs", []) if o.endswith(".png")), None)
+        if thumb is None:
+            thumb = next((o for o in report.get("outputs", []) if o.endswith(".svg")), None)
         dest = Library(workspace / "library").file_job(job, report, thumbnail=thumb)
         from .graduate import graduate_recipe
         graduate_recipe(workspace, job, report)
-        return {"ok": True, "detail": f"filed into library: {dest.name}"}
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"filed into library: {dest.name}"}
     if action == "plan":
         from . import live
         from .seats import load_seats
@@ -221,14 +251,18 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             raise ValueError("type what you want first")
         desc = live.plan_from_words(words, seats, kind=str(payload.get("kind", "scene")))
         job = Job.create(workspace / "jobs", desc)
-        return {"ok": True, "detail": f"draft job created: {job.dir.name} — approve it to build"}
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"draft job created: {job.dir.name} — approve it to build"}
     if action == "new-example":
         name = str(payload.get("example", ""))
+        if name in EXCLUDED_EXAMPLES:
+            raise ValueError(f"example {name!r} is not offered")
         path = EXAMPLES_DIR / name
         if path.parent != EXAMPLES_DIR or not path.exists():
             raise ValueError(f"no bundled example {name!r}")
         job = Job.create(workspace / "jobs", desc_mod.load(path))
-        return {"ok": True, "detail": f"job created from example: {job.dir.name}"}
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"job created from example: {job.dir.name}"}
     if action == "images":
         prompt = str(payload.get("prompt", "")).strip()
         if not prompt:
@@ -305,18 +339,57 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
 _CHATS: dict[str, list[dict]] = {}
 
 
+def _chat_path(workspace: Path) -> Path:
+    return workspace / "chat.jsonl"
+
+
 def chat_history(workspace: Path) -> list[dict]:
-    return _CHATS.setdefault(str(workspace), [])
+    """The chat transcript for a workspace — loaded from disk on first
+    use, so it survives a Bench restart (it was memory-only before
+    v1.4). Call save_chat_history() after appending."""
+    key = str(workspace)
+    if key not in _CHATS:
+        history: list[dict] = []
+        path = _chat_path(workspace)
+        if path.exists():
+            for line in path.read_text(errors="replace").splitlines():
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict) and "text" in entry:
+                    history.append(entry)
+        _CHATS[key] = history[-60:]
+    return _CHATS[key]
+
+
+def save_chat_history(workspace: Path) -> None:
+    """Write the in-memory transcript to workspace/chat.jsonl (one
+    JSON entry per line, newest 60). A failed save is swallowed —
+    chat persistence must never break a chat turn."""
+    history = _CHATS.get(str(workspace))
+    if history is None:
+        return
+    try:
+        path = _chat_path(workspace)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".jsonl.tmp")
+        tmp.write_text("".join(json.dumps(e) + "\n" for e in history[-60:]))
+        tmp.replace(path)
+    except OSError:
+        pass
 
 
 def _planner_ready(workspace: Path) -> bool:
+    """True when the planner seat's key is set in the environment."""
+    import os
+
     try:
-        from . import live
         from .seats import load_seats
         seats_path = workspace / "seats.json"
         seats = load_seats(seats_path if seats_path.exists() else None)
-        live._require_key(seats, "planner")
-        return True
+        env_key = seats.get("planner", {}).get("env_key")
+        return bool(env_key and os.environ.get(env_key))
     except Exception:
         return False
 
@@ -355,7 +428,8 @@ _CHAT_HELP = ("Commands I take right here: \"make <what you want>\" drafts a job
               "3D mesh on Hugging Face's free GPU (needs HF_TOKEN) — \"mesh "
               "this photo\" uses the selected job's reference photo; "
               "\"approve\" / \"build\" / \"file\" act on the selected "
-              "job; \"status\" reports the workshop.")
+              "job; \"retry\" sends a failed job back to approved so it can "
+              "build again; \"status\" reports the workshop.")
 
 
 def chat_reply(workspace: Path, message: str, selected: str | None = None) -> dict:
@@ -448,7 +522,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
         words = make_match.group(3)
         try:
             result = act(workspace, "plan", {"words": words, "kind": "scene"})
-            job_name = result["detail"].split(": ")[-1].split(" —")[0]
+            job_name = result["job"]
             actions.append(action_button("Approve it", "approve", {"job": job_name}))
             return {"reply": f"Drafted a job from that: {job_name}. It's waiting at the "
                              "plan gate — nothing builds until you approve it. The "
@@ -460,7 +534,8 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
     for verb, want_state, next_label, next_action in (
             ("approve", "awaiting_approval", "Build it", "build"),
             ("build", "approved", None, None),
-            ("file", "awaiting_review", None, None)):
+            ("file", "awaiting_review", None, None),
+            ("retry", "failed", "Build it", "build")):
         if low == verb or low.startswith(verb + " "):
             job_name = _pick_job(workspace, low, selected, want_state)
             if not job_name:
@@ -489,13 +564,16 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
                        + f". Selected job: {selected or 'none'}. Answer briefly and "
                        "plainly. If the user wants something made, tell them to start "
                        "their message with 'make'.")
-            answer = live.gemini_text(seats, text, system=context)
+            # gemini_text takes one seat dict, not the whole seats dict,
+            # and has no system kwarg — the context goes into the prompt.
+            seat = seats["planner"]
+            answer = live.gemini_text(seat, context + "\n\nUser: " + text)
             return {"reply": answer.strip() or "(the planner seat answered with nothing)",
                     "actions": actions}
         except Exception as exc:
             return {"reply": str(exc), "actions": actions}
     return {"reply": "I take commands here — 'make …', 'picture of …', "
-                     "'mesh <photo path>', 'approve', 'build', 'file', 'status'. "
+                     "'mesh <photo path>', 'approve', 'build', 'file', 'retry', 'status'. "
                      "For open conversation I need the "
                      "Gemini key set in the environment (GEMINI_API_KEY) — without it "
                      "there's no brain on this seat, and I won't fake one.",
@@ -581,6 +659,7 @@ function jobButtons(j) {
   if (j.state === 'awaiting_approval') h += '<button class="primary" onclick="post(\\'approve\\',{job:\\'' + j.name + '\\'})">Approve</button>';
   if (j.state === 'approved') h += '<button class="primary" onclick="post(\\'build\\',{job:\\'' + j.name + '\\'})">Build</button>';
   if (j.state === 'awaiting_review') h += '<button class="primary" onclick="post(\\'file\\',{job:\\'' + j.name + '\\'})">File into Library</button>';
+  if (j.state === 'failed') h += '<button class="primary" onclick="post(\\'retry\\',{job:\\'' + j.name + '\\'})">Retry</button>';
   return h;
 }
 function selectJob(name) { SEL = name; render(); }
@@ -650,6 +729,11 @@ function render() {
   f += '<div class="folder-head">Workspace files</div>' + (S.folders.root_files.length
     ? S.folders.root_files.map(function(n){ return '<div class="folder-item">\\u25b8 ' + esc(n) + '</div>'; }).join('')
     : '<div class="meta">none</div>');
+  if (S.skipped && S.skipped.length) {
+    f += '<div class="folder-head">Couldn\\'t read</div>' + S.skipped.map(function(s){
+      return '<div class="folder-item err">\\u25b8 ' + esc(s.where) + ' / ' + esc(s.name) +
+        ' <span class="meta">' + esc(s.reason) + '</span></div>'; }).join('');
+  }
   document.getElementById('folders').innerHTML = f;
   // selection default: first job
   if (!SEL && S.jobs.length) SEL = S.jobs[0].name;
@@ -892,6 +976,7 @@ def make_server(workspace: str | Path, host: str = "127.0.0.1", port: int = 8770
                     history.append({"role": "bot", "text": result["reply"],
                                     "actions": result.get("actions", [])})
                     del history[:-60]
+                    save_chat_history(ws)
                     self._json(200, {"ok": True, "reply": result["reply"],
                                      "actions": result.get("actions", [])})
                 except Exception as exc:

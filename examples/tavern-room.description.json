@@ -1,7 +1,7 @@
 {
   "budget": {
     "max_texture_px": 1024,
-    "max_triangles": 500000
+    "max_tris": 500000
   },
   "constraints": [
     {
@@ -34,7 +34,6 @@
         500,
         10
       ],
-      "triangles": 200,
       "type": "floor"
     },
     {
@@ -49,7 +48,6 @@
         60,
         110
       ],
-      "triangles": 800,
       "type": "counter"
     },
     {
@@ -65,7 +63,6 @@
         32
       ],
       "texture_px": 512,
-      "triangles": 1200,
       "type": "lamp"
     }
   ],

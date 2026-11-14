@@ -87,10 +87,37 @@ class Job:
         self.log("transition", **{"from": old, "to": new_state}, **fields)
 
     # -- the gate ---------------------------------------------------------
+    def snapshot_description(self, name: str) -> Path:
+        """Copy the job's current description.json to `name` inside the
+        job folder, so what was there before a change stays recoverable.
+        Used at approve time (what the user approved) and before any
+        step that rewrites the description (vision patches, cloud mesh)."""
+        dest = self.dir / name
+        shutil.copy2(self.desc_path, dest)
+        self.log("description_snapshot", file=name)
+        return dest
+
     def approve(self) -> None:
         if self.state != "awaiting_approval":
             raise GateError(f"cannot approve from state {self.state!r}")
+        # What the user approved is frozen here — later steps may patch
+        # or replace description.json, but the approved copy survives.
+        self.snapshot_description("description.approved.json")
         self.transition("approved")
+
+    def retry(self) -> None:
+        """Return a failed job to `approved` so it can build again.
+
+        The description was already approved; the failure was in the
+        build, not the plan. Only `failed` jobs can retry — anything
+        else is a state error, not a retry.
+        """
+        if self.state != "failed":
+            raise GateError(f"cannot retry from state {self.state!r} (needs failed)")
+        self._state.pop("failure", None)
+        self._save()
+        self.transition("approved")
+        self.log("retry")
 
     def require_approved(self) -> None:
         if self.state != "approved":

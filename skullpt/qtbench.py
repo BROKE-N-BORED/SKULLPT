@@ -589,9 +589,12 @@ if QT_AVAILABLE:
             self._build_btn.clicked.connect(lambda: self._do_action("build"))
             self._file_btn = QtWidgets.QPushButton("File into Library")
             self._file_btn.clicked.connect(lambda: self._do_action("file"))
+            self._retry_btn = QtWidgets.QPushButton("Retry")
+            self._retry_btn.clicked.connect(lambda: self._do_action("retry"))
             btn_row.addWidget(self._approve_btn)
             btn_row.addWidget(self._build_btn)
             btn_row.addWidget(self._file_btn)
+            btn_row.addWidget(self._retry_btn)
             layout.addLayout(btn_row)
             self._verdict = QtWidgets.QLabel("")
             self._verdict.setWordWrap(True)
@@ -674,6 +677,15 @@ if QT_AVAILABLE:
             intake_item = QtWidgets.QTreeWidgetItem(self._tree, ["Intake"])
             for name in state["folders"]["intake"]:
                 QtWidgets.QTreeWidgetItem(intake_item, [name])
+            # Never silently skip (U32): jobs/batches the Bench could
+            # not read are listed with their reason, not vanished.
+            skipped = state.get("skipped", [])
+            if skipped:
+                skip_item = QtWidgets.QTreeWidgetItem(self._tree, ["Couldn't read"])
+                for entry in skipped:
+                    QtWidgets.QTreeWidgetItem(
+                        skip_item,
+                        [f"{entry['where']} / {entry['name']}: {entry['reason']}"])
 
         def _refresh_job_panel(self, jobs: list[dict]) -> None:
             job = next((j for j in jobs if j["name"] == self._selected), None)
@@ -691,6 +703,7 @@ if QT_AVAILABLE:
                 self._approve_btn.setEnabled(False)
                 self._build_btn.setEnabled(False)
                 self._file_btn.setEnabled(False)
+                self._retry_btn.setEnabled(False)
                 self._viewport.set_scene(None)
                 self._camera_combo.blockSignals(False)
                 return
@@ -699,6 +712,7 @@ if QT_AVAILABLE:
             self._approve_btn.setEnabled(job["state"] == "awaiting_approval")
             self._build_btn.setEnabled(job["state"] == "approved")
             self._file_btn.setEnabled(job["state"] == "awaiting_review")
+            self._retry_btn.setEnabled(job["state"] == "failed")
             report = job.get("report")
             if report:
                 verdict = ("build passed" if report.get("ok") else "build failed")
@@ -754,11 +768,12 @@ if QT_AVAILABLE:
             history = bench_mod.chat_history(self.workspace)
             history.append({"role": "user" if who == "You" else "bot", "text": text})
             del history[:-60]
+            bench_mod.save_chat_history(self.workspace)
             self._refresh_chat_log()
 
         def _do_action(self, action: str, payload: dict | None = None) -> None:
             job_name = (payload or {}).get("job") or self._selected
-            if not job_name and action in ("approve", "build", "file"):
+            if not job_name and action in ("approve", "build", "file", "retry"):
                 self._log("Bench", "No job selected.")
                 return
             try:
@@ -801,8 +816,7 @@ if QT_AVAILABLE:
                 self._log("Bench", str(exc))
                 return
             detail = result.get("detail", "")
-            if ": " in detail:
-                self._selected = detail.split(": ")[-1].split(" —")[0]
+            self._selected = result["job"]
             self._words.clear()
             self._log("Bench", detail)
             self._refresh()
@@ -818,8 +832,7 @@ if QT_AVAILABLE:
                 self._log("Bench", str(exc))
                 return
             detail = result.get("detail", "")
-            if ": " in detail:
-                self._selected = detail.split(": ")[-1]
+            self._selected = result["job"]
             self._log("Bench", detail)
             self._refresh()
 
@@ -835,6 +848,7 @@ if QT_AVAILABLE:
             history.append({"role": "bot", "text": result["reply"],
                             "actions": result.get("actions", [])})
             del history[:-60]
+            bench_mod.save_chat_history(self.workspace)
             self._refresh_chat_log()
             while self._action_row.count():
                 item = self._action_row.takeAt(0)

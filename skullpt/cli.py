@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("init",):
         p = sub.add_parser(name); p.add_argument("workspace")
     p = sub.add_parser("new"); p.add_argument("workspace"); p.add_argument("description")
-    for name in ("show", "approve", "build", "file"):
+    for name in ("show", "approve", "retry", "build", "file"):
         p = sub.add_parser(name); p.add_argument("workspace"); p.add_argument("job")
     p = sub.add_parser("search"); p.add_argument("workspace"); p.add_argument("query")
     p.add_argument("--kind", default=None)
@@ -127,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
             job = _job(_ws(args.workspace), args.job)
             job.approve()
             print(f"approved: {job.dir.name}")
+        elif args.cmd == "retry":
+            job = _job(_ws(args.workspace), args.job)
+            job.retry()
+            print(f"retried: {job.dir.name} is approved again — build when ready")
         elif args.cmd == "build":
             ws = _ws(args.workspace)
             job = _job(ws, args.job)
@@ -142,7 +146,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             build_report_path = job.dir / "build-report.json"
             report_data = json.loads(build_report_path.read_text()) if build_report_path.exists() else {"outputs": sorted(p.name for p in job.output_dir.iterdir()), "recipes": []}
-            thumb = next((o for o in report_data.get("outputs", []) if o.endswith(".svg")), None)
+            thumb = next((o for o in report_data.get("outputs", []) if o.endswith(".png")), None)
+            if thumb is None:
+                thumb = next((o for o in report_data.get("outputs", []) if o.endswith(".svg")), None)
             dest = Library(ws / "library").file_job(job, report_data, thumbnail=thumb)
             print(f"filed: {dest}")
             from .graduate import graduate_recipe
@@ -166,7 +172,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             if not report.get("ok"):
                 return 1
-            thumb = next((o for o in report["outputs"] if o.endswith(".svg")), None)
+            thumb = next((o for o in report["outputs"] if o.endswith(".png")), None)
+            if thumb is None:
+                thumb = next((o for o in report["outputs"] if o.endswith(".svg")), None)
             dest = Library(ws / "library").file_job(job, report, thumbnail=thumb)
             print(f"demo filed in library: {dest}")
         elif args.cmd == "plan":

@@ -60,10 +60,19 @@ SCRIPT_PATH="$(pwd)/install.sh"
 BLENDER_VERSION="4.5.9"
 BLENDER_TARBALL="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
 BLENDER_URL="https://download.blender.org/release/Blender4.5/${BLENDER_TARBALL}"
+# SHA-256 of the Blender 4.5.9 tarball, from Blender's official
+# checksum file (download.blender.org/release/Blender4.5/blender-4.5.9.sha256).
+BLENDER_SHA256="dcdc3eca6c9825bb35a8033b689c053f3cb5a9b0cd2a61b2eac2a49436b4ad3d"
 SD_REPO="https://github.com/leejet/stable-diffusion.cpp"
 SD_MODEL_FILE="LCM_Dreamshaper_v7-f16.gguf"
 SD_MODEL_URL="https://huggingface.co/Steward/lcm-dreamshaper-v7-gguf/resolve/main/${SD_MODEL_FILE}"
+# SHA-256 of LCM_Dreamshaper_v7-f16.gguf (2,134,675,232 bytes — the
+# Hugging Face repo's file, unchanged since 2023-11-28).
+SD_MODEL_SHA256="0642060766117fdeb8cae0ccdc73ee974ac5779be1112d0a82f2b965bbd00e15"
 SD_MODEL_HOME="$HOME/design-shell-models"
+# Persistent download cache: a mktemp dir is wiped on every run, so a
+# download that can be resumed needs a place that survives.
+DOWNLOAD_CACHE="$HOME/.cache/skullpt"
 WITH_BLENDER=0
 WITH_IMAGE=0
 GUI_WANTED=""   # "gui" | "terminal" | "" (auto-detect)
@@ -140,6 +149,44 @@ apt_install_via_pkexec() {
   pkexec sh -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y $*"
 }
 
+# --- Verified downloads ----------------------------------------------------
+# download_verified <url> <dest> <sha256> <label>
+# Downloads a file with resume (curl -C - picks up where an interrupted
+# run left off) and verifies its SHA-256. A file already present with a
+# matching hash is left alone. If the download or the hash check fails,
+# the partial file is deleted and the download retried once from
+# scratch; a second failure fails with a plain message. Returns 0 on a
+# verified file, 1 otherwise.
+download_verified() {
+  local url="$1" dest="$2" want="$3" label="$4"
+  if [ -f "$dest" ] && [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$want" ]; then
+    echo "$label is already downloaded and verified."
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  local attempt
+  for attempt in 1 2; do
+    if [ "$attempt" = "2" ]; then
+      echo "$label did not come down cleanly — downloading it again from scratch..."
+      rm -f "$dest"
+    fi
+    if ! curl -fSL -C - "$url" -o "$dest"; then
+      if [ "$attempt" = "1" ]; then
+        continue
+      fi
+      echo "ERROR: could not download $label — check the network, then re-run the installer." >&2
+      return 1
+    fi
+    if [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$want" ]; then
+      echo "$label downloaded and verified."
+      return 0
+    fi
+  done
+  echo "ERROR: $label downloaded but does not match its checksum — the download may be corrupted." >&2
+  rm -f "$dest"
+  return 1
+}
+
 # --- The install body (runs in the worker subprocess) ----------------------
 do_install() {
   # --- 1. Python -----------------------------------------------------------
@@ -200,15 +247,34 @@ do_install() {
   step 55 "Checking Blender and the image engine"
   BLENDER_BIN="$(find_blender)"
   if [ "$WITH_BLENDER" = "1" ]; then
-    echo "Installing Blender $BLENDER_VERSION to /opt/blender (this needs admin permission — a password window will appear)..."
-    TMPD="$(mktemp -d)"
-    curl -fSL "$BLENDER_URL" -o "$TMPD/$BLENDER_TARBALL"
-    tar -xf "$TMPD/$BLENDER_TARBALL" -C "$TMPD"
-    EXTRACTED="$TMPD/blender-${BLENDER_VERSION}-linux-x64"
-    pkexec sh -c 'rm -rf /opt/blender && mv "$1" /opt/blender && ln -sf /opt/blender/blender /usr/local/bin/blender' _ "$EXTRACTED"
-    rm -rf "$TMPD"
-    BLENDER_BIN="/opt/blender/blender"
-    echo "Blender installed."
+    # Never downgrade: if the Blender already on the machine is newer
+    # than the pinned LTS, leave it alone and say so plainly. An
+    # unparseable version falls through to the install (better to
+    # install a known-good Blender than to trust a version string
+    # that could not be read).
+    FOUND_VER=""
+    if [ -n "$BLENDER_BIN" ]; then
+      FOUND_VER="$("$BLENDER_BIN" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    fi
+    if [ -n "$FOUND_VER" ] && [ "$FOUND_VER" != "$BLENDER_VERSION" ] \
+       && [ "$(printf '%s\n%s\n' "$BLENDER_VERSION" "$FOUND_VER" | sort -V | head -1)" = "$BLENDER_VERSION" ]; then
+      echo "Blender $FOUND_VER is already installed — newer than the pinned $BLENDER_VERSION, so leaving it alone."
+    else
+      echo "Installing Blender $BLENDER_VERSION to /opt/blender (this needs admin permission — a password window will appear)..."
+      mkdir -p "$DOWNLOAD_CACHE"
+      if ! download_verified "$BLENDER_URL" "$DOWNLOAD_CACHE/$BLENDER_TARBALL" \
+          "$BLENDER_SHA256" "Blender $BLENDER_VERSION"; then
+        gui_fail "Blender could not be downloaded — check the network, then re-run the installer."
+        return 1
+      fi
+      TMPD="$(mktemp -d)"
+      tar -xf "$DOWNLOAD_CACHE/$BLENDER_TARBALL" -C "$TMPD"
+      EXTRACTED="$TMPD/blender-${BLENDER_VERSION}-linux-x64"
+      pkexec sh -c 'rm -rf /opt/blender && mv "$1" /opt/blender && ln -sf /opt/blender/blender /usr/local/bin/blender' _ "$EXTRACTED"
+      rm -rf "$TMPD"
+      BLENDER_BIN="/opt/blender/blender"
+      echo "Blender installed."
+    fi
   fi
 
   if [ -n "$BLENDER_BIN" ]; then
@@ -253,17 +319,32 @@ do_install() {
       TMPD="$(mktemp -d)"
       git clone --depth 1 --recursive "$SD_REPO" "$TMPD/sd"
       cmake -S "$TMPD/sd" -B "$TMPD/sd/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
-      cmake --build "$TMPD/sd/build" -j"$(nproc)" >/dev/null
+      # Build parallelism is capped on small machines: a full -j$(nproc)
+      # compile can eat the whole 8 GB and thrash. 8 GB or less gets
+      # -j2; bigger machines use all their cores.
+      MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+      if [ "${MEM_KB:-0}" -le 8388608 ]; then
+        BUILD_JOBS=2
+      else
+        BUILD_JOBS="$(nproc)"
+      fi
+      cmake --build "$TMPD/sd/build" -j"$BUILD_JOBS" >/dev/null
       pkexec sh -c 'rm -rf /opt/sd.cpp && mkdir -p /opt/sd.cpp/bin && cp "$1/bin/"* /opt/sd.cpp/bin/ && ln -sf /opt/sd.cpp/bin/sd-cli /usr/local/bin/sd-cli' _ "$TMPD/sd/build"
       rm -rf "$TMPD"
       SD_BIN="/opt/sd.cpp/bin/sd-cli"
       echo "Image engine built: $SD_BIN"
     fi
-    if [ -z "$(find_sd_model)" ]; then
-      echo "Downloading the image model ($SD_MODEL_FILE, about 2.1 GB)..."
+    if [ -f "$SD_MODEL_HOME/$SD_MODEL_FILE" ] || [ -z "$(find_sd_model)" ]; then
+      # A pinned model already on disk is verified — a partial or
+      # corrupt file from an interrupted run is resumed, not trusted.
+      # (When some other .gguf is already there and the pinned file is
+      # not, the download is skipped as before.)
       mkdir -p "$SD_MODEL_HOME"
-      curl -fSL "$SD_MODEL_URL" -o "$SD_MODEL_HOME/$SD_MODEL_FILE"
-      echo "Model downloaded to $SD_MODEL_HOME/$SD_MODEL_FILE"
+      if ! download_verified "$SD_MODEL_URL" "$SD_MODEL_HOME/$SD_MODEL_FILE" \
+          "$SD_MODEL_SHA256" "the image model ($SD_MODEL_FILE, about 2.1 GB)"; then
+        gui_fail "The image model could not be downloaded — check the network, then re-run the installer."
+        return 1
+      fi
     fi
   fi
 

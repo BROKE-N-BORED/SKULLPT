@@ -153,6 +153,71 @@ def validate(desc: dict) -> list[str]:
     return problems
 
 
+# Triangle estimates for the pre-build budget gate (v1.4). These mirror
+# the Blender exporter's builders exactly — same segment counts, same
+# face counts — so the estimate is what Blender will actually build,
+# before bevel modifiers. The counts below are the BASE mesh:
+#   box:      a cube, 6 quads = 12 tris
+#   cylinder: primitive_cylinder_add(vertices=24): 24 side quads + two
+#             24-gon caps = 48 + 2*(24-2) = 92 tris
+#   sphere:   primitive_uv_sphere_add(segments=24, ring_count=12):
+#             24*(12-2) quads + two 24-tri pole fans = 528 tris
+#   extrude:  n-gon profile: two (n-2)-tri caps + n side quads = 4n-4
+#   lathe:    R profile points, 20 segments: (R-1)*20 quads + a 20-tri
+#             fan cap at each open end (radius > 0.001)
+#   tube:     n path points, 10 segments: (n-1)*10 quads, no caps
+# A shape the exporter falls back to a cube for (missing profile/path,
+# unknown shape) estimates as a cube (12). Bevel modifiers add
+# triangles on top, so the estimate is a LOWER bound: the pre-build
+# gate refuses only when the build is certainly over budget, and the
+# game-ready gate enforces the exact post-build count.
+_CYLINDER_VERTICES = 24
+_SPHERE_SEGMENTS = 24
+_SPHERE_RINGS = 12
+_LATHE_SEGMENTS = 20
+_TUBE_SEGMENTS = 10
+
+
+def estimate_triangles(part: dict) -> int:
+    """Triangles the Blender exporter will build for one part (base mesh,
+    before bevel modifiers — a lower bound on the real count)."""
+    shape = part.get("shape", "box")
+    if shape == "cylinder":
+        v = _CYLINDER_VERTICES
+        return 2 * v + 2 * (v - 2)
+    if shape == "sphere":
+        return 2 * _SPHERE_SEGMENTS * (_SPHERE_RINGS - 1)
+    if shape == "extrude":
+        profile = part.get("profile_cm")
+        if isinstance(profile, list) and len(profile) >= 3:
+            return 4 * len(profile) - 4
+        return 12
+    if shape == "lathe":
+        profile = part.get("profile_cm")
+        if isinstance(profile, list) and len(profile) >= 2:
+            total = (_LATHE_SEGMENTS * 2) * (len(profile) - 1)
+            if float(profile[0][0]) > 0.001:
+                total += _LATHE_SEGMENTS
+            if float(profile[-1][0]) > 0.001:
+                total += _LATHE_SEGMENTS
+            return total
+        return 12
+    if shape == "tube":
+        path = part.get("path_cm")
+        if isinstance(path, list) and len(path) >= 2:
+            return (_TUBE_SEGMENTS * 2) * (len(path) - 1)
+        return 12
+    return 12  # box, and anything the exporter falls back to a cube for
+
+
+def estimate_description_triangles(desc: dict) -> int:
+    """Estimated triangles for a whole description, counting every
+    concrete part repeat/mirror expansion produces."""
+    from .expand import expand_parts
+
+    return sum(estimate_triangles(p) for p in expand_parts(desc))
+
+
 def load(path: str | Path) -> dict:
     """Load and validate a Description File from disk."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))

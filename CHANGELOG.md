@@ -1,6 +1,10 @@
 # SKULLPT — Changelog
 
-## Unreleased
+## v1.4 — 2026-11-13 — the audit fixes: governor, conversation, budgets, snapshots
+
+The 2026-11-13 audit found three dead paths and a stranded-job trap;
+v1.4 fixes all of them, plus the small weaknesses from the same audit
+and the installer performance item.
 
 - SECURITY HYGIENE (Joshua's rule, 2026-11-13): sensitive information
   and APIs are never in code. The tree was audited — all keys
@@ -8,8 +12,80 @@
   environment only, and no secret was found in any shipped version
   (v0.1–v1.3 all clean). Added `.gitignore` covering `.env` files,
   key/credential files, and local install artifacts, so a secret
-  can never be committed by accident. This rides into the next
-  release zip.
+  can never be committed by accident. This rides into the release zip.
+- GOVERNOR REFUSAL NO LONGER STRANDS JOBS (T1): a build the governor
+  refuses (low RAM, another heavy job running) stays approved and the
+  refusal is logged as `governor_refused` — it used to be marked
+  failed, which stranded it in a state no approval could rescue. New
+  `retry`: a failed job returns to approved — the Retry button in the
+  Bench (enabled only for failed jobs), the "retry" chat verb, the
+  `retry` Bench action, and `python3 -m skullpt retry <workspace>
+  <job>`. Retrying clears the recorded failure.
+- OPEN CONVERSATION WORKS (T2): the chat's open-conversation path was
+  dead — it called `live._require_key`, which did not exist, and
+  passed `gemini_text` the whole seats dict plus a `system` kwarg it
+  does not take. The key check is now a real environment check on
+  the planner seat's key, and the call passes the planner seat dict
+  with the workshop context folded into the prompt text. With
+  GEMINI_API_KEY set, plain talk answers; without it the chat still
+  says so plainly instead of faking a brain.
+- ZERO EXPORTERS FAIL LOUDLY (T3): character and project kinds map to
+  no exporters, so their builds "succeeded" with zero outputs. Builds
+  now fail before the lock is taken (stage `exporters`, plain reason),
+  and the machine checks gained an `outputs_present` check — zero
+  outputs is never ok.
+- ONE BUDGET KEY: `max_tris` (T4): the governor read `max_triangles`
+  while the planner, the game-ready gate, and the examples used
+  `max_tris`, so the pre-build gate summed zeros and never fired.
+  The key is `max_tris` everywhere (`max_triangles` is still honored
+  as a legacy alias when `max_tris` is absent), and the gate now
+  estimates triangles from the shapes — box 12, cylinder 92, sphere
+  528, extrude/lathe/tube from their profiles — over the
+  repeat/mirror expansion. The estimate mirrors Blender's base-mesh
+  builders exactly, so it is a lower bound: the gate refuses only
+  when the build is certainly over budget; the game-ready gate
+  enforces the exact count post-build. The tavern-room example now
+  uses `max_tris` and its hand-written per-part `triangles` fields
+  are gone. (Craft stall estimates 1,356 vs 2,668 real; tavern room
+  36 vs a 500,000 budget.)
+- DESCRIPTION SNAPSHOTS (T5): approving a job writes
+  `description.approved.json`; the vision critic's patches write
+  `description.before-vision-patch.json` before the first patch
+  lands; cloud-mesh writes `description.before-cloud-mesh.json`
+  before overwriting an existing job's description.
+- INSTALLER DOWNLOADS RESUME AND VERIFY (T6): the Blender tarball
+  and the image model download with `curl -C -` (an interrupted run
+  picks up where it left off) and are SHA-256 verified against hashes
+  recorded in install.sh (Blender 4.5.9 and LCM_Dreamshaper_v7-f16).
+  A file already present with a matching hash is left alone; a hash
+  mismatch deletes the file and retries once from scratch, then
+  fails with a plain message. The Blender tarball now downloads to a
+  persistent cache (`~/.cache/skullpt`) instead of a mktemp dir, so
+  resume works across runs. `--with-blender` never downgrades: a
+  newer installed Blender is left alone with a plain note.
+- `act()` RETURNS `"job"` (T7): approve/build/file/plan/new-example/
+  retry all return the job name as a field; the detail-string
+  splitting in bench.py and qtbench.py is gone.
+- SMALL FIXES: the skull example is gated in code — the Bench never
+  offers `examples/skull.description.json` (the file is untouched);
+  the chat transcript is saved to the workspace (`chat.jsonl`) and
+  survives a restart; library thumbnails use the first render PNG,
+  falling back to the SVG mock; jobs and image batches the Bench
+  cannot read are listed with their reasons in the UI ("Couldn't
+  read") instead of silently vanishing (U32); the governor lock is
+  taken atomically via O_EXCL with stale-lock retry, and the RAM
+  floor is re-checked between exporters mid-build.
+- IMAGE-ENGINE BUILD CAPPED (P5): the stable-diffusion.cpp compile
+  runs at `-j2` on machines with 8 GB of RAM or less (a full
+  `-j$(nproc)` compile can eat the whole machine); bigger machines
+  still use all their cores.
+- TESTS: 57 new tests in `tests/test_v14.py` (governor refusal +
+  retry, open conversation against a mock Gemini server, zero
+  exporters, triangle estimates, snapshots, installer text checks +
+  staged installer runs with stub commands, act() job field, skull
+  exclusion, chat persistence, thumbnails, skipped entries, lock
+  atomicity + re-check, Qt Retry button). The two `max_triangles`
+  tests in test_core.py now use `max_tris`.
 
 ## v1.3 — 2026-11-12 — no terminal at all: GUI installer, python3-venv self-heal
 
