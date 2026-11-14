@@ -304,15 +304,98 @@ def mesh_for_box(box: dict, src: dict) -> dict:
     }
 
 
+def _mannequin_mesh(character: dict) -> dict:
+    """The viewport stand-in for a character (v1.7, T26): leg and arm
+    cylinders, a torso capsule, a head sphere, sized from the macro
+    sliders through the same framing box the Iso camera and the
+    collision box use: the right height and build at the origin,
+    feet at z=0. It is NOT the real mesh: the human appears in the
+    Blender renders. Clicking it selects nothing editable (the
+    Render window says so); the human is edited in Character Studio.
+    """
+    from .blender_character import character_bounds_cm
+
+    _, size = character_bounds_cm(character)
+    width, depth, height = size
+    # Proportions of the height (they sum to the full height, so the
+    # mannequin stands as tall as the frame it is drawn in): legs
+    # 48%, torso 34%, neck 4%, head 14%.
+    leg_h = height * 0.48
+    torso_h = height * 0.34
+    head_d = height * 0.14
+    neck = height * 0.04
+    tris: list = []
+    # Legs: two cylinders, feet at z=0.
+    leg_w = width * 0.16
+    for side in (-1, 1):
+        tris += _cylinder_tris(
+            [side * width * 0.14 - leg_w / 2, -leg_w / 2, 0.0],
+            [leg_w, leg_w, leg_h], segments=10)
+    # Torso: one wider cylinder, hips to shoulders.
+    tris += _cylinder_tris(
+        [-width * 0.26, -depth * 0.32, leg_h],
+        [width * 0.52, depth * 0.64, torso_h], segments=14)
+    # Arms: two cylinders hanging at the sides, shoulder to mid-thigh.
+    arm_w = width * 0.11
+    arm_top = leg_h + torso_h
+    for side in (-1, 1):
+        tris += _cylinder_tris(
+            [side * (width * 0.26 + arm_w / 2) - arm_w / 2, -arm_w / 2,
+             leg_h * 0.45],
+            [arm_w, arm_w, arm_top - leg_h * 0.45], segments=8)
+    # Head: a sphere on top, with a neck gap.
+    head_z = leg_h + torso_h + neck
+    tris += _sphere_tris(
+        [-head_d / 2, -head_d / 2, head_z],
+        [head_d, head_d, head_d], segments=16, rings=10)
+    xs = [v[0] for t in tris for v in t]
+    ys = [v[1] for t in tris for v in t]
+    zs = [v[2] for t in tris for v in t]
+    return {
+        "id": "character", "type": "character",
+        "tris": tris, "normals": [_tri_normal(a, b, c) for a, b, c in tris],
+        "bounds": {"min": [min(xs), min(ys), min(zs)],
+                   "max": [max(xs), max(ys), max(zs)]},
+        "color": hex_to_rgb("#b8b0a0"),
+        "glass": False,
+        "glow": False,
+    }
+
+
+def _union_bounds(a: dict, b: dict) -> dict:
+    """The bounds box covering both bounds dicts (min/max/center/span)."""
+    lo = [min(a["min"][i], b["min"][i]) for i in range(3)]
+    hi = [max(a["max"][i], b["max"][i]) for i in range(3)]
+    center = [(lo[i] + hi[i]) / 2 for i in range(3)]
+    span = max(hi[i] - lo[i] for i in range(3)) or 100.0
+    return {"min": lo, "max": hi, "center": center, "span": float(span)}
+
+
 def scene_meshes(desc: dict) -> dict:
     """Everything the viewport needs: meshes, bounds, cameras."""
     data = scene_data(desc)
     src_by_id = {p["id"]: p for p in expand_parts(desc)}
     meshes = [mesh_for_box(box, src_by_id.get(box["id"], {}))
               for box in data["boxes"]]
+    bounds = data["bounds"]
+    character = desc.get("character")
+    if desc.get("kind") == "character" and isinstance(character, dict):
+        # The mannequin stands in for the human (v1.7, T26). A
+        # partless job has only the default cube for bounds, so the
+        # mannequin IS the bounds there; with props, it joins them.
+        mannequin = _mannequin_mesh(character)
+        meshes = meshes + [mannequin]
+        mb = mannequin["bounds"]
+        if data["boxes"]:
+            bounds = _union_bounds(bounds, mb)
+        else:
+            lo, hi = mb["min"], mb["max"]
+            center = [(lo[i] + hi[i]) / 2 for i in range(3)]
+            bounds = {"min": lo, "max": hi, "center": center,
+                      "span": float(max(hi[i] - lo[i] for i in range(3)) or 100.0)}
     return {
         "name": data["name"], "kind": data.get("kind", ""),
-        "meshes": meshes, "bounds": data["bounds"],
+        "meshes": meshes, "bounds": bounds,
         "cameras": data["cameras"],
     }
 
@@ -831,6 +914,7 @@ if QT_AVAILABLE:
             for name, icon, tip in (
                     ("jobs", "layout-grid", "Jobs"),
                     ("render", "box", "Render"),
+                    ("character", "user", "Character Studio"),
                     ("images", "image", "Images"),
                     ("library", "library", "Library"),
                     ("settings", "settings", "Settings"),
@@ -1058,6 +1142,8 @@ if QT_AVAILABLE:
 
             menu_bar.addAction("Render",
                                lambda: self._open_window("render"))
+            menu_bar.addAction("Character",
+                               lambda: self._open_window("character"))
             menu_bar.addAction("Images",
                                lambda: self._open_window("images"))
             menu_bar.addAction("Library",
@@ -1092,8 +1178,8 @@ if QT_AVAILABLE:
 
         # -- windows ----------------------------------------------------
         def _open_window(self, name: str) -> None:
-            from .qtwindows import (HelpWindow, ImagesWindow, LibraryWindow,
-                                    SettingsWindow)
+            from .qtwindows import (CharacterWindow, HelpWindow, ImagesWindow,
+                                    LibraryWindow, SettingsWindow)
 
             if name == "jobs":
                 self.show()
@@ -1104,6 +1190,8 @@ if QT_AVAILABLE:
             if window is None:
                 if name == "render":
                     window = self._render_window
+                elif name == "character":
+                    window = CharacterWindow(self, self.workspace)
                 elif name == "images":
                     window = ImagesWindow(self, self.workspace)
                 elif name == "library":
@@ -1115,7 +1203,7 @@ if QT_AVAILABLE:
                 else:
                     return
                 self._child_windows[name] = window
-            if name == "render":
+            if name in ("render", "character"):
                 window.set_job(self._selected)
             else:
                 refresh = getattr(window, "refresh", None)
@@ -1160,7 +1248,9 @@ if QT_AVAILABLE:
                 + "   Gemini key: "
                 + ("set" if engines["gemini_key"] else "not set")
                 + "   HF token: "
-                + ("set" if engines.get("hf_token") else "not set"))
+                + ("set" if engines.get("hf_token") else "not set")
+                + "   Character Studio: "
+                + ("ready" if engines.get("character_studio") else "not installed"))
             free = governor.free_ram_mb()
             floor = governor.adaptive_min_free_mb()
             self._ram_label.setText(
@@ -1235,6 +1325,9 @@ if QT_AVAILABLE:
                 + ("set" if engines["gemini_key"] else "not set"),
                 "HF token "
                 + ("set" if engines.get("hf_token") else "not set"),
+                "Character Studio "
+                + ("ready" if engines.get("character_studio")
+                   else "not installed"),
             ]
             self._engine_tile_text.setText("\n".join(bits))
             latest = None
@@ -1361,7 +1454,8 @@ if QT_AVAILABLE:
             job_name = (payload or {}).get("job") or self._selected
             if not job_name and action in ("approve", "build", "file", "retry",
                                            "delete", "rename", "duplicate",
-                                           "edit-part", "unreal-package"):
+                                           "edit-part", "edit-character",
+                                           "unreal-package"):
                 self._log("Bench", "No job selected.")
                 return None
             try:

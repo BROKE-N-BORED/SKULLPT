@@ -1,5 +1,5 @@
 ---
-version: 1.6
+version: 1.7
 name: SKULLPT-design-system
 description: The SKULLPT look, a native Linux design and asset shell. A warm near-black canvas, bone text, and amber as the one chromatic accent, sampled from the skull icon's amber crack. Warp-derived palette logic (warm dark, hairline-only elevation, tight radii), Cursor's one-accent discipline, JetBrains Mono on every code surface. Built for an 8 GB no-GPU Mint PC: cheap motion only, nothing decorative that costs a frame.
 
@@ -179,6 +179,13 @@ in `skullpt/fonts/OFL-Inter.txt` and `OFL-JetBrainsMono.txt`).
   bottom; chat panel on the right.
 - Render: viewport takes the left two thirds; parts list, part
   editor, and renders strip on the right third.
+- Character Studio: status note on top; character-job picker and
+  new-character row; a scrolling form of 11 macro sliders (0-100%
+  with live value labels), a skin picker with a 96px thumbnail,
+  and a rig picker; Save and gate buttons at the bottom. The
+  viewport mannequin in Render is a stand-in, not the real mesh:
+  torso capsule, head sphere, limb cylinders, bone-grey
+  (`#b8b0a0`), at the human's height and build.
 - Base spacing 4px; card padding 10px/8px; window margins 8px.
 - Nothing is selected by default (U6): the Jobs window opens with
   no job selected, and the detail strip says so plainly.
@@ -245,7 +252,7 @@ Tooltips are canvas-soft with a hairline border.
 
 ### Icons (R2)
 
-Lucide, vendored as SVG files in `skullpt/icons/` (38 icons),
+Lucide, vendored as SVG files in `skullpt/icons/` (39 icons),
 recolored to bone at load time (`qtdesign.load_icon()` renders the
 SVG through QSvgRenderer with `currentColor` replaced). License:
 ISC, see `skullpt/icons/LICENSE` (Lucide Icons, copyright 2026).
@@ -261,6 +268,9 @@ file is the current Lucide icon, recorded here:
 | `grid.svg` | `grid-2x2.svg` | `grid` removed upstream |
 | `wand-2.svg` | `wand-sparkles.svg` | `wand-2` renamed upstream |
 | `help-circle.svg` | `circle-question-mark.svg` | `help-circle` renamed upstream |
+
+`user.svg` (Character Studio rail icon, v1.7) was vendored from the
+same Lucide main branch under its own name; no rename applies.
 
 Every vendored file was verified to return HTTP 200 and start with
 `<svg`.

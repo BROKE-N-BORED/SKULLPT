@@ -132,8 +132,10 @@ def find_blender() -> str | None:
     return None
 
 
-def generate_script(desc: dict, out_dir: Path, slug: str) -> str:
-    """Build the Blender Python script for a description. Pure function."""
+def build_payload(desc: dict, out_dir: Path, slug: str) -> dict:
+    """The payload dict the build script embeds. Split out of
+    generate_script (v1.7, T26) so the character exporter can reuse
+    the same scene payload and add its character block to it."""
     data = scene_data(desc)
     style = desc.get("style", {}) or {}
     accent = str(style.get("accent", "#e0a458"))
@@ -179,8 +181,20 @@ def generate_script(desc: dict, out_dir: Path, slug: str) -> str:
     payload["mesh_file"] = str(mesh[0]) if mesh else None
     payload["mesh_format"] = mesh[1] if mesh else None
     payload["mesh_scale"] = mesh[2] if mesh else 1.0
+    return payload
+
+
+def render_build_template(payload: dict) -> str:
+    """Fill the build template with a payload (v1.7, T26): the payload
+    dict first, then the surface colour as an RGB tuple. Same two
+    replaces, same order as generate_script always did."""
     script = _BUILD_TEMPLATE.replace("__PAYLOAD__", repr(payload))
-    return script.replace("__SURFACE__", repr(_hex_rgb(surface)))
+    return script.replace("__SURFACE__", repr(_hex_rgb(payload["surface"])))
+
+
+def generate_script(desc: dict, out_dir: Path, slug: str) -> str:
+    """Build the Blender Python script for a description. Pure function."""
+    return render_build_template(build_payload(desc, out_dir, slug))
 
 
 def _resolve_mesh_file(desc: dict, out_dir: Path):
@@ -596,6 +610,20 @@ if D["game_ready"]:
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
         o.name = "UCX_" + part["id"]
         ucx_objs.append(o)
+    if D.get("character"):
+        # The human gets a collision box too (v1.7, T26): a character
+        # job may have no prop parts at all, and without this its
+        # collision export would be empty.
+        cb = D["character"]["bounds"]
+        mn = [v / 100.0 for v in cb["min"]]
+        sz = [max(v / 100.0, 0.01) for v in cb["size"]]
+        center = (mn[0] + sz[0] / 2, mn[1] + sz[1] / 2, mn[2] + sz[2] / 2)
+        bpy.ops.mesh.primitive_cube_add(location=center)
+        o = bpy.context.active_object
+        o.dimensions = tuple(sz)
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        o.name = "UCX_character"
+        ucx_objs.append(o)
     bpy.ops.object.select_all(action="DESELECT")
     for o in ucx_objs:
         o.select_set(True)
@@ -702,17 +730,15 @@ def _render_outputs(desc: dict, slug: str) -> list[str]:
             for cam in list(data["cameras"]) + [{"name": "Iso (auto)"}]]
 
 
-def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
-    """Exporter entry point: (desc, out_dir) -> output file names.
-
-    Two phases (P3): the build script runs once (geometry, stats,
-    LODs, GLB, .blend), then the render script renders the cameras.
-    The render engine comes from the description's resolved "render"
-    block: "cycles" runs Cycles only; "eevee" tries EEVEE then
-    Cycles; "auto" (the default) runs the EEVEE probe (P4) first so
-    a headless machine that cannot do EEVEE goes straight to Cycles
-    instead of burning the EEVEE timeout. A render fallback re-runs
-    renders only — the build is never repeated.
+def export_blender_with_build_script(desc: dict, out_dir: Path,
+                                     build_script_fn, kind_word: str) -> list[str]:
+    """The shared two-phase Blender run (v1.7, T26): the scene exporter
+    and the character exporter differ only in the build script they
+    run and the word their error messages use — everything else
+    (stale clearing, EEVEE probe, Cycles fallback, engine memory,
+    build note) is the same run. `build_script_fn` takes
+    (desc, out_dir, slug) and returns the build script text;
+    `kind_word` is "scene" or "character".
 
     Raises RuntimeError with a plain message when Blender is missing
     or the run produces nothing — the builder records it as a failed
@@ -721,11 +747,11 @@ def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
     exe = find_blender()
     if exe is None:
         raise RuntimeError(
-            "Blender was not found on this machine, so no 3D scene was built. "
+            f"Blender was not found on this machine, so no 3D {kind_word} was built. "
             "Install Blender (or set DESIGNSHELL_BLENDER to its path) and run the build again.")
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _slug(desc["name"])
-    build_script = generate_script(desc, out_dir, slug)
+    build_script = build_script_fn(desc, out_dir, slug)
     build_path = out_dir / f"{slug}.blender.py"
     build_path.write_text(build_script, encoding="utf-8")
     render_script = generate_render_script(desc, out_dir, slug)
@@ -750,7 +776,7 @@ def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
     if missing_build:
         tail = "\n".join(build_log.strip().splitlines()[-8:])
         raise RuntimeError(
-            f"Blender ran but the scene did not build — these outputs "
+            f"Blender ran but the {kind_word} did not build — these outputs "
             f"did not land: {missing_build}. "
             f"Last lines from Blender:\n{tail}")
 
@@ -785,7 +811,7 @@ def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
     if missing:
         tail = "\n".join(render_log.strip().splitlines()[-8:])
         raise RuntimeError(
-            f"Blender built the scene but these renders did not land: {missing}. "
+            f"Blender built the {kind_word} but these renders did not land: {missing}. "
             f"Last lines from Blender:\n{tail}")
     # Remember which engine actually worked (P4): the Settings window
     # shows it, so the user can see what their machine does.
@@ -802,3 +828,22 @@ def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
             f"Outputs: {', '.join(sorted(landed))}.\n")
     (out_dir / f"{slug}.build-note.txt").write_text(note, encoding="utf-8")
     return sorted(landed + [build_path.name, render_path.name, f"{slug}.build-note.txt"])
+
+
+def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
+    """Exporter entry point: (desc, out_dir) -> output file names.
+
+    Two phases (P3): the build script runs once (geometry, stats,
+    LODs, GLB, .blend), then the render script renders the cameras.
+    The render engine comes from the description's resolved "render"
+    block: "cycles" runs Cycles only; "eevee" tries EEVEE then
+    Cycles; "auto" (the default) runs the EEVEE probe (P4) first so
+    a headless machine that cannot do EEVEE goes straight to Cycles
+    instead of burning the EEVEE timeout. A render fallback re-runs
+    renders only — the build is never repeated.
+
+    Raises RuntimeError with a plain message when Blender is missing
+    or the run produces nothing — the builder records it as a failed
+    job.
+    """
+    return export_blender_with_build_script(desc, out_dir, generate_script, "scene")

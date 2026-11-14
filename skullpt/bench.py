@@ -223,6 +223,10 @@ def engine_status(workspace: Path) -> dict:
         critic_key = bool(env_key and os.environ.get(env_key))
     except Exception:
         critic_key = False
+    # Character Studio (v1.7, T26): ready only when MPFB2 AND its
+    # system assets pack are both installed for some Blender.
+    from .blender_character import find_mpfb
+    mpfb = find_mpfb()
     return {
         "blender": find_blender() is not None,
         "image_engine": imagegen.find_engine() is not None,
@@ -230,6 +234,7 @@ def engine_status(workspace: Path) -> dict:
         "gemini_key": critic_key,
         "hf_token": bool(os.environ.get("HF_TOKEN"))
         or tokenfile.has_token(workspace),
+        "character_studio": bool(mpfb["installed"] and mpfb["assets"]),
     }
 
 
@@ -445,6 +450,25 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             detail += " — the description changed, so it needs approval again"
         return {"ok": True, "job": job.dir.name, "state": new_state,
                 "detail": detail}
+    if action == "edit-character":
+        job = _job(workspace, str(payload.get("job", "")))
+        character = payload.get("character")
+        if not isinstance(character, dict):
+            raise ValueError("edit-character needs a character object")
+        new_state = job.edit_character(character)
+        detail = f"character {job.dir.name} updated"
+        if new_state == "awaiting_approval":
+            detail += " — the description changed, so it needs approval again"
+        return {"ok": True, "job": job.dir.name, "state": new_state,
+                "detail": detail}
+    if action == "new-character":
+        from .blender_character import default_character_description
+        name = str(payload.get("name", "")).strip() or "New character"
+        job = Job.create(workspace / "jobs",
+                         default_character_description(name))
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"character job created: {job.dir.name} — "
+                "shape the human, then approve it to build"}
     if action == "build":
         job = _job(workspace, str(payload.get("job", "")))
 

@@ -143,8 +143,17 @@ class _StagedInstall(unittest.TestCase):
         """
         tmp = Path(tmp)
         stage = tmp / "stage"
+        # Exclude .venv as well as __pycache__: the staged installer
+        # reuses an existing .venv (ensure_venv returns early), so a
+        # real .venv in the stage would make the nested installer run
+        # the REAL suite instead of the stubbed one — and the real
+        # suite contains these very tests, which stage another copy
+        # and run another installer, recursing until the 120 s
+        # timeout. (Found by the v1.7 installer sim: the suite run
+        # from an installed tree stalled on exactly this.)
         shutil.copytree(ROOT, stage,
-                        ignore=shutil.ignore_patterns("__pycache__"))
+                        ignore=shutil.ignore_patterns("__pycache__",
+                                                      ".venv"))
         (stage / "install.sh").chmod(0o755)
         (stage / "run.sh").chmod(0o755)
         if run_sh_stub:
@@ -172,6 +181,12 @@ class _StagedInstall(unittest.TestCase):
         env = dict(os.environ)
         env["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
         env["HOME"] = str(home)
+        # The staged installer must see the stub Blender on PATH, not
+        # whatever the ambient environment points at: DESIGNSHELL_BLENDER
+        # takes precedence in find_blender, so a leaked value would make
+        # the newer-Blender test install instead of skip. (Found by the
+        # v1.7 installer sim, which runs with the sandbox Blender set.)
+        env.pop("DESIGNSHELL_BLENDER", None)
         env["DISPLAY"] = ":99"
         env["STUB_DIR"] = str(bin_dir)
         env["STUB_STATE"] = str(state_dir)

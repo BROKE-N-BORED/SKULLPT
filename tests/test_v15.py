@@ -764,6 +764,7 @@ class QtWindowSplitTests(_QtCase):
         _job(self.ws)
         window._refresh()
         for name, cls in (("render", qtwindows.RenderWindow),
+                          ("character", qtwindows.CharacterWindow),
                           ("images", qtwindows.ImagesWindow),
                           ("library", qtwindows.LibraryWindow),
                           ("settings", qtwindows.SettingsWindow),
@@ -778,7 +779,7 @@ class QtWindowSplitTests(_QtCase):
     def test_menu_bar_has_the_windows(self):
         window = self._bench()
         labels = [a.text() for a in window.menuBar().actions()]
-        for expected in ("File", "Jobs", "Render", "Images",
+        for expected in ("File", "Jobs", "Render", "Character", "Images",
                          "Library", "Settings", "Help"):
             self.assertIn(expected, labels)
 

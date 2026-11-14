@@ -29,6 +29,10 @@
 #      it downloads the pinned Blender LTS and installs it to
 #      /opt/blender (+ a blender command on your PATH), replacing what
 #      was there. Without the flag it never touches your Blender.
+#      With --with-character-studio it also installs Character Studio
+#      (the MPFB2 extension plus the MakeHuman system assets pack,
+#      about 311 MB to download) into the Blender it found — Blender
+#      has to exist first, so that option refuses plainly without it.
 #   4. Runs the shell's own test suite as the install proof.
 #   5. Prints a dependency report: everything checked, with versions.
 #   6. Puts a SKULLPT launcher on the Desktop and in the app menu, and
@@ -45,6 +49,10 @@
 #   ./install.sh --with-image-engine also build the image engine from
 #                                    source and download its model
 #                                    (needs git, cmake, a C++ compiler)
+#   ./install.sh --with-character-studio
+#                                    also install Character Studio
+#                                    (MPFB2 + the system assets pack,
+#                                    about 311 MB; needs Blender first)
 set -euo pipefail
 
 # Resolve our own real location (this script may be reached via a link).
@@ -70,17 +78,32 @@ SD_MODEL_URL="https://huggingface.co/Steward/lcm-dreamshaper-v7-gguf/resolve/mai
 # Hugging Face repo's file, unchanged since 2023-11-28).
 SD_MODEL_SHA256="0642060766117fdeb8cae0ccdc73ee974ac5779be1112d0a82f2b965bbd00e15"
 SD_MODEL_HOME="$HOME/design-shell-models"
+# Character Studio (v1.7, T26): MPFB 2.0.18 from the Blender
+# Extensions platform (the SHA-256 is published in the download URL
+# itself; the downloaded zip is 45,956,992 bytes) plus the
+# MakeHuman system assets pack (CC0 skins, eyes, teeth, hair,
+# clothes — 280,737,770 bytes, measured from the real download;
+# files2 is the primary mirror, files the backup). The same values
+# live in skullpt/blender_character.py; a test asserts they match.
+MPFB_VERSION="2.0.18"
+MPFB_SHA256="c075b3e9b94b8e5556a5f03f4653602d02ea306de08126e8f55ed6dee28a2dad"
+MPFB_URL="https://extensions.blender.org/download/sha256:${MPFB_SHA256}/add-on-mpfb-v2.0.18.zip?repository=%2Fapi%2Fv1%2Fextensions%2F&blender_version_min=4.2.0"
+ASSETS_SHA256="b542127a8e25547c7c29c19f2d1d2adb9a664c80396ecd694095dbc8028a0107"
+ASSETS_URL="https://files2.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip"
+ASSETS_URL_FALLBACK="https://files.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip"
 # Persistent download cache: a mktemp dir is wiped on every run, so a
 # download that can be resumed needs a place that survives.
 DOWNLOAD_CACHE="$HOME/.cache/skullpt"
 WITH_BLENDER=0
 WITH_IMAGE=0
+WITH_CHARACTER=0
 GUI_WANTED=""   # "gui" | "terminal" | "" (auto-detect)
 WORKER=0
 for arg in "$@"; do
   case "$arg" in
     --with-blender) WITH_BLENDER=1 ;;
     --with-image-engine) WITH_IMAGE=1 ;;
+    --with-character-studio) WITH_CHARACTER=1 ;;
     --gui) GUI_WANTED="gui" ;;
     --terminal) GUI_WANTED="terminal" ;;
     --_run-worker) WORKER=1 ;;
@@ -150,15 +173,18 @@ apt_install_via_pkexec() {
 }
 
 # --- Verified downloads ----------------------------------------------------
-# download_verified <url> <dest> <sha256> <label>
+# download_verified <url> <dest> <sha256> <label> [fallback_url]
 # Downloads a file with resume (curl -C - picks up where an interrupted
 # run left off) and verifies its SHA-256. A file already present with a
 # matching hash is left alone. If the download or the hash check fails,
 # the partial file is deleted and the download retried once from
-# scratch; a second failure fails with a plain message. Returns 0 on a
-# verified file, 1 otherwise.
+# scratch; a second failure fails with a plain message. When a fallback
+# URL is given (the assets pack has a backup mirror), a failed download
+# from the first URL is retried from the second before giving up — the
+# resume still applies, since both mirrors hold the same file.
+# Returns 0 on a verified file, 1 otherwise.
 download_verified() {
-  local url="$1" dest="$2" want="$3" label="$4"
+  local url="$1" dest="$2" want="$3" label="$4" fallback="${5:-}"
   if [ -f "$dest" ] && [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$want" ]; then
     echo "$label is already downloaded and verified."
     return 0
@@ -170,7 +196,14 @@ download_verified() {
       echo "$label did not come down cleanly — downloading it again from scratch..."
       rm -f "$dest"
     fi
-    if ! curl -fSL -C - "$url" -o "$dest"; then
+    local dl_ok=0
+    if curl -fSL -C - "$url" -o "$dest"; then
+      dl_ok=1
+    elif [ -n "$fallback" ] && curl -fSL -C - "$fallback" -o "$dest"; then
+      echo "$label is coming from the backup mirror instead."
+      dl_ok=1
+    fi
+    if [ "$dl_ok" = "0" ]; then
       if [ "$attempt" = "1" ]; then
         continue
       fi
@@ -364,6 +397,78 @@ do_install() {
     echo "        see the README's install options)."
   fi
 
+  # --- 3c. Character Studio (MPFB2 + system assets pack) ----------------------
+  # MPFB2 is a Blender extension, so Blender has to exist first. The
+  # status is checked whether or not the flag was set, so the report
+  # always says what is there.
+  MPFB_STATUS="not installed (Character Studio — see the README's install options)"
+  MPFB_EXT_DIR=""
+  if [ -n "$BLENDER_BIN" ]; then
+    BLENDER_CFG_VER="$("$BLENDER_BIN" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+    MPFB_EXT_DIR="$HOME/.config/blender/$BLENDER_CFG_VER/extensions/user_default/mpfb"
+    if [ -f "$MPFB_EXT_DIR/__init__.py" ] && [ -d "$MPFB_EXT_DIR/data/skins" ]; then
+      MPFB_STATUS="installed (Blender $BLENDER_CFG_VER)"
+    elif [ -f "$MPFB_EXT_DIR/__init__.py" ]; then
+      MPFB_STATUS="MPFB installed, system assets missing"
+    fi
+  fi
+  if [ "$WITH_CHARACTER" = "1" ]; then
+    step 60 "Installing Character Studio"
+    if [ -z "$BLENDER_BIN" ]; then
+      echo "ERROR: Character Studio needs Blender, and Blender was not found." >&2
+      gui_fail "Character Studio needs Blender first — install Blender, then re-run the installer with the Character Studio option."
+      return 1
+    fi
+    if [ -z "$BLENDER_CFG_VER" ]; then
+      echo "ERROR: could not read Blender's version, so the extension folder is unknown." >&2
+      gui_fail "Character Studio could not read Blender's version — re-run the installer."
+      return 1
+    fi
+    echo "Character Studio downloads two files: MPFB $MPFB_VERSION (about 44 MB)"
+    echo "and the MakeHuman system assets pack (about 268 MB). Together about 311 MB."
+    mkdir -p "$DOWNLOAD_CACHE"
+    if ! download_verified "$MPFB_URL" "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" \
+        "$MPFB_SHA256" "MPFB $MPFB_VERSION (about 44 MB)"; then
+      gui_fail "MPFB could not be downloaded — check the network, then re-run the installer."
+      return 1
+    fi
+    if ! download_verified "$ASSETS_URL" "$DOWNLOAD_CACHE/makehuman_system_assets_cc0.zip" \
+        "$ASSETS_SHA256" "the MakeHuman system assets pack (about 268 MB)" \
+        "$ASSETS_URL_FALLBACK"; then
+      gui_fail "The system assets pack could not be downloaded — check the network, then re-run the installer."
+      return 1
+    fi
+    # Install the extension with Blender's own command; when that
+    # fails, unzip it into the user extensions folder by hand
+    # (Blender scans that folder at startup). Unzipping uses
+    # Python's zipfile, so no extra program is needed.
+    if "$BLENDER_BIN" --background --command extension install-file \
+        -r user_default "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" >/dev/null 2>&1; then
+      echo "MPFB $MPFB_VERSION installed into Blender $BLENDER_CFG_VER."
+    else
+      echo "Blender's extension install did not work — installing MPFB by hand..."
+      mkdir -p "$MPFB_EXT_DIR"
+      python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+        "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" "$MPFB_EXT_DIR"
+    fi
+    if [ ! -f "$MPFB_EXT_DIR/__init__.py" ]; then
+      echo "ERROR: MPFB did not land in Blender's extension folder." >&2
+      gui_fail "MPFB did not land in Blender's extension folder — re-run the installer."
+      return 1
+    fi
+    # The assets pack unzips into MPFB's data folder, next to the
+    # extension's own data — that is where MPFB looks for skins.
+    python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+      "$DOWNLOAD_CACHE/makehuman_system_assets_cc0.zip" "$MPFB_EXT_DIR/data"
+    if [ ! -d "$MPFB_EXT_DIR/data/skins" ]; then
+      echo "ERROR: the assets pack did not land in MPFB's data folder." >&2
+      gui_fail "The assets pack did not land in MPFB's data folder — re-run the installer."
+      return 1
+    fi
+    MPFB_STATUS="MPFB $MPFB_VERSION + system assets (Blender $BLENDER_CFG_VER)"
+    echo "Character Studio installed: $MPFB_STATUS."
+  fi
+
   # --- 4. Verify -------------------------------------------------------------
   step 70 "Running the test suite"
   echo "Running the shell's test suite (fast suite; the Blender end-to-end"
@@ -419,6 +524,7 @@ do_install() {
   else
     echo "img model MISSING ($SD_MODEL_FILE into $SD_MODEL_HOME/)"
   fi
+  echo "char stud $MPFB_STATUS"
   echo "core      stdlib only — no pip packages in the system Python"
 
   # --- 6. Desktop launcher + `skullpt` command -------------------------------
@@ -582,6 +688,7 @@ fi
 PASSTHROUGH=()
 [ "$WITH_BLENDER" = "1" ] && PASSTHROUGH+=(--with-blender)
 [ "$WITH_IMAGE" = "1" ] && PASSTHROUGH+=(--with-image-engine)
+[ "$WITH_CHARACTER" = "1" ] && PASSTHROUGH+=(--with-character-studio)
 
 if [ "$GUI_MODE" = "1" ]; then
   echo "== SKULLPT install =="

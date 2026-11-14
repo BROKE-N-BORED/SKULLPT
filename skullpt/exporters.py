@@ -99,11 +99,13 @@ def export_svg_mock(desc: dict, out_dir: Path) -> list[str]:
 
 
 from .blender_export import export_blender_scene  # noqa: E402
+from .blender_character import export_blender_character  # noqa: E402
 
 EXPORTERS = {
     "web_ui": export_web_ui,
     "svg_mock": export_svg_mock,
     "blender_scene": export_blender_scene,
+    "blender_character": export_blender_character,
 }
 
 # Which exporters run by default per description kind.
@@ -111,7 +113,7 @@ DEFAULT_EXPORTERS = {
     "ui_component": ("web_ui", "svg_mock"),
     "website": ("web_ui", "svg_mock"),
     "graphic": ("svg_mock",),
-    "character": (),
+    "character": ("blender_character",),
     "scene": ("blender_scene",),
     "project": (),
 }

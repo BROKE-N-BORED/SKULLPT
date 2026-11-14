@@ -128,9 +128,9 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         job.fail("budget: " + "; ".join(budget_problems))
         return {"ok": False, "stage": "budget", "problems": budget_problems}
 
-    # A kind with no exporters (character, project — no studio yet)
-    # used to "build successfully" with zero outputs. Fail loudly
-    # instead, before the lock is even taken.
+    # A kind with no exporters (project — no studio yet; character got
+    # its studio in v1.7) used to "build successfully" with zero
+    # outputs. Fail loudly instead, before the lock is even taken.
     kind_exporters = exporters.DEFAULT_EXPORTERS.get(desc["kind"], ())
     if not kind_exporters:
         reason = (f"no exporter for kind {desc['kind']!r} yet — "

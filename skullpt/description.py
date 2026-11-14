@@ -25,6 +25,27 @@ RENDER_ENGINES = ("auto", "eevee", "cycles")
 # Mesh formats ingest understands and the Blender build can import
 # (v1.6, T21/T30). The description's top-level "mesh" block names one.
 MESH_FORMATS = ("glb", "obj", "fbx", "stl")
+# Character Studio vocabulary (v1.7, T26): the MPFB2 macro sliders,
+# rigs, and skin. The sliders are the MPFB macro set (0.0-1.0 each);
+# race is three flat keys here and maps to MPFB's nested race dict in
+# the exporter. Rigs are MPFB's built-in rig names — the files
+# data/rigs/standard/rig.<name>.json (rigify/rig.<name>.json for the
+# rigify.* names) inside the MPFB extension. Skins are the .mhmat file
+# names from the MakeHuman system assets pack (23 of them).
+CHARACTER_SLIDERS = ("gender", "age", "muscle", "weight", "proportions",
+                     "height", "cupsize", "firmness",
+                     "race_asian", "race_caucasian", "race_african")
+CHARACTER_RIGS = ("game_engine", "game_engine_with_breast", "default",
+                  "default_no_toes", "cmu_mb", "mixamo", "mixamo_unity",
+                  "openpose", "rigify.human", "rigify.human_toes")
+CHARACTER_DEFAULT_RIG = "game_engine"
+# Triangles a Character Studio human adds to the pre-build budget
+# estimate. Measured from a real MPFB 2.0.18 build in the sandbox:
+# body 26,756 + low-poly eyes 172 + teeth 7,120 = 34,048. Shape keys
+# move vertices, they do not add faces, so this is the real count for
+# the studio's fixed body parts — and the game-ready gate still
+# enforces the exact post-build total.
+CHARACTER_TRIANGLE_ESTIMATE = 34048
 REQUIRED_TOP = ("name", "kind", "parts")
 PART_REQUIRED = ("id", "type")
 
@@ -46,7 +67,9 @@ def validate(desc: dict) -> list[str]:
         problems.append(f"kind must be one of {KINDS}, got {kind!r}")
     parts = desc.get("parts")
     if parts is not None:
-        if not isinstance(parts, list) or not parts:
+        # A character job may have no prop parts at all (v1.7, T26) —
+        # the human comes from the character block, not from parts.
+        if not isinstance(parts, list) or (not parts and kind != "character"):
             problems.append("parts must be a non-empty list")
         else:
             seen: set[str] = set()
@@ -195,6 +218,34 @@ def validate(desc: dict) -> list[str]:
             denoise = render.get("denoise")
             if denoise is not None and not isinstance(denoise, bool):
                 problems.append("render.denoise must be true or false")
+    # Character Studio (v1.7, T26): a character description carries a
+    # "character" block — 11 MPFB macro sliders, a skin, a rig. The
+    # skin is REQUIRED: without one the human stays grey. Missing
+    # sliders default to 0.5 in the exporter (MPFB's own defaults).
+    character = desc.get("character")
+    if kind == "character":
+        if character is None:
+            problems.append("kind 'character' needs a character block: "
+                            "11 macro sliders, a skin, and a rig")
+        elif not isinstance(character, dict):
+            problems.append("character must be an object")
+        else:
+            for slider in CHARACTER_SLIDERS:
+                val = character.get(slider)
+                if val is not None and (not isinstance(val, (int, float))
+                                        or val < 0.0 or val > 1.0):
+                    problems.append(
+                        f"character.{slider} must be a number from 0.0 to 1.0")
+            skin = character.get("skin")
+            if not isinstance(skin, str) or not skin.strip():
+                problems.append("character.skin is required: the skin .mhmat "
+                                "file name, e.g. young_caucasian_male.mhmat")
+            rig = character.get("rig")
+            if rig is not None and rig not in CHARACTER_RIGS:
+                problems.append(
+                    f"character.rig must be one of {CHARACTER_RIGS}, got {rig!r}")
+    elif character is not None:
+        problems.append("character block is only for kind 'character'")
     # The real mesh behind an ingested job (v1.6, T21/T30): the file
     # the Blender build imports instead of rebuilding from boxes.
     mesh = desc.get("mesh")
@@ -279,10 +330,14 @@ def estimate_triangles(part: dict) -> int:
 
 def estimate_description_triangles(desc: dict) -> int:
     """Estimated triangles for a whole description, counting every
-    concrete part repeat/mirror expansion produces."""
+    concrete part repeat/mirror expansion produces — plus the human
+    for a character description (v1.7, T26)."""
     from .expand import expand_parts
 
-    return sum(estimate_triangles(p) for p in expand_parts(desc))
+    total = sum(estimate_triangles(p) for p in expand_parts(desc))
+    if desc.get("kind") == "character":
+        total += CHARACTER_TRIANGLE_ESTIMATE
+    return total
 
 
 def load(path: str | Path) -> dict:
@@ -316,6 +371,10 @@ def summarize(desc: dict) -> str:
     if style:
         tokens = ", ".join(f"{k}={v}" for k, v in sorted(style.items()))
         lines.append(f"Style: {tokens}")
+    character = desc.get("character")
+    if character:
+        lines.append(f"Character: skin={character.get('skin')}, "
+                     f"rig={character.get('rig', CHARACTER_DEFAULT_RIG)}")
     lines.append(f"Parts ({len(desc['parts'])}):")
     for part in desc["parts"]:
         params = {k: v for k, v in part.items() if k not in ("id", "type")}

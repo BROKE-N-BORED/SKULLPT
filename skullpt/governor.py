@@ -127,15 +127,27 @@ class HeavyJobLock:
         # Atomic creation: two processes starting at once cannot both
         # win — O_EXCL makes exactly one of them the holder, and the
         # loser sees the file and reads a live pid. A stale lock (dead
-        # holder) is removed and the create retried once.
+        # holder) is removed and the create retried once. An empty lock
+        # file is NOT stale: it is a contender that just created the
+        # file and has not written its pid yet (the write follows the
+        # create by two syscalls). Stealing it lets two heavy jobs run
+        # at once — the old code did exactly that under load, and both
+        # contenders reported "won". (v1.7 verification fix.)
         for _attempt in range(2):
             try:
                 fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                try:
-                    holder = int(self.lock_path.read_text().strip() or "0")
-                except ValueError:
-                    holder = 0
+                holder = self._read_holder()
+                if holder == 0:
+                    # Empty or unreadable: wait briefly and re-read
+                    # twice before deciding it is orphaned. No writer
+                    # takes 150 ms between create and write; a file
+                    # still empty after that is genuinely abandoned.
+                    for _wait in (0.05, 0.1):
+                        time.sleep(_wait)
+                        holder = self._read_holder()
+                        if holder != 0:
+                            break
                 alive = holder > 0 and Path(f"/proc/{holder}").exists()
                 if alive:
                     raise GovernorError(
@@ -148,6 +160,14 @@ class HeavyJobLock:
             self._min_free_mb = min_free_mb
             return
         raise GovernorError("could not take the heavy-job lock — try again")
+
+    def _read_holder(self) -> int:
+        """The pid recorded in the lock file, or 0 when the file is
+        empty, missing, or holds no number."""
+        try:
+            return int(self.lock_path.read_text().strip() or "0")
+        except (ValueError, OSError):
+            return 0
 
     def _check_ram(self, min_free_mb: int) -> None:
         free = free_ram_mb()

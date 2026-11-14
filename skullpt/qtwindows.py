@@ -1,5 +1,6 @@
-"""The Bench's windows (R5): Render, Images, Library, Settings, Help,
-plus the shared pieces (stage pills, job cards, toasts, debug report).
+"""The Bench's windows (R5): Render, Character Studio, Images, Library,
+Settings, Help, plus the shared pieces (stage pills, job cards, toasts,
+debug report).
 
 Each window does one job (U1). Every window remembers its geometry
 (U5). No em dashes anywhere in this file (U33); visible labels use
@@ -563,6 +564,14 @@ class RenderWindow(_GeometryWindow):
     def _fill_editor(self, part_id: str) -> None:
         if self._desc is None:
             return
+        if part_id == "character":
+            # The viewport mannequin (v1.7, T26): a stand-in, not a
+            # part: the human is edited in the Character Studio
+            # window, not here.
+            self._save_part_btn.setEnabled(False)
+            self._editor_note.setText(
+                "This is the human. Edit it in the Character Studio window.")
+            return
         base_id = _base_part_id(part_id, self._desc)
         part = next((p for p in self._desc.get("parts", [])
                      if p.get("id") == base_id), None)
@@ -641,6 +650,339 @@ class RenderWindow(_GeometryWindow):
                 "the Jobs window says why.")
             return
         Toast.show_toast(self, "Render settings saved for this job.")
+
+
+# --------------------------------------------------------- character window
+
+_SLIDER_LABELS = {
+    "gender": "Gender",
+    "age": "Age",
+    "muscle": "Muscle",
+    "weight": "Weight",
+    "proportions": "Proportions",
+    "height": "Height",
+    "cupsize": "Cup size",
+    "firmness": "Firmness",
+    "race_asian": "Asian",
+    "race_caucasian": "Caucasian",
+    "race_african": "African",
+}
+
+_RIG_LABELS = {
+    "game_engine": "GameEngine (games and Unreal)",
+    "game_engine_with_breast": "GameEngine with breast bones",
+    "default": "Default (MPFB standard)",
+    "default_no_toes": "Default, no toes",
+    "cmu_mb": "CMU motion capture",
+    "mixamo": "Mixamo",
+    "mixamo_unity": "Mixamo (Unity)",
+    "openpose": "OpenPose",
+    "rigify.human": "Rigify",
+    "rigify.human_toes": "Rigify with toes",
+}
+
+
+def _skin_label(filename: str) -> str:
+    """A skin .mhmat file name as a readable label."""
+    base = filename[:-6] if filename.endswith(".mhmat") else filename
+    return base.replace("_", " ").title()
+
+
+class CharacterWindow(_GeometryWindow):
+    """Character Studio (v1.7, T26): shape a human with 11 macro
+    sliders, a skin with its thumbnail, and a rig, then save the job
+    and build it. The human is built by MPFB2 inside Blender; the
+    viewport in the Render window shows a mannequin at the right
+    height and build until the real renders land."""
+
+    GEOMETRY_KEY = "CharacterWindow"
+
+    def __init__(self, bench, workspace: Path, parent=None):
+        super().__init__(parent)
+        from .description import CHARACTER_RIGS, CHARACTER_SLIDERS
+
+        self._bench = bench
+        self._workspace = Path(workspace)
+        self._job_name: str | None = None
+        self._desc: dict | None = None
+        self._job_state: str | None = None
+        self._mpfb_dir: str | None = None
+        self._studio_ready = False
+        self._gate_action_name: str | None = None
+        self.setWindowTitle("SKULLPT - Character Studio")
+        self.setMinimumSize(560, 520)
+
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        main = QtWidgets.QVBoxLayout(central)
+        main.setContentsMargins(12, 12, 12, 12)
+        main.setSpacing(8)
+
+        self._status_note = QtWidgets.QLabel()
+        self._status_note.setObjectName("small")
+        self._status_note.setWordWrap(True)
+        main.addWidget(self._status_note)
+
+        job_row = QtWidgets.QHBoxLayout()
+        job_row.addWidget(QtWidgets.QLabel("Character job"))
+        self._job_combo = QtWidgets.QComboBox()
+        self._job_combo.currentIndexChanged.connect(self._on_job_changed)
+        job_row.addWidget(self._job_combo, 1)
+        self._name_edit = QtWidgets.QLineEdit()
+        self._name_edit.setPlaceholderText("Name for a new character")
+        job_row.addWidget(self._name_edit, 1)
+        new_btn = QtWidgets.QPushButton("New character")
+        new_btn.clicked.connect(self._new_character)
+        job_row.addWidget(new_btn)
+        main.addLayout(job_row)
+
+        # The form scrolls: 11 sliders plus skin and rig is tall.
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_holder = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(form_holder)
+        self._sliders: dict[str, QtWidgets.QSlider] = {}
+        self._slider_values: dict[str, QtWidgets.QLabel] = {}
+        for key in CHARACTER_SLIDERS:
+            row = QtWidgets.QHBoxLayout()
+            slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+            slider.setRange(0, 100)
+            slider.setValue(50)
+            slider.valueChanged.connect(
+                lambda value, k=key: self._on_slider(k, value))
+            value_label = QtWidgets.QLabel("50%")
+            value_label.setMinimumWidth(40)
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            self._sliders[key] = slider
+            self._slider_values[key] = value_label
+            form.addRow(_SLIDER_LABELS[key], row)
+        ancestry_note = QtWidgets.QLabel(
+            "Ancestry sliders mix together; they need not add up to 100%.")
+        ancestry_note.setObjectName("small")
+        ancestry_note.setWordWrap(True)
+        form.addRow("", ancestry_note)
+        skin_row = QtWidgets.QHBoxLayout()
+        self._skin_combo = QtWidgets.QComboBox()
+        self._skin_combo.currentIndexChanged.connect(self._on_skin_changed)
+        skin_row.addWidget(self._skin_combo, 1)
+        self._skin_thumb = QtWidgets.QLabel()
+        self._skin_thumb.setFixedSize(96, 96)
+        self._skin_thumb.setAlignment(QtCore.Qt.AlignCenter)
+        skin_row.addWidget(self._skin_thumb)
+        form.addRow("Skin", skin_row)
+        self._rig_combo = QtWidgets.QComboBox()
+        for rig in CHARACTER_RIGS:
+            self._rig_combo.addItem(_RIG_LABELS.get(rig, rig), rig)
+        form.addRow("Rig", self._rig_combo)
+        scroll.setWidget(form_holder)
+        main.addWidget(scroll, 1)
+        self._form_holder = form_holder
+
+        buttons = QtWidgets.QHBoxLayout()
+        self._save_btn = QtWidgets.QPushButton("Save character")
+        self._save_btn.setObjectName("primary")
+        self._save_btn.clicked.connect(self._save_character)
+        buttons.addWidget(self._save_btn)
+        self._gate_btn = QtWidgets.QPushButton("Build")
+        self._gate_btn.clicked.connect(self._gate_action)
+        buttons.addWidget(self._gate_btn)
+        buttons.addStretch(1)
+        main.addLayout(buttons)
+        self._gate_note = QtWidgets.QLabel(
+            "Saving sends the job back for approval.")
+        self._gate_note.setObjectName("small")
+        self._gate_note.setWordWrap(True)
+        main.addWidget(self._gate_note)
+
+        restore_geometry(self, self.GEOMETRY_KEY)
+        if self.width() < 560:
+            self.resize(640, 640)
+        self.refresh()
+
+    # -- state ------------------------------------------------------
+    def set_job(self, job_name: str | None) -> None:
+        """Open on a job when it is a character job; anything else
+        leaves the picker on whatever it had."""
+        self.refresh()
+        if job_name is None:
+            return
+        index = self._job_combo.findData(job_name)
+        if index >= 0:
+            self._job_combo.setCurrentIndex(index)
+
+    def refresh(self) -> None:
+        """Re-check the studio install, rebuild the pickers, and
+        re-fill the form from the current job."""
+        from .blender_character import find_mpfb
+
+        status = find_mpfb()
+        self._studio_ready = bool(status["installed"] and status["assets"])
+        self._mpfb_dir = status["mpfb_dir"]
+        if status["installed"] and not status["assets"]:
+            self._status_note.setText(
+                "Character Studio is missing its skins: MPFB2 is "
+                "installed, but the MakeHuman system assets pack was "
+                "not found with it. Re-run the SKULLPT installer with "
+                "the Character Studio option to install it.")
+        elif not status["installed"]:
+            self._status_note.setText(
+                "Character Studio is not installed. Re-run the SKULLPT "
+                "installer with the Character Studio option to install "
+                "MPFB2 and its skins (about 311 MB to download). "
+                "You can still create a character job; it builds once "
+                "the studio is installed.")
+        else:
+            self._status_note.setText(
+                "Shape the human, save, then approve and build the job. "
+                "The Render window shows a mannequin at the right "
+                "height and build until the real renders land.")
+        self._skin_combo.blockSignals(True)
+        self._skin_combo.clear()
+        for skin in status["skins"]:
+            self._skin_combo.addItem(_skin_label(skin), skin)
+        self._skin_combo.blockSignals(False)
+        self._rebuild_jobs()
+        self._load_job()
+        self._update_gate()
+
+    def _rebuild_jobs(self) -> None:
+        try:
+            state = bench_mod.workspace_state(self._workspace)
+        except Exception:
+            state = {"jobs": []}
+        current = self._job_name
+        self._job_combo.blockSignals(True)
+        self._job_combo.clear()
+        self._job_states = {}
+        for job in state["jobs"]:
+            if job.get("kind") != "character":
+                continue
+            self._job_combo.addItem(job.get("title") or job["name"], job["name"])
+            self._job_states[job["name"]] = job.get("state")
+        self._job_combo.blockSignals(False)
+        if current is not None:
+            index = self._job_combo.findData(current)
+            if index >= 0:
+                self._job_combo.setCurrentIndex(index)
+                return
+        # No auto-select (U6): with no job chosen, the picker stays
+        # empty until the user picks one.
+        self._job_combo.setCurrentIndex(-1)
+        self._job_name = None
+
+    def _load_job(self) -> None:
+        self._desc = None
+        self._job_state = None
+        if self._job_name is None:
+            self._form_holder.setEnabled(False)
+            self._save_btn.setEnabled(False)
+            self._skin_thumb.setText("")
+            return
+        self._job_state = self._job_states.get(self._job_name)
+        try:
+            job = Job(self._workspace / "jobs" / self._job_name)
+            self._desc = job.load_description()
+        except Exception:
+            self._desc = None
+        character = (self._desc or {}).get("character") or {}
+        for key, slider in self._sliders.items():
+            slider.blockSignals(True)
+            slider.setValue(int(round(float(character.get(key, 0.5)) * 100)))
+            slider.blockSignals(False)
+            self._slider_values[key].setText(f"{slider.value()}%")
+        skin = character.get("skin")
+        if skin:
+            index = self._skin_combo.findData(skin)
+            if index < 0:
+                # The job's skin is not in the installed pack: show it
+                # anyway, so the picker never lies about the job.
+                self._skin_combo.addItem(_skin_label(skin) + " (not installed)", skin)
+                index = self._skin_combo.findData(skin)
+            self._skin_combo.setCurrentIndex(index)
+        rig = character.get("rig", "game_engine")
+        index = self._rig_combo.findData(rig)
+        self._rig_combo.setCurrentIndex(max(0, index))
+        self._form_holder.setEnabled(self._studio_ready)
+        self._save_btn.setEnabled(self._studio_ready)
+        self._on_skin_changed()
+
+    def _update_gate(self) -> None:
+        text, action = _GATE_BUTTONS.get(self._job_state or "", ("Build", None))
+        self._gate_btn.setText(text)
+        self._gate_action_name = action
+        self._gate_btn.setEnabled(
+            bool(self._job_name and action and self._studio_ready))
+
+    # -- events -----------------------------------------------------
+    def _on_job_changed(self, _index: int) -> None:
+        self._job_name = self._job_combo.currentData()
+        self._load_job()
+        self._update_gate()
+
+    def _on_slider(self, key: str, value: int) -> None:
+        self._slider_values[key].setText(f"{value}%")
+
+    def _on_skin_changed(self, _index: int = -1) -> None:
+        skin = self._skin_combo.currentData()
+        self._skin_thumb.setText("")
+        if not skin or not self._mpfb_dir:
+            return
+        skins_dir = Path(self._mpfb_dir) / "data" / "skins"
+        matches = list(skins_dir.rglob(skin)) if skins_dir.is_dir() else []
+        if not matches:
+            return
+        thumb = matches[0].with_suffix(".thumb")
+        if not thumb.is_file():
+            return
+        pixmap = QtGui.QPixmap(str(thumb))
+        if pixmap.isNull():
+            return
+        self._skin_thumb.setPixmap(pixmap.scaled(
+            96, 96, QtCore.Qt.KeepAspectRatio,
+            QtCore.Qt.SmoothTransformation))
+
+    def _new_character(self) -> None:
+        name = self._name_edit.text().strip() or "New character"
+        result = self._bench.do_action("new-character", {"name": name})
+        if result is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not create",
+                "The character job was not created. The chat panel on "
+                "the Jobs window says why.")
+            return
+        self._name_edit.clear()
+        Toast.show_toast(self, f"Character job {result['job']} created.")
+        self.refresh()
+        index = self._job_combo.findData(result["job"])
+        if index >= 0:
+            self._job_combo.setCurrentIndex(index)
+
+    def _save_character(self) -> None:
+        if self._job_name is None:
+            return
+        character = {key: slider.value() / 100.0
+                     for key, slider in self._sliders.items()}
+        character["skin"] = self._skin_combo.currentData()
+        character["rig"] = self._rig_combo.currentData()
+        result = self._bench.do_action("edit-character", {
+            "job": self._job_name, "character": character})
+        if result is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save",
+                "The character did not save. The chat panel on the "
+                "Jobs window says why.")
+            return
+        Toast.show_toast(
+            self, "Character saved. The job needs approval again.")
+        self.refresh()
+
+    def _gate_action(self) -> None:
+        if self._job_name is None or not self._gate_action_name:
+            return
+        self._bench.do_action(self._gate_action_name,
+                              {"job": self._job_name})
+        self.refresh()
 
 
 # ------------------------------------------------------------ images window
@@ -956,6 +1298,7 @@ _ENGINE_LABELS = {
     "image_model": "Image model (the picture model file)",
     "gemini_key": "Gemini key (planner and critic seats)",
     "hf_token": "Hugging Face token (photo to mesh)",
+    "character_studio": "Character Studio (MPFB2 and its skins)",
 }
 
 _ENGINE_FIXES = {
@@ -967,6 +1310,9 @@ _ENGINE_FIXES = {
                   "Without it the planner and critic seats cannot answer.",
     "hf_token": "Save a Hugging Face token below, or set the HF_TOKEN "
                 "environment variable, to turn photos into meshes.",
+    "character_studio": "Re-run the SKULLPT installer with the "
+                        "Character Studio option to install MPFB2 and "
+                        "its skins (about 311 MB to download).",
 }
 
 

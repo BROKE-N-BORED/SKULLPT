@@ -1,4 +1,4 @@
-# SKULLPT — v1.6
+# SKULLPT — v1.7
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -45,8 +45,13 @@ ControlNet/IP-Adapter guidance, the cloud-mesh step is hardened
 (retries, a fallback Space, queue position, photo downscale),
 workspaces can be switched and backed up and the Bench can check
 for a newer release, and ingest now takes .obj/.fbx/.stl and keeps
-the mesh. Character Studio (T26) is designed but NOT built in
-v1.6 — it splits to v1.7 (see the design note in the task list).
+the mesh.
+v1.7 is Character Studio (T26), the last item on the task list: a
+sixth Bench window that shapes a rigged human with MPFB2 inside
+Blender — 11 macro sliders, a skin from the MakeHuman system assets
+pack, and a rig (GameEngine by default). Character builds are real
+builds now; only `project` builds still fail loudly (that exporter
+is still empty).
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11; the Blender install, the
 image-engine install, the Bench's real-PC run, and the first real
@@ -151,6 +156,15 @@ run path requires them.
                                  download its model (see the image step below;
                                  needs git, cmake, and a C++ compiler — the
                                  installer adds them itself if they are missing)
+    ./install.sh --with-character-studio
+                                 also install Character Studio: MPFB 2.0.18
+                                 (about 44 MB) plus the MakeHuman system
+                                 assets pack (about 268 MB) into the Blender
+                                 it finds — Blender has to exist first, so
+                                 this refuses plainly without it. Both
+                                 downloads resume if interrupted and are
+                                 SHA-256 verified; the assets pack has a
+                                 backup mirror if the first one fails.
     ./run.sh                     start the Bench — the shell's window
                                  (live render view + chat + folders),
                                  a native Linux desktop window
@@ -494,6 +508,64 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.7 — Character Studio (T26, the last task-list item)
+
+- **Character builds are real builds now.** A description of kind
+  `character` carries a `character` block — 11 MPFB macro sliders
+  (gender, age, muscle, weight, proportions, height, cup size,
+  firmness, and three ancestry sliders), a skin, and a rig — and
+  the new `blender_character` exporter builds the human headless
+  through MPFB2's own API inside Blender. The T3 fail-loud now
+  covers only `project` builds (that exporter is still empty).
+- **Character Studio window (sixth Bench window).** Pick a
+  character job (or make a new one), shape the human with the
+  sliders (0-100% with live values), pick a skin from the
+  installed pack (23 of them, each with its thumbnail), pick a
+  rig, save, and build. Saving sends the job back for approval,
+  like any description edit. The gate button follows the job's
+  state (Approve, then Build). When the studio is not installed,
+  the window says so plainly and names the installer option.
+- **The installer option.** The `--with-character-studio`
+  install option downloads MPFB 2.0.18 (about 44 MB, SHA-256
+  published by the Blender Extensions platform and verified) and the MakeHuman
+  system assets pack (about 268 MB, SHA-256 verified, backup
+  mirror if the first fails), installs the extension into the
+  Blender it finds with Blender's own extension command, and
+  unzips the pack into MPFB's data folder where the skins live.
+  Together about 311 MB. Both downloads resume if interrupted.
+  Blender has to exist first — without it the option refuses
+  plainly. Nothing about the studio is in the zip or the repo;
+  it is downloads at install time, like the Blender tarball.
+- **MPFB2 and Blender 5.3.0 (the open question, answered).** MPFB
+  2.0.18's own manifest declares `blender_version_min = 4.2.0`
+  and NO upper bound, and the MPFB docs say "Blender 4.2 LTS and
+  newer" — nothing declares 5.3.0 unsupported, and the installer
+  does not pin or block any Blender version. But 2.0.18 (Oct 10,
+  2026) predates Blender 5.3, and the MPFB team's tested range
+  runs through 5.2 — so 5.3.0 is genuinely unconfirmed by them,
+  and the first real character build on Blender 5.3.0 is still an
+  open verdict. MPFB2 2.0.18 was verified working in sandbox
+  Blender 4.5.9: the extension installs, a human builds headless
+  with a skin and a GameEngine rig, and the GLB exports with its
+  skinned armature.
+- **What a build produces.** The human (about 34k triangles with
+  its low-poly eyes and teeth — the budget estimate uses the
+  measured count), skinned to the chosen rig, plus any prop parts
+  from the description, rendered from the job's cameras (the Iso
+  camera frames the human, not the default cube). Game-ready
+  jobs get LODs and a collision box for the human as well as the
+  props. The renders are judged by the critic like any scene's.
+  The viewport shows a mannequin at the human's height and build
+  until the real renders land — it is a stand-in, and the Render
+  window says so when it is clicked. Character LODs are baked
+  (decimated, unskinned) in this version.
+- **Rigs.** GameEngine (the default), Default, CMU motion
+  capture, Mixamo, Mixamo Unity, OpenPose, and Rigify, with the
+  no-toes and with-breast variants. Rigify rigs make the exporter
+  enable Blender's bundled Rigify add-on first. The skin uses
+  the plain PBR (GameEngine) material, the one that exports
+  cleanly to GLB and Unreal.
 
 ## v1.6 — the P2 list (mesh pipeline, queue, render settings, guidance, backup)
 

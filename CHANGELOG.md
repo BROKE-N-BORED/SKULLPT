@@ -1,5 +1,103 @@
 # SKULLPT — Changelog
 
+## v1.7 — 2026-11-14 — Character Studio (T26, the last task-list item)
+
+The final item on the task list: a rigged human, built headless by
+MPFB2 inside Blender, shaped in a sixth Bench window. Character
+builds are real builds now; only `project` still fails loudly.
+
+- CHARACTER STUDIO (T26): a description of kind `character`
+  carries a `character` block — 11 MPFB macro sliders (gender,
+  age, muscle, weight, proportions, height, cup size, firmness,
+  race_asian, race_caucasian, race_african), a skin (required —
+  without one the human stays grey), and a rig (GameEngine by
+  default). The new `blender_character` exporter builds the human
+  through MPFB2's own `HumanService.deserialize_from_dict` with a
+  human_info dict, then reuses the scene build template for props,
+  stats, LODs, collision, GLB and .blend, and the shared two-phase
+  run (build, then renders). The budget estimate adds the measured
+  human count (34,048 tris: body 26,756 + low-poly eyes 172 +
+  teeth 7,120, measured from a real MPFB 2.0.18 build); the
+  game-ready gate still enforces the exact post-build total.
+  Every human gets low-poly eyes and the base teeth, so the
+  renders show a finished face. The skin uses the plain PBR
+  (GameEngine) material, the one that exports cleanly to GLB.
+  Character LODs are baked (decimated, unskinned) in this
+  version.
+- GOVERNOR LOCK RACE (found in verification, fixed here): the
+  heavy-job lock treated an empty lock file as stale and stole
+  it — but an empty file is usually a contender that just created
+  it and has not written its pid yet. Under load both contenders
+  reported "won" and two heavy jobs could run at once. Acquire
+  now waits and re-reads an empty file before deciding it is
+  orphaned, so a live contender is never stolen from.
+- INSTALLER OPTION: the `--with-character-studio` option
+  downloads MPFB 2.0.18 (45,956,992 bytes, SHA-256 published by
+  the Blender Extensions platform) and the MakeHuman system
+  assets pack (280,737,770 bytes, SHA-256 measured from the real
+  download; files2 primary, files backup mirror), installs the
+  extension with Blender's own `extension install-file` command
+  (manual unzip fallback), and unzips the pack into MPFB's data
+  folder. Both downloads resume and are SHA-256 verified, like
+  the Blender tarball; `download_verified` takes an optional
+  fallback URL now. Blender has to exist first — without it the
+  option refuses plainly. The dependency report shows the studio
+  status. Nothing about the studio is in the zip or the repo.
+- MPFB2 AND BLENDER 5.3.0: 2.0.18's manifest declares
+  `blender_version_min = 4.2.0` with no upper bound, and the MPFB
+  docs say "Blender 4.2 LTS and newer" — nothing declares 5.3.0
+  unsupported. But 2.0.18 predates Blender 5.3 and the MPFB team's
+  tested range runs through 5.2, so 5.3.0 is unconfirmed by them;
+  the README says so honestly, and the first real 5.3.0 character
+  build is still an open verdict. Verified in sandbox Blender
+  4.5.9: extension installs, human builds headless with skin and
+  GameEngine rig (53 bones), GLB exports with its skinned
+  armature.
+- CHARACTER STUDIO WINDOW: the sixth Bench window (left rail icon:
+  Lucide `user`, newly vendored). Character-job picker plus new
+  character, 11 sliders (0-100% with live values), skin picker
+  with 96px thumbnails from the assets pack, rig picker, Save
+  (snapshots first, returns the job to the plan gate), and a gate
+  button that follows the job's state. When the studio is not
+  installed the window says so plainly and the form stays
+  disabled; creating a job still works. The menu bar and the
+  engine tile/status bar gain the Character Studio entry, and the
+  Settings window lists it with the installer fix.
+- VIEWPORT MANNEQUIN: a character job's viewport shows a
+  human-shaped stand-in (leg and arm cylinders, torso capsule,
+  head sphere) at the human's height and build from the sliders,
+  feet at z=0 — the bounds follow it, so a partless job frames
+  the human, not the default cube. Clicking it says the human is
+  edited in Character Studio; the Iso camera frames the human
+  (plus props, when the job has them).
+- RIGS: GameEngine (default), GameEngine with breast bones,
+  Default, Default no toes, CMU, Mixamo, Mixamo Unity, OpenPose,
+  Rigify, Rigify with toes — MPFB's built-in set, validated
+  against the extension's own rig files. Rigify rigs make the
+  build script enable Blender's bundled Rigify add-on first
+  (verified: a rigify.human build lands with a 185-bone
+  armature).
+- SMALL FIXES IN PLACE: the scene build script is now
+  `build_payload` + `render_build_template`, and the two-phase
+  Blender run is shared (`export_blender_with_build_script`) —
+  the scene exporter calls the same code it always did, and the
+  character exporter reuses it instead of duplicating it. A
+  slider value of 0.0 was read as "missing" and replaced with the
+  0.5 default (a falsy-`or` bug, caught by the new tests) — fixed
+  in the bounds and the payload normalization. Job state saves
+  atomically now (write beside job.json and rename): the
+  background-build poll used to read an empty job.json when it
+  landed mid-write and crash on JSON — found by the v1.7
+  verification run. The installer tests staged a copy of the tree
+  including a real .venv when one existed, so the nested installer
+  reused it and ran the real suite instead of the stubbed one —
+  and the real suite contains installer tests, which staged
+  another copy and ran another installer, recursing until the
+  timeout (found by the v1.7 installer sim, from an installed
+  tree). The stage now excludes .venv. The v1.4 T3 test for
+  character builds now asserts the new behavior (the job reaches
+  the exporter); the project test is unchanged.
+
 ## v1.6 — 2026-11-14 — the P2 list: mesh pipeline, queue, render settings, guidance, backup
 
 The P2 task list (T21–T30, minus T26) plus the Blender performance

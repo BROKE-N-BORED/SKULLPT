@@ -262,18 +262,28 @@ class ZeroExporterTests(unittest.TestCase):
     def _kind_job(self, ws, kind):
         desc = {"name": f"Test {kind}", "kind": kind,
                 "parts": [{"id": "body", "type": "body"}]}
+        if kind == "character":
+            # v1.7, T26: a character job needs its character block.
+            from skullpt.blender_character import default_character_description
+            desc = default_character_description(f"Test {kind}")
+            desc["parts"] = [{"id": "body", "type": "body"}]
         return _approved_job(ws, desc)
 
-    def test_character_build_fails_loudly(self):
+    def test_character_build_reaches_the_exporter(self):
+        # v1.7, T26: character has an exporter now, so a character
+        # job no longer fails at the "exporters" stage. With no
+        # Blender here it fails at the "export" stage, naming Blender.
         with tempfile.TemporaryDirectory() as td:
             ws = _workspace(td)
             job = self._kind_job(ws, "character")
-            report = build_job(job, ws)
+            with _high_ram(), mock.patch(
+                    "skullpt.blender_character.blender_export.find_blender",
+                    return_value=None):
+                report = build_job(job, ws)
             self.assertFalse(report["ok"])
-            self.assertEqual(report["stage"], "exporters")
-            self.assertIn("no exporter", report["problems"][0])
+            self.assertEqual(report["stage"], "export")
+            self.assertIn("Blender was not found", report["problems"][0])
             self.assertEqual(job.state, "failed")
-            self.assertFalse((ws / ".heavy.lock").exists())  # lock never taken
 
     def test_project_build_fails_loudly(self):
         with tempfile.TemporaryDirectory() as td:
@@ -531,8 +541,15 @@ class _StagedInstallV14(unittest.TestCase):
     def _stage(self, tmp, stubs):
         tmp = Path(tmp)
         stage = tmp / "stage"
+        # Exclude .venv: a real .venv in the stage makes the nested
+        # installer reuse it and run the REAL suite instead of the
+        # stubbed one — and the real suite contains installer tests
+        # that stage another copy and run another installer,
+        # recursing until the timeout. (Found by the v1.7 installer
+        # sim; same fix as test_v13's GuiInstallerTests._stage.)
         shutil.copytree(ROOT, stage,
-                        ignore=shutil.ignore_patterns("__pycache__"))
+                        ignore=shutil.ignore_patterns("__pycache__",
+                                                      ".venv"))
         (stage / "install.sh").chmod(0o755)
         (stage / "run.sh").chmod(0o755)
         home = tmp / "home"
@@ -553,6 +570,10 @@ class _StagedInstallV14(unittest.TestCase):
         env["HOME"] = str(home)
         env.pop("DISPLAY", None)
         env.pop("WAYLAND_DISPLAY", None)
+        # As in test_v13: the staged installer must see the stub
+        # Blender on PATH, not an ambient DESIGNSHELL_BLENDER, which
+        # takes precedence in find_blender.
+        env.pop("DESIGNSHELL_BLENDER", None)
         env["STUB_DIR"] = str(bin_dir)
         env["STUB_STATE"] = str(state_dir)
         env["PKEXEC_LOG"] = str(tmp / "pkexec.log")

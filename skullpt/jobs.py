@@ -13,6 +13,7 @@ travel with the asset into the Library.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -71,7 +72,16 @@ class Job:
         return self._state["state"]
 
     def _save(self) -> None:
-        self.state_path.write_text(json.dumps(self._state, indent=2) + "\n", encoding="utf-8")
+        # Atomic write: job.json is read by the Bench's background-build
+        # poll while the build thread saves it, and a plain write_text
+        # truncates first — a reader mid-write saw an empty file and
+        # crashed on JSON. Write beside it and rename, so a reader
+        # always sees a complete file (a crash mid-write leaves the
+        # old file, not a torn one).
+        tmp = self.state_path.with_name(self.state_path.name + ".tmp")
+        tmp.write_text(json.dumps(self._state, indent=2) + "\n",
+                       encoding="utf-8")
+        os.replace(tmp, self.state_path)
 
     def log(self, event: str, **fields) -> None:
         row = {"ts": stamp(), "event": event, **fields}
@@ -221,6 +231,40 @@ class Job:
         self.snapshot_description("description.before-part-edit.json")
         desc_mod.dump(desc, self.desc_path)
         self.log("part_edited", part=part_id, changed=sorted(changed))
+        if self.state not in ("draft", "awaiting_approval"):
+            # What was approved is gone — the gate sees it again.
+            self._state.pop("failure", None)
+            self._save()
+            self.transition("awaiting_approval", reason="description edited")
+        return self.state
+
+    def edit_character(self, character: dict) -> str:
+        """Replace the character block (sliders, skin, rig) and save
+        the description (v1.7, T26). Same rules as edit_part: the
+        description is validated before it is written, the pre-edit
+        copy is snapshotted first, and a job past the plan gate goes
+        back to awaiting_approval. Returns the job's new state."""
+        if self.state in ("building", "checking"):
+            raise GateError(f"cannot edit a job that is {self.state!r} — "
+                            "wait for the build to finish first")
+        if self.state == "filed":
+            raise GateError("cannot edit a filed job — it lives in the "
+                            "Library now; duplicate it to change it")
+        if not isinstance(character, dict):
+            raise ValueError("edit-character needs a character object")
+        desc = self.load_description()
+        if desc.get("kind") != "character":
+            raise ValueError(
+                f"job {self.dir.name!r} is a {desc.get('kind')!r} job, "
+                "not a character job")
+        desc["character"] = character
+        problems = desc_mod.validate(desc)
+        if problems:
+            raise desc_mod.DescriptionError(
+                "that edit would break the description:\n- " + "\n- ".join(problems))
+        self.snapshot_description("description.before-character-edit.json")
+        desc_mod.dump(desc, self.desc_path)
+        self.log("character_edited")
         if self.state not in ("draft", "awaiting_approval"):
             # What was approved is gone — the gate sees it again.
             self._state.pop("failure", None)
