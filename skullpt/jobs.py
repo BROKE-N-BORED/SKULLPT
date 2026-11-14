@@ -134,6 +134,133 @@ class Job:
         self._save()
         self.transition("failed", reason=reason)
 
+    # -- management (v1.5, T10) ----------------------------------------
+    def delete(self) -> None:
+        """Remove the job's folder entirely. The caller confirms first
+        (the Bench asks with No as the default); this just does it.
+        A job mid-build cannot be deleted — stop the build first."""
+        if self.state in ("building", "checking"):
+            raise GateError(f"cannot delete a job that is {self.state!r} — "
+                            "wait for the build to finish first")
+        shutil.rmtree(self.dir)
+
+    def rename(self, new_name: str) -> "Job":
+        """Rename the job: new folder slug + new name in job.json and
+        in the description, so the title stays consistent everywhere.
+        Returns the Job at its new location."""
+        name = (new_name or "").strip()
+        if not name:
+            raise ValueError("a job needs a name — the new name is empty")
+        slug = _slug(name)
+        if not slug:
+            raise ValueError(f"the name {new_name!r} makes no usable job folder")
+        if self.state in ("building", "checking"):
+            raise GateError(f"cannot rename a job that is {self.state!r} — "
+                            "wait for the build to finish first")
+        dest = self.dir.parent / slug
+        if dest.exists() and dest.resolve() != self.dir.resolve():
+            raise ValueError(f"a job named {slug!r} already exists")
+        if dest.resolve() == self.dir.resolve():
+            return self  # same slug — nothing to move
+        desc = self.load_description()
+        desc["name"] = name
+        problems = desc_mod.validate(desc)
+        if problems:
+            raise desc_mod.DescriptionError(
+                "Invalid Description File:\n- " + "\n- ".join(problems))
+        self.dir.rename(dest)
+        renamed = Job(dest)
+        renamed._state["name"] = name
+        renamed._save()
+        desc_mod.dump(desc, renamed.desc_path)
+        renamed.log("renamed", **{"from": self.dir.name, "to": slug})
+        return renamed
+
+    def duplicate(self) -> "Job":
+        """A fresh job with the same description: new folder, new
+        session log, empty output dir, waiting at the plan gate.
+        The description is the asset; the job is the workflow, and
+        the copy starts the workflow over."""
+        desc = self.load_description()
+        desc["name"] = f"{desc.get('name', self.dir.name)} copy"
+        return Job.create(self.dir.parent, desc)
+
+    def edit_part(self, part_id: str, fields: dict) -> str:
+        """Change one part's parameters (position, size, material,
+        bevel, radius) and save the description.
+
+        The description is validated before it is written, and the
+        pre-edit copy is snapshotted first. A job that was already
+        approved (or further along) goes back to awaiting_approval:
+        what was approved is no longer what is there, so the plan
+        gate has to see it again. Returns the job's new state."""
+        if self.state in ("building", "checking"):
+            raise GateError(f"cannot edit a job that is {self.state!r} — "
+                            "wait for the build to finish first")
+        if self.state == "filed":
+            raise GateError("cannot edit a filed job — it lives in the "
+                            "Library now; duplicate it to change it")
+        desc = self.load_description()
+        part = next((p for p in desc.get("parts", []) if p.get("id") == part_id), None)
+        if part is None:
+            raise ValueError(f"no part {part_id!r} in this job")
+        allowed = {"position_cm", "size_cm", "material", "bevel_cm", "radius_cm",
+                   "profile_cm", "path_cm", "type"}
+        changed = {}
+        for field, value in fields.items():
+            if field not in allowed:
+                raise ValueError(f"field {field!r} is not editable here")
+            part[field] = value
+            changed[field] = value
+        if not changed:
+            return self.state
+        problems = desc_mod.validate(desc)
+        if problems:
+            raise desc_mod.DescriptionError(
+                "that edit would break the description:\n- " + "\n- ".join(problems))
+        self.snapshot_description("description.before-part-edit.json")
+        desc_mod.dump(desc, self.desc_path)
+        self.log("part_edited", part=part_id, changed=sorted(changed))
+        if self.state not in ("draft", "awaiting_approval"):
+            # What was approved is gone — the gate sees it again.
+            self._state.pop("failure", None)
+            self._save()
+            self.transition("awaiting_approval", reason="description edited")
+        return self.state
+
+
+def recover_stale_jobs(workspace: str | Path) -> list[str]:
+    """Jobs left in `building`/`checking` by a crash or a closed Bench
+    go back to `approved` with a note — unless the heavy-job lock is
+    held by a live process, in which case a build may genuinely be
+    running and nothing is touched. Returns the recovered job names."""
+    ws = Path(workspace)
+    jobs_root = ws / "jobs"
+    if not jobs_root.is_dir():
+        return []
+    lock_path = ws / ".heavy.lock"
+    if lock_path.exists():
+        try:
+            holder = int(lock_path.read_text().strip() or "0")
+        except ValueError:
+            holder = 0
+        if holder > 0 and Path(f"/proc/{holder}").exists():
+            return []  # a build is running — hands off
+    recovered: list[str] = []
+    for job_dir in sorted(p for p in jobs_root.iterdir() if p.is_dir()):
+        try:
+            job = Job(job_dir)
+        except Exception:
+            continue  # unreadable jobs are listed elsewhere (U32)
+        if job.state in ("building", "checking"):
+            old = job.state
+            job._state.pop("failure", None)
+            job._save()
+            job.transition("approved", reason=f"recovered from stale {old}")
+            job.log("recovered", **{"from": old})
+            recovered.append(job_dir.name)
+    return recovered
+
 
 def _slug(name: str) -> str:
     keep = [c.lower() if c.isalnum() else "-" for c in name]

@@ -128,6 +128,41 @@ def seat_text(seat: dict, prompt: str, image_png: bytes | None = None) -> str:
     raise SeatNotConfigured(f"provider {provider!r} has no live wiring in the shell yet")
 
 
+# ------------------------------------------------------- fallback (v1.5, T20)
+
+# Which seat the last plan/text call actually used, and what the
+# primary seat said when it failed — so the Bench and CLI can report
+# honestly ("drafted by the local fallback — Gemini could not be
+# reached") instead of silently switching brains.
+_LAST_PLAN: dict = {"seat": None, "primary_error": None}
+
+
+def last_plan_seat() -> dict:
+    """The record of the most recent plan_from_words call:
+    {"seat": "planner"|"fallback"|None, "primary_error": str|None}."""
+    return dict(_LAST_PLAN)
+
+
+def text_with_fallback(seats: dict, prompt: str) -> tuple[str, str, str | None]:
+    """Ask the planner seat; if it cannot answer (no key, provider
+    error, unreachable), ask the local fallback seat instead.
+
+    Returns (text, role-used, primary-error-or-None). When both fail,
+    the PRIMARY seat's error is raised — the user hears the real
+    reason, not the fallback's connection-refused noise."""
+    primary_error: Exception | None = None
+    try:
+        return seat_text(seats.get("planner", {}), prompt), "planner", None
+    except (SeatNotConfigured, SeatCallFailed) as exc:
+        primary_error = exc
+    fallback_seat = seats.get("fallback", {})
+    try:
+        return seat_text(fallback_seat, prompt), "fallback", str(primary_error)
+    except (SeatNotConfigured, SeatCallFailed):
+        assert primary_error is not None
+        raise primary_error
+
+
 # ------------------------------------------------------------- the planner
 
 FORMAT_SPEC = """\
@@ -173,15 +208,18 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
     """Draft a Description File from plain words via the planner seat.
 
     The draft still goes through the plan gate — this fills in the form,
-    it does not approve anything.
+    it does not approve anything. If the planner seat cannot answer
+    (no key, provider error, unreachable), the local fallback seat
+    (Ollama) is tried with the same prompt; when both fail, the
+    planner's error is raised. Which seat was used is recorded in
+    last_plan_seat() so callers can say so honestly.
     """
-    seat = seats.get("planner", {})
     prompt = (
         "You are the planner seat of a design workshop. Turn the request "
         "into ONE Description File. Reply with ONLY the JSON object, no "
         "commentary.\n\n" + FORMAT_SPEC +
         f"\nKind: {kind}\nRequest: {words}\n")
-    raw = seat_text(seat, prompt)
+    raw, role = _plan_text(seats, prompt)
     desc = _json_from_text(raw)
     desc.setdefault("kind", kind)
     problems = desc_mod.validate(desc)
@@ -193,6 +231,20 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
                          ("budget", {}), ("rubric", []), ("tags", [])):
         desc.setdefault(key, default)
     return desc
+
+
+def _plan_text(seats: dict, prompt: str) -> tuple[str, str]:
+    """The planner call with fallback, recording which seat answered.
+    A draft that parses to JSON but fails validation is NOT retried
+    here — that repair loop is T22 (v1.6); the fallback only covers
+    a seat that could not answer at all."""
+    try:
+        text, role, primary_error = text_with_fallback(seats, prompt)
+    except (SeatNotConfigured, SeatCallFailed) as exc:
+        _LAST_PLAN.update(seat=None, primary_error=str(exc))
+        raise
+    _LAST_PLAN.update(seat=role, primary_error=primary_error)
+    return text, role
 
 
 # ------------------------------------------------------- vision patch rules

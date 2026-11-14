@@ -35,11 +35,13 @@ API shape (from https://microsoft-trellis-2.hf.space/gradio_api/info):
   The generation is cached per session, so a failed /extract_glb is
   retried once in the same session without re-generating.
 
-Auth: HF_TOKEN from the environment ONLY, never written to any file
-(same rule as GEMINI_API_KEY). No token -> a plain refusal naming the
-fix (free account at huggingface.co, Settings -> Access Tokens ->
-New token, Read role). The token rides as a Bearer header on every
-request, including the GLB download.
+Auth: HF_TOKEN from the environment, or the token saved in the Bench
+under Settings (tokenfile.py: one file, mode 0600, in the workspace,
+gitignored — never in code, never in the repo; same rule as
+GEMINI_API_KEY). No token -> a plain refusal naming the fix (free
+account at huggingface.co, Settings -> Access Tokens -> New token,
+Read role). The token rides as a Bearer header on every request,
+including the GLB download.
 
 Disclosure: every run says plainly, before anything is sent, that the
 photo is uploaded to Hugging Face's free GPU and leaves the machine.
@@ -68,7 +70,7 @@ import uuid
 from pathlib import Path
 
 from . import description as desc_mod
-from .governor import stamp
+from .governor import Cancelled, stamp
 from .ingest import ingest_glb
 from .intake import image_size
 from .jobs import Job
@@ -100,8 +102,9 @@ EXTRACT_RETRIES = 1
 TOKEN_FIX = (
     "the cloud mesh step needs a Hugging Face token: make a free account at "
     "huggingface.co, then Settings -> Access Tokens -> New token (Read role), "
-    "and put it in the environment as HF_TOKEN. The token is never written "
-    "to any file."
+    "and put it in the environment as HF_TOKEN, or save it in the Bench "
+    "under Settings. The Settings copy lives in one file only you can read, "
+    "in your workspace, and never in the code or the repo."
 )
 
 DISCLOSURE = (
@@ -132,9 +135,17 @@ def base_url() -> str:
     return os.environ.get(URL_ENV_OVERRIDE) or SPACE_URL
 
 
-def token_value(token: str | None = None) -> str:
-    """The HF token, or a plain refusal naming the fix."""
+def token_value(token: str | None = None, workspace: str | Path | None = None) -> str:
+    """The HF token, or a plain refusal naming the fix.
+
+    Order: an explicit token, then the environment, then the
+    workspace's token file (written by the Settings window). The
+    token is never printed or logged anywhere in this module."""
     value = token or os.environ.get(TOKEN_ENV, "")
+    if not value.strip() and workspace is not None:
+        from . import tokenfile
+
+        value = tokenfile.load_token(workspace) or ""
     if not value.strip():
         raise CloudMeshError(TOKEN_FIX)
     return value.strip()
@@ -368,32 +379,42 @@ def validate_photo(photo: str | Path) -> Path:
 def generate_mesh(photo: str | Path, token: str | None = None,
                   base: str | None = None, seed: int | None = None,
                   timeout: int = DEFAULT_TIMEOUT,
-                  progress=None) -> tuple[bytes, int]:
+                  progress=None, cancel=None,
+                  workspace: str | Path | None = None) -> tuple[bytes, int]:
     """Photo -> textured GLB bytes, via the TRELLIS.2 Space.
 
     Returns (glb_bytes, seed). `progress`, when given, is called with
     (stage, detail) as each step lands — the CLI and the Bench log it.
+    `cancel`, when given, is a threading.Event checked between stages;
+    a set event raises governor.Cancelled and nothing is written.
     """
     photo_path = validate_photo(photo)
-    token = token_value(token)
+    token = token_value(token, workspace=workspace)
     base = (base or base_url()).rstrip("/")
     seed = random.randint(0, 2147483647) if seed is None else int(seed)
     deadline = time.monotonic() + timeout
     session_hash = uuid.uuid4().hex
 
+    def check_cancel() -> None:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("cloud mesh cancelled")
+
     def note(stage: str, detail: str = "") -> None:
         if progress is not None:
             progress(stage, detail)
 
+    check_cancel()
     note("upload", f"sending {photo_path.name} to {SPACE_ID}")
     server_path = upload_image(base, token, photo_path, session_hash,
                                timeout=max(1, int(deadline - time.monotonic())))
+    check_cancel()
     note("preprocess", "removing the background on the Space")
     masked = _call(base, token, session_hash, "/preprocess_image",
                    [_image_data(server_path, photo_path)], deadline)
     if not masked or not isinstance(masked[0], dict):
         raise CloudMeshError(
             "the Space's background-removal step gave back no image")
+    check_cancel()
     note("generate", "building the 3D shape — this is the slow part "
                      "(a few minutes on the free queue)")
     _call(base, token, session_hash, "/image_to_3d",
@@ -402,6 +423,7 @@ def generate_mesh(photo: str | Path, token: str | None = None,
     glb_bytes: bytes | None = None
     last_error: CloudMeshError | None = None
     for attempt in range(EXTRACT_RETRIES + 1):
+        check_cancel()
         note("extract", "pulling the textured GLB down"
              + (" (retry)" if attempt else ""))
         try:
@@ -435,7 +457,7 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
                job: str | None = None, seed: int | None = None,
                token: str | None = None, base: str | None = None,
                timeout: int = DEFAULT_TIMEOUT,
-               progress=None) -> dict:
+               progress=None, cancel=None) -> dict:
     """The whole step: photo -> cloud mesh -> GLB + description in a job.
 
     The mesh is generated and ingested BEFORE any job is touched, so a
@@ -444,6 +466,8 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
     gate — draft or awaiting_approval); without it, a new job is
     created from the ingested description. Either way the job ends at
     awaiting_approval: nothing builds until the description is approved.
+    `cancel` is a threading.Event: a set event raises
+    governor.Cancelled before any job is touched.
     """
     ws = Path(workspace)
     (ws / "jobs").mkdir(parents=True, exist_ok=True)
@@ -462,7 +486,11 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
 
     glb_bytes, used_seed = generate_mesh(
         photo_path, token=token, base=base, seed=seed,
-        timeout=timeout, progress=progress)
+        timeout=timeout, progress=progress, cancel=cancel, workspace=ws)
+    if cancel is not None and cancel.is_set():
+        # The mesh landed but the user stopped the run before it was
+        # filed — the workspace stays exactly as it was.
+        raise Cancelled("cloud mesh cancelled")
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_glb = Path(tmp) / _glb_name(photo_path)

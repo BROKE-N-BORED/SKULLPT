@@ -10,6 +10,11 @@ Commands:
   new <workspace> <description.json>     create a job (draft -> awaiting approval)
   show <workspace> <job>                 print the plain-English summary to approve
   approve <workspace> <job>              the user's gate
+  retry <workspace> <job>                send a failed job back to approved
+  delete <workspace> <job>               remove a job's folder entirely
+  rename <workspace> <job> <name>        rename a job (folder + title)
+  duplicate <workspace> <job>            a fresh job with the same description
+  recover <workspace>                    return crash-stranded jobs to approved
   build <workspace> <job>                run the loop (refuses unless approved)
   file <workspace> <job>                 file an awaiting-review job into the Library
   search <workspace> <query> [--kind K]  search the Library before making new
@@ -34,9 +39,12 @@ Commands:
   reroll <batch-dir>                     generate another round into the same batch
   settings <workspace> [--critic-reference on|off]
                                          show or set workspace switches
-  bench <workspace>                      open the Bench — the shell's window,
+  bench [workspace]                      open the Bench — the shell's window,
                                          a native Linux desktop window
-                                         (live render view, folders, chat)
+                                         (Jobs home, Render, Images, Library,
+                                         Settings); no workspace means the
+                                         folder chosen in Settings, else
+                                         ~/design-shell-workspace
   webbench <workspace> [--port N]        serve the legacy web Bench instead
                                          (same jobs/images/library, in a browser)
 """
@@ -72,8 +80,11 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("init",):
         p = sub.add_parser(name); p.add_argument("workspace")
     p = sub.add_parser("new"); p.add_argument("workspace"); p.add_argument("description")
-    for name in ("show", "approve", "retry", "build", "file"):
+    for name in ("show", "approve", "retry", "build", "file", "delete", "duplicate"):
         p = sub.add_parser(name); p.add_argument("workspace"); p.add_argument("job")
+    p = sub.add_parser("rename"); p.add_argument("workspace"); p.add_argument("job")
+    p.add_argument("name")
+    p = sub.add_parser("recover"); p.add_argument("workspace")
     p = sub.add_parser("search"); p.add_argument("workspace"); p.add_argument("query")
     p.add_argument("--kind", default=None)
     p = sub.add_parser("demo"); p.add_argument("workspace")
@@ -104,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--count", type=int, default=None)
     p = sub.add_parser("settings"); p.add_argument("workspace")
     p.add_argument("--critic-reference", choices=("on", "off"), default=None)
-    p = sub.add_parser("bench"); p.add_argument("workspace")
+    p = sub.add_parser("bench"); p.add_argument("workspace", nargs="?", default=None)
     p = sub.add_parser("webbench"); p.add_argument("workspace")
     p.add_argument("--port", type=int, default=8770)
     args = ap.parse_args(argv)
@@ -131,6 +142,28 @@ def main(argv: list[str] | None = None) -> int:
             job = _job(_ws(args.workspace), args.job)
             job.retry()
             print(f"retried: {job.dir.name} is approved again — build when ready")
+        elif args.cmd == "delete":
+            job = _job(_ws(args.workspace), args.job)
+            name = job.dir.name
+            job.delete()
+            print(f"deleted job {name}")
+        elif args.cmd == "rename":
+            job = _job(_ws(args.workspace), args.job)
+            renamed = job.rename(args.name)
+            print(f"renamed to {renamed.dir.name}")
+        elif args.cmd == "duplicate":
+            job = _job(_ws(args.workspace), args.job)
+            copy = job.duplicate()
+            print(f"duplicated as {copy.dir.name} — waiting at the plan gate")
+        elif args.cmd == "recover":
+            from .jobs import recover_stale_jobs
+            ws = _ws(args.workspace)
+            recovered = recover_stale_jobs(ws)
+            if recovered:
+                for name in recovered:
+                    print(f"recovered: {name} is approved again")
+            else:
+                print("no stranded jobs — nothing to recover")
         elif args.cmd == "build":
             ws = _ws(args.workspace)
             job = _job(ws, args.job)
@@ -353,8 +386,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"  (a job can override this with \"critic_reference\": true/false "
                   f"in its description)")
         elif args.cmd == "bench":
-            from .qtbench import main as qt_main
-            ws = _ws(args.workspace)
+            from .qtbench import default_workspace, main as qt_main
+            ws = _ws(args.workspace) if args.workspace else _ws(default_workspace())
             return qt_main(ws)
         elif args.cmd == "webbench":
             from .bench import serve

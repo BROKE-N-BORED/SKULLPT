@@ -15,10 +15,26 @@ import time
 from pathlib import Path
 
 DEFAULT_MIN_FREE_MB = 1024  # refuse heavy work under ~1 GB free
+# The adaptive floor is the larger of the absolute floor above and this
+# share of the machine's total RAM — on a bigger machine the floor
+# rises so the desktop keeps breathing room; on a small one the
+# absolute floor is what counts. (v1.5, P6.)
+ADAPTIVE_FLOOR_FRACTION = 0.15
 
 
 class GovernorError(RuntimeError):
     pass
+
+
+class Cancelled(RuntimeError):
+    """A long-running step stopped because the user cancelled it.
+
+    Raised at the next safe checkpoint (between exporters, between
+    image candidates, between cloud-mesh stages) — never mid-write.
+    Lives here because every long-running module already imports the
+    governor, and the run machinery needs one shared type to tell
+    "cancelled" apart from "failed".
+    """
 
 
 def check_budget(desc: dict) -> list[str]:
@@ -70,6 +86,28 @@ def free_ram_mb() -> int | None:
     return None
 
 
+def total_ram_mb() -> int | None:
+    """Total RAM in MB on Linux; None where it cannot be read."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def adaptive_min_free_mb() -> int:
+    """The RAM floor for heavy work on this machine: the larger of the
+    absolute 1024 MB floor and 15% of total RAM. On Joshua's 8 GB PC
+    that is ~1200 MB; on a 4 GB machine it stays 1024 MB. Falls back
+    to the absolute floor when total RAM cannot be read."""
+    total = total_ram_mb()
+    if total is None:
+        return DEFAULT_MIN_FREE_MB
+    return max(DEFAULT_MIN_FREE_MB, int(total * ADAPTIVE_FLOOR_FRACTION))
+
+
 class HeavyJobLock:
     """One-heavy-job-at-a-time lock, as a lock file with the holder's pid."""
 
@@ -78,7 +116,12 @@ class HeavyJobLock:
         self._held = False
         self._min_free_mb = DEFAULT_MIN_FREE_MB
 
-    def acquire(self, min_free_mb: int = DEFAULT_MIN_FREE_MB) -> None:
+    def acquire(self, min_free_mb: int | None = None) -> None:
+        """Take the lock. min_free_mb=None means the adaptive floor
+        (max(1024 MB, 15% of total RAM)); pass an explicit number to
+        override it (tests use 0 to mean "no floor")."""
+        if min_free_mb is None:
+            min_free_mb = adaptive_min_free_mb()
         self._check_ram(min_free_mb)
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         # Atomic creation: two processes starting at once cannot both

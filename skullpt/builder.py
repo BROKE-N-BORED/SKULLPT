@@ -21,7 +21,8 @@ MAX_VISION_ROUNDS = 2
 
 
 def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
-                preview_paths: list[str], workspace: Path | None = None):
+                preview_paths: list[str], workspace: Path | None = None,
+                cancel=None, progress=None):
     """Critic pass, with the vision patch loop when a live critic is seated.
 
     The Gemini critic runs only when its key is in the environment;
@@ -30,6 +31,8 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     parameter changes, the Blender exporter re-runs, and the critic
     looks again — at most MAX_VISION_ROUNDS rounds (blueprint cap).
     Returns (critique, rounds) where rounds records every patch applied.
+    `cancel` is a threading.Event checked before each patch round;
+    a set event raises governor.Cancelled.
     """
     import os
 
@@ -65,6 +68,8 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     from . import live
     snapshot_saved = False
     for round_no in range(1, MAX_VISION_ROUNDS + 1):
+        if cancel is not None and cancel.is_set():
+            raise governor.Cancelled("build cancelled during the critic loop")
         patches = live.extract_patches(critique.get("fixes", []))
         if not patches:
             break
@@ -79,6 +84,8 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
         desc_mod.dump(desc, job.desc_path)
         job.log("vision_patch", round=round_no, applied=applied)
         rounds.append({"round": round_no, "applied": applied})
+        if progress is not None:
+            progress("critic", f"vision patch round {round_no} — rebuilding")
         fn = exporters.EXPORTERS["blender_scene"]
         refreshed = fn(desc, job.output_dir)
         for name in refreshed:
@@ -93,7 +100,17 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     return critique, rounds
 
 
-def build_job(job: Job, workspace: Path, seats_path=None) -> dict:
+def build_job(job: Job, workspace: Path, seats_path=None,
+              cancel=None, progress=None) -> dict:
+    """Run one approved job through the loop.
+
+    `cancel`, when given, is a threading.Event checked between
+    exporters and before the critic pass; a set event raises
+    governor.Cancelled and the job goes back to `approved` (the
+    description is still approved — the build just did not finish).
+    `progress`, when given, is called with (stage, detail) as the
+    build moves through export, check, and critic.
+    """
     job.require_approved()  # the Plan Gate — nothing builds unapproved
     desc = job.load_description()
 
@@ -119,6 +136,10 @@ def build_job(job: Job, workspace: Path, seats_path=None) -> dict:
     try:
         with lock:
             for name in kind_exporters:
+                if cancel is not None and cancel.is_set():
+                    raise governor.Cancelled("build cancelled")
+                if progress is not None:
+                    progress("export", f"running the {name} exporter")
                 fn = exporters.EXPORTERS[name]
                 outputs.extend(fn(desc, job.output_dir))
                 job.log("export", exporter=name)
@@ -127,6 +148,12 @@ def build_job(job: Job, workspace: Path, seats_path=None) -> dict:
                 # stopped rather than allowed to thrash the machine.
                 lock.recheck()
             used_recipes = sorted({p["type"] for p in desc["parts"]})
+    except governor.Cancelled:
+        # The user stopped the run — like a governor refusal, the job
+        # stays approved and can be built again when wanted.
+        job.log("cancelled")
+        job.transition("approved")
+        raise
     except governor.GovernorError as exc:
         # A governor REFUSAL is not a build failure — nothing ran (or
         # nothing finished), so the job stays approved and can be
@@ -140,20 +167,38 @@ def build_job(job: Job, workspace: Path, seats_path=None) -> dict:
         job.fail(f"export: {type(exc).__name__}: {exc}")
         return {"ok": False, "stage": "export", "problems": [str(exc)]}
 
+    if cancel is not None and cancel.is_set():
+        job.log("cancelled")
+        job.transition("approved")
+        raise governor.Cancelled("build cancelled")
+
     job.transition("checking")
-    report_checks = checks_mod.run_machine_checks(desc, job.output_dir, outputs)
+    if progress is not None:
+        progress("check", "running the machine checks")
+    try:
+        report_checks = checks_mod.run_machine_checks(desc, job.output_dir, outputs)
 
-    gate = None
-    if desc.get("game_ready") and any(o.endswith(".glb") for o in outputs):
-        from . import gameready
-        gate = gameready.run_gate(desc, job.output_dir, outputs)
-        job.log("game_ready_gate", ok=gate["ok"], total_tris=gate.get("total_tris"))
+        gate = None
+        if desc.get("game_ready") and any(o.endswith(".glb") for o in outputs):
+            from . import gameready
+            gate = gameready.run_gate(desc, job.output_dir, outputs)
+            job.log("game_ready_gate", ok=gate["ok"], total_tris=gate.get("total_tris"))
 
-    seats = load_seats(seats_path)
-    preview_paths = [str(job.output_dir / o) for o in outputs
-                     if o.endswith((".svg", ".html", ".png"))]
-    critique, vision_rounds = _run_critic(job, desc, outputs, seats, preview_paths,
-                                          workspace=workspace)
+        seats = load_seats(seats_path)
+        preview_paths = [str(job.output_dir / o) for o in outputs
+                         if o.endswith((".svg", ".html", ".png"))]
+        if progress is not None:
+            progress("critic", "the critic is looking at the renders")
+        critique, vision_rounds = _run_critic(job, desc, outputs, seats, preview_paths,
+                                              workspace=workspace,
+                                              cancel=cancel, progress=progress)
+    except governor.Cancelled:
+        # Cancelled mid-check or mid-critic: the job goes back to
+        # approved, like a cancelled export — never stranded in
+        # "checking" with no way back.
+        job.log("cancelled")
+        job.transition("approved")
+        raise
     if vision_rounds:
         # patches changed the description -> facts must be re-checked
         report_checks = checks_mod.run_machine_checks(desc, job.output_dir, outputs)

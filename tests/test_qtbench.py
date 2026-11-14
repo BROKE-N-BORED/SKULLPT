@@ -123,6 +123,11 @@ class WidgetTests(unittest.TestCase):
         self.job = Job.create(self.ws / "jobs", desc)
         self.window = qtbench.BenchWindow(self.ws)
         self.window.show()
+        # v1.5: the viewport lives in the Render window and nothing is
+        # auto-selected, so select the job and show Render before the
+        # GL-context check.
+        self.window.select_job(self.job.dir.name)
+        self.window._render_window.show()
         self._app.processEvents()
         self._app.processEvents()
         ctx = self.window._viewport.context()

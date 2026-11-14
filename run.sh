@@ -47,7 +47,7 @@ if [ -z "${DESIGNSHELL_BLENDER:-}" ] && ! command -v blender >/dev/null 2>&1 \
 fi
 
 if [ "$#" -eq 0 ]; then
-  exec "$PY" -m skullpt bench "$HOME/design-shell-workspace"
+  exec "$PY" -m skullpt bench
 else
   exec "$PY" -m skullpt "$@"
 fi

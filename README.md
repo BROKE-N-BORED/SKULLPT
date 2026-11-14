@@ -1,4 +1,4 @@
-# SKULLPT — v1.4
+# SKULLPT — v1.5
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -28,6 +28,13 @@ kinds with no exporters (character, project) fail loudly instead of
 estimated from the shapes before the build), the description is
 snapshotted before anything mutates it, and the installer's downloads
 resume and verify (a newer installed Blender is never downgraded).
+v1.5 is the redesign: the Bench is five windows (Jobs home, Render,
+Images, Library, Settings) in a bone-and-amber identity from
+DESIGN.md, with a native image picker, job management
+(delete/rename/duplicate), click-a-part editing in the viewport,
+progress and cancel on long work, a settings window with Hugging
+Face token setup, and the dead seats removed (the planner falls back
+to the local Ollama seat when Gemini cannot be reached).
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11; the Blender install, the
 image-engine install, the Bench's real-PC run, and the first real

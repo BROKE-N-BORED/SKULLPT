@@ -885,7 +885,7 @@ class GovernorLockTests(unittest.TestCase):
 @unittest.skipUnless(qtbench.QT_AVAILABLE, "PySide6 not installed")
 class QtRetryButtonTests(unittest.TestCase):
     """The Bench window's Retry button follows the failed state, and
-    the tree lists what could not be read."""
+    the bento grid lists what could not be read."""
 
     @classmethod
     def setUpClass(cls):
@@ -900,6 +900,10 @@ class QtRetryButtonTests(unittest.TestCase):
         self.job = Job.create(self.ws / "jobs", ROOM)
         self.window = qtbench.BenchWindow(self.ws)
         self.window.show()
+        # v1.5: nothing is auto-selected, and the viewport lives in
+        # the Render window — select the job and show Render first.
+        self.window.select_job(self.job.dir.name)
+        self.window._render_window.show()
         self._app.processEvents()
         self._app.processEvents()
         ctx = self.window._viewport.context()
@@ -932,14 +936,9 @@ class QtRetryButtonTests(unittest.TestCase):
         bad_dir.mkdir()
         (bad_dir / "job.json").write_text("{not json")
         self.window._refresh()
-        tree = self.window._tree
-        heads = [tree.topLevelItem(i).text(0)
-                 for i in range(tree.topLevelItemCount())]
-        self.assertIn("Couldn't read", heads)
-        skip_item = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
-                         if tree.topLevelItem(i).text(0) == "Couldn't read")
-        self.assertEqual(skip_item.childCount(), 1)
-        self.assertIn("broken-job", skip_item.child(0).text(0))
+        # v1.5: the "Couldn't read" tree section is a bento tile.
+        self.assertTrue(self.window._skipped_tile.isVisible())
+        self.assertIn("broken-job", self.window._skipped_tile_text.text())
 
 
 if __name__ == "__main__":

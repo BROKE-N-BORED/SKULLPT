@@ -1,9 +1,17 @@
 """Seats — which brain does which job. Models are connectors, never core.
 
-Defaults follow the checked research verdict (cloud brain, local hands):
-Gemini plans and sees, Groq drafts and repairs fast, EXAONE lifts heavy
-code, local Ollama is the offline fallback only. API keys are read from
+Three seats, all wired (v1.5): Gemini plans and sees, local Ollama is
+the offline fallback when Gemini cannot be reached. Keys are read from
 environment variables at call time and are NEVER stored by the shell.
+
+Seats removed in v1.5 (they were advertised but had no caller and no
+live wiring — the config promised a six-brain workshop and two seats
+did all the work): drafter + repairer (Groq — no code path ever called
+them; the planner repair loop, T22, will reintroduce repairer when it
+lands) and heavy_coder (EXAONE — no live wiring exists at all).
+`load_seats` still accepts user-defined roles from seats.json, so
+nothing breaks for anyone who configured them; they just stop being
+promised by default.
 """
 from __future__ import annotations
 
@@ -13,9 +21,6 @@ from pathlib import Path
 DEFAULT_SEATS = {
     "planner": {"provider": "gemini", "model": "gemini-flash-latest", "env_key": "GEMINI_API_KEY"},
     "critic": {"provider": "gemini", "model": "gemini-flash-latest", "env_key": "GEMINI_API_KEY"},
-    "drafter": {"provider": "groq", "model": "gpt-oss-20b", "env_key": "GROQ_API_KEY"},
-    "repairer": {"provider": "groq", "model": "gpt-oss-20b", "env_key": "GROQ_API_KEY"},
-    "heavy_coder": {"provider": "exaone", "model": "k-exaone_v2.5", "env_key": "EXAONE_API_KEY"},
     "fallback": {"provider": "ollama", "model": "qwen3:4b", "env_key": None},
 }
 

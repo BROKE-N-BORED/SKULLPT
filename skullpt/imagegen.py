@@ -170,11 +170,16 @@ def _fresh_seed(batch: dict, rng: random.Random) -> int:
 
 
 def generate(workspace: str | Path, batch_dir: str | Path,
-             count: int | None = None, timeout_s: int = PER_IMAGE_TIMEOUT_S) -> dict:
+             count: int | None = None, timeout_s: int = PER_IMAGE_TIMEOUT_S,
+             cancel=None, progress=None) -> dict:
     """Generate one round of candidates into the batch.
 
     Runs under the governor's heavy-job lock. A candidate that fails or
     times out is recorded as failed — the round reports what landed.
+    `cancel`, when given, is a threading.Event checked before each
+    candidate; a set event raises governor.Cancelled and the candidates
+    already landed stay landed. `progress`, when given, is called with
+    (done, total, text) as each candidate lands.
     """
     batch = load_batch(batch_dir)
     engine = find_engine()
@@ -189,8 +194,13 @@ def generate(workspace: str | Path, batch_dir: str | Path,
     size = int(batch.get("size", DEFAULT_SIZE))
     rng = random.Random()
     lock = governor.HeavyJobLock(Path(workspace) / ".heavy.lock")
+    if progress is not None:
+        progress(0, n, "starting the image engine")
     with lock:
-        for _ in range(n):
+        for done in range(n):
+            if cancel is not None and cancel.is_set():
+                raise governor.Cancelled(
+                    f"image batch cancelled — {done} of {n} candidates landed")
             seed = _fresh_seed(batch, rng)
             index = len(batch["candidates"]) + 1
             fname = f"cand-{index:02d}.png"
@@ -217,6 +227,8 @@ def generate(workspace: str | Path, batch_dir: str | Path,
                 out.unlink(missing_ok=True)
             batch["candidates"].append(record)
             save_batch(batch_dir, batch)
+            if progress is not None:
+                progress(done + 1, n, f"candidate {done + 1} of {n} landed")
     return batch
 
 

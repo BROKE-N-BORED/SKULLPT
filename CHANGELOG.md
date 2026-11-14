@@ -1,5 +1,117 @@
 # SKULLPT — Changelog
 
+## v1.5 — 2026-11-14 — the redesign: five windows, bone and amber, native picker, job management
+
+The redesign report (2026-11-13) and the P1 task list (T8–T20) plus
+the viewport/status performance items. The Bench is no longer one
+crowded window: it is five windows, one per job, in a Warp-derived
+identity documented in DESIGN.md.
+
+- DESIGN.md (R1): the single source of truth for how the Bench
+  looks, in the Stitch 9-section format — Overview, Colors,
+  Typography, Layout, Elevation and Depth, Shapes, Components,
+  Motion, Do's and Don'ts, with the tokens as frontmatter. It
+  records the amber honestly: the v1.2 icon was monochrome, so
+  v1.5 put the amber crack in the icon first, and the code samples
+  the icon's most saturated hex at runtime.
+- LUCIDE ICONS VENDORED (R2): 38 SVG files in `skullpt/icons/`
+  with the ISC license. Five were renamed upstream; the Bench keeps
+  the brief's file names and DESIGN.md records the current Lucide
+  sources.
+- IDENTITY STYLESHEET (R3): `skullpt/qtdesign.py` holds the
+  tokens (canvas `#1a1a1f`, bone `#e8e4d8`, amber `#f5a623`,
+  sampled from the icon), builds the one stylesheet (4px buttons,
+  6px cards, hairline-only elevation, no drop shadows), loads the
+  bundled Inter and JetBrains Mono fonts, and recolors icons to
+  bone at load time.
+- CONTRAST VALIDATED (R4): all ten text pairs computed with the
+  WCAG formula and recorded in DESIGN.md — every pair passes AA,
+  the weakest (muted on canvas-soft) at 6.18:1.
+- WINDOW SPLIT (R5): Jobs (home — bento cards, chat, status bar),
+  Render (viewport full size), Images (native picker), Library,
+  Settings, plus a left icon rail, a Help menu, and How to Use.
+  Every window remembers its geometry. The main window is 1280x720
+  and fits the 1366x768 screen.
+- STAGE PILLS (R6): monochrome plus amber only — APPROVED is amber
+  fill, BUILDING and CHECKING carry an amber border, FAILED reads
+  via text, not red.
+- BENTO JOB CARDS (R7): cards with pill, title, summary, and the
+  gate button for the state; the selected card gets an amber border.
+  Engine, latest-render, and could-not-read tiles fill the grid.
+- TOASTS (R8): a small note in the parent window's corner, gone
+  after 4 seconds, no animation — run completions and save
+  confirmations only.
+- VIEWPORT LEGEND, HOVER, TRI-COUNT (R9): the legend states the
+  true grid step (span/10) and the axis colors; hovering a part
+  shows its name; the tri-count is measured from the last build
+  report when there is one, an estimate from the viewport otherwise.
+- NATIVE IMAGE PICKER (T8): the web picker is retired as the only
+  surface — the Images window shows batches and candidates natively
+  with Keep/Reject (reject deletes the file and records the seed)
+  and Reroll. The `pick` command still runs the web picker as a
+  legacy surface.
+- SETTINGS WINDOW (T9): engine status with plain-language fixes
+  for each missing piece, the critic-reference toggle, workspace
+  choice, and Hugging Face token setup — the token is saved to
+  `hf_token.key` in the workspace (mode 0600, gitignored), never
+  shown, never in code. The cloud-mesh step reads the token file
+  when no environment token is set.
+- JOB MANAGEMENT (T10): delete, rename, duplicate, retry from the
+  Jobs window and from the command line (`delete`, `rename`,
+  `duplicate`, `recover`). Building and checking jobs cannot be
+  deleted or renamed. On startup the Bench recovers jobs stranded
+  in building or checking by a crash — only when the heavy-job
+  lock is not held by a live process.
+- PART EDITING AND PICKING (T11): click a part in the viewport to
+  select it (ray-cast against the real mesh triangles); the part
+  editor changes position, size, material, bevel, and radius. An
+  edit snapshots the description first and sends the job back to
+  the plan gate for approval.
+- ACTIVITY, PROGRESS, CANCEL (T12): the status bar shows the
+  running job with a progress bar and a Cancel button; builds,
+  image rounds, and cloud meshes report stage progress and can be
+  cancelled at stage boundaries (a cancelled build returns the job
+  to approved).
+- SINGLE INSTANCE, GEOMETRY, HELP (T13): one Bench per workspace
+  (a second launch raises the running one); every window remembers
+  its size and position; the Help menu opens How to Use, the debug
+  report, and About.
+- FIT SCREEN, NO EM DASHES, NO AUTO-SELECT, FIRST RUN (T14): the
+  main window is 1280x720; no em dash appears in any visible
+  string; nothing is selected by default; the first run shows a
+  start-here panel with a try-an-example button.
+- DEBUG REPORT (T15): the Help menu's Debug report shows versions,
+  engine status, free RAM and the floor, startup timings, the
+  selected job's state and build summary, and recent runs — with
+  tokens scrubbed and no chat transcript. It can be saved or
+  copied.
+- FILE PICKERS (T16): mesh-from-photo, open-an-asset, and Unreal
+  packaging all use the native file picker; no path is ever typed.
+- INCREMENTAL REFRESH (T17): job cards update in place across
+  refreshes (widget identity preserved); the viewport keeps its
+  camera across a job refresh.
+- PLANNING OFF THE UI THREAD (T18): drafting a job and the chat
+  both run in background runs, so the window stays responsive while
+  the planner thinks.
+- BUILD REPORT IN THE BENCH (T19): the Report button opens the
+  verdict, outputs, machine checks, measured triangles per part,
+  critique, and problems for the selected job.
+- DEAD SEATS REMOVED (T20): drafter, repairer, and heavy_coder had
+  zero callers (heavy_coder had no live wiring at all) — they are
+  out of the default seats, with user-defined seats still loadable
+  from seats.json. The planner falls back to the local Ollama seat
+  when Gemini cannot be reached, and the chat says so when it does.
+- PERF: viewport normals are precomputed per mesh, not per
+  triangle per frame (P1); scene meshes are cached by description
+  hash (P2); the RAM floor adapts to the machine (15% of total
+  RAM, at least 1024 MB) and the Bench shows free RAM beside it
+  (P6); the workspace state is cached by file signature and only
+  re-read when something changed (P7); startup timings are logged
+  and shown in the debug report (P8).
+- The `bench` command takes no workspace argument any more (the
+  Settings choice decides, falling back to the default workspace);
+  `run.sh` with no arguments opens the Bench the same way.
+
 ## v1.4 — 2026-11-13 — the audit fixes: governor, conversation, budgets, snapshots
 
 The 2026-11-13 audit found three dead paths and a stranded-job trap;

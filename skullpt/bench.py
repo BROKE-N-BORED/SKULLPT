@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 from . import description as desc_mod
@@ -51,17 +52,48 @@ _RUN_SEQ = [0]
 
 
 def _start_run(kind: str, label: str, fn) -> str:
+    """Run `fn` in a background thread; returns the run id.
+
+    `fn` takes two arguments: a `cancel` threading.Event (set when
+    the user cancels the run) and a `report` callable —
+    `report(fraction_or_None, text)` — for progress. `fn` may return
+    a string (stored as the run's detail) or a dict (stored whole as
+    the run's result, with its "detail" or "reply" as the detail).
+    A governor.Cancelled from `fn` marks the run "cancelled", not
+    "error" — stopping a run is not a failure.
+    """
+    from .governor import Cancelled
+
     with _RUNS_LOCK:
         _RUN_SEQ[0] += 1
         run_id = f"run-{_RUN_SEQ[0]}"
+        cancel = threading.Event()
         _RUNS[run_id] = {"id": run_id, "kind": kind, "label": label,
-                         "status": "running", "detail": ""}
+                         "status": "running", "detail": "",
+                         "progress": None, "progress_text": "",
+                         "result": None, "_cancel": cancel}
+
+    def report(fraction, text: str = "") -> None:
+        with _RUNS_LOCK:
+            run = _RUNS.get(run_id)
+            if run is not None:
+                run["progress"] = fraction
+                run["progress_text"] = str(text or "")
 
     def target():
         try:
-            detail = fn()
+            value = fn(cancel, report)
             with _RUNS_LOCK:
-                _RUNS[run_id].update(status="done", detail=str(detail or ""))
+                if isinstance(value, dict):
+                    detail = str(value.get("detail") or value.get("reply") or "")
+                    _RUNS[run_id].update(status="done", detail=detail,
+                                         result=value, progress=1.0)
+                else:
+                    _RUNS[run_id].update(status="done", detail=str(value or ""),
+                                         progress=1.0)
+        except Cancelled as exc:
+            with _RUNS_LOCK:
+                _RUNS[run_id].update(status="cancelled", detail=str(exc))
         except Exception as exc:  # surfaced on the page, never swallowed
             with _RUNS_LOCK:
                 _RUNS[run_id].update(status="error", detail=str(exc))
@@ -70,9 +102,27 @@ def _start_run(kind: str, label: str, fn) -> str:
     return run_id
 
 
+def cancel_run(run_id: str) -> bool:
+    """Ask a running run to stop at its next safe checkpoint.
+    Returns False when the run is not running (already finished, or
+    no such run) — cancelling a finished run is a no-op, not an error."""
+    with _RUNS_LOCK:
+        run = _RUNS.get(run_id)
+        if run is None or run["status"] != "running":
+            return False
+        event = run.get("_cancel")
+        if event is not None:
+            event.set()
+        return True
+
+
 def _runs() -> list[dict]:
     with _RUNS_LOCK:
-        return [dict(r) for r in _RUNS.values()][-8:]
+        out = []
+        for run in list(_RUNS.values())[-8:]:
+            # The cancel Event is not JSON-able — the page never sees it.
+            out.append({k: v for k, v in run.items() if k != "_cancel"})
+        return out
 
 
 # --------------------------------------------------------------------- state
@@ -81,6 +131,7 @@ def engine_status(workspace: Path) -> dict:
     import os
 
     from .blender_export import find_blender
+    from . import tokenfile
 
     seats_path = workspace / "seats.json"
     critic_key = None
@@ -96,11 +147,68 @@ def engine_status(workspace: Path) -> dict:
         "image_engine": imagegen.find_engine() is not None,
         "image_model": imagegen.find_model(workspace) is not None,
         "gemini_key": critic_key,
-        "hf_token": bool(os.environ.get("HF_TOKEN")),
+        "hf_token": bool(os.environ.get("HF_TOKEN"))
+        or tokenfile.has_token(workspace),
     }
 
 
-def workspace_state(workspace: Path) -> dict:
+# ------------------------------------------------------- state cache (P7)
+
+# workspace_state used to re-read every job, batch, and the library
+# index on each refresh — fine at 5 jobs, slow at 50. The file-derived
+# part is now cached per workspace, keyed by an mtime+size signature
+# over the workspace files; anything that writes a file invalidates
+# it. Engines and runs are NOT cached (they change without any file
+# changing: a new Blender install, a run finishing).
+_STATE_CACHE: dict[str, dict] = {}
+_STATE_CACHE_LOCK = threading.Lock()
+# Milliseconds the last workspace_state call took (P8 — the debug
+# report shows it, so the next audit has numbers, not guesses).
+LAST_STATE_MS: float | None = None
+
+
+def _workspace_signature(workspace: Path) -> list:
+    """(path, mtime_ns, size) for every file the state is read from."""
+    sig: list = []
+    for root in ("jobs", "images", "library", "intake"):
+        base = workspace / root
+        if not base.exists():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames.sort()
+            for name in sorted(filenames):
+                p = Path(dirpath) / name
+                try:
+                    st = p.stat()
+                    sig.append((str(p.relative_to(workspace)),
+                                st.st_mtime_ns, st.st_size))
+                except OSError:
+                    sig.append((str(p.relative_to(workspace)), None, None))
+    for name in ("settings.json", "chat.jsonl", "seats.json"):
+        p = workspace / name
+        if p.exists():
+            try:
+                st = p.stat()
+                sig.append((name, st.st_mtime_ns, st.st_size))
+            except OSError:
+                pass
+    return sig
+
+
+def invalidate_workspace_cache(workspace: str | Path | None = None) -> None:
+    """Drop the cached state for one workspace (or all of them).
+    Normally unnecessary — file writes invalidate it — but tests and
+    anything that changes state without touching a file can force it."""
+    with _STATE_CACHE_LOCK:
+        if workspace is None:
+            _STATE_CACHE.clear()
+        else:
+            _STATE_CACHE.pop(str(workspace), None)
+
+
+def _workspace_state_files(workspace: Path) -> dict:
+    """The file-derived part of workspace_state: jobs, batches,
+    library, examples, settings, skipped, folders, chat."""
     jobs = []
     skipped: list[dict] = []
     jobs_root = workspace / "jobs"
@@ -167,7 +275,6 @@ def workspace_state(workspace: Path) -> dict:
         library = []
     return {
         "workspace": str(workspace),
-        "engines": engine_status(workspace),
         "jobs": jobs,
         "batches": batches,
         "library": [{"slug": h["slug"], "name": h["name"], "kind": h["kind"],
@@ -185,8 +292,29 @@ def workspace_state(workspace: Path) -> dict:
                                  if p.is_file())[:30],
         },
         "chat": chat_history(workspace)[-40:],
-        "runs": _runs(),
     }
+
+
+def workspace_state(workspace: Path) -> dict:
+    """The whole workshop in one dict: the cached file-derived state
+    plus freshly computed engines and runs."""
+    global LAST_STATE_MS
+    started = time.monotonic()
+    ws = Path(workspace)
+    signature = _workspace_signature(ws)
+    key = str(ws)
+    with _STATE_CACHE_LOCK:
+        entry = _STATE_CACHE.get(key)
+        if entry is not None and entry["signature"] == signature:
+            files_state = entry["state"]
+        else:
+            files_state = _workspace_state_files(ws)
+            _STATE_CACHE[key] = {"signature": signature, "state": files_state}
+    state = dict(files_state)
+    state["engines"] = engine_status(ws)
+    state["runs"] = _runs()
+    LAST_STATE_MS = (time.monotonic() - started) * 1000.0
+    return state
 
 
 # ------------------------------------------------------------------- actions
@@ -210,17 +338,50 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         job.retry()
         return {"ok": True, "job": job.dir.name,
                 "detail": f"{job.dir.name} is approved again — build when ready"}
+    if action == "delete":
+        job = _job(workspace, str(payload.get("job", "")))
+        name = job.dir.name
+        job.delete()
+        return {"ok": True, "detail": f"deleted job {name}"}
+    if action == "rename":
+        job = _job(workspace, str(payload.get("job", "")))
+        renamed = job.rename(str(payload.get("name", "")))
+        return {"ok": True, "job": renamed.dir.name,
+                "detail": f"renamed to {renamed.dir.name}"}
+    if action == "duplicate":
+        job = _job(workspace, str(payload.get("job", "")))
+        copy = job.duplicate()
+        return {"ok": True, "job": copy.dir.name,
+                "detail": f"duplicated as {copy.dir.name} — waiting at the plan gate"}
+    if action == "edit-part":
+        job = _job(workspace, str(payload.get("job", "")))
+        fields = payload.get("fields") or {}
+        if not isinstance(fields, dict):
+            raise ValueError("edit-part needs a fields object")
+        new_state = job.edit_part(str(payload.get("part", "")), fields)
+        detail = f"part {payload.get('part')} updated"
+        if new_state == "awaiting_approval":
+            detail += " — the description changed, so it needs approval again"
+        return {"ok": True, "job": job.dir.name, "state": new_state,
+                "detail": detail}
     if action == "build":
         job = _job(workspace, str(payload.get("job", "")))
 
-        def do_build():
+        def do_build(cancel, report):
             from .builder import build_job
-            report = build_job(job, workspace)
+            stages = {"export": 0.3, "check": 0.65, "critic": 0.85}
+
+            def on_progress(stage, detail):
+                report(stages.get(stage), f"{stage}: {detail}")
+
+            report(0.05, "starting the build")
+            report_data = build_job(job, workspace, cancel=cancel,
+                                    progress=on_progress)
             (job.dir / "build-report.json").write_text(
-                json.dumps(report, indent=2) + "\n")
-            if not report.get("ok"):
+                json.dumps(report_data, indent=2) + "\n")
+            if not report_data.get("ok"):
                 raise RuntimeError("build did not pass: "
-                                   + "; ".join(report.get("problems", [])[:3]))
+                                   + "; ".join(report_data.get("problems", [])[:3]))
             return f"built {job.dir.name}"
         return {"ok": True, "job": job.dir.name,
                 "run": _start_run("build", job.dir.name, do_build)}
@@ -251,8 +412,12 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             raise ValueError("type what you want first")
         desc = live.plan_from_words(words, seats, kind=str(payload.get("kind", "scene")))
         job = Job.create(workspace / "jobs", desc)
-        return {"ok": True, "job": job.dir.name,
-                "detail": f"draft job created: {job.dir.name} — approve it to build"}
+        detail = f"draft job created: {job.dir.name} — approve it to build"
+        used = live.last_plan_seat()
+        if used.get("seat") == "fallback":
+            detail += (" (drafted by the local fallback model — "
+                       "the Gemini seat could not be reached)")
+        return {"ok": True, "job": job.dir.name, "detail": detail}
     if action == "new-example":
         name = str(payload.get("example", ""))
         if name in EXCLUDED_EXAMPLES:
@@ -269,8 +434,14 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             raise ValueError("type a prompt first")
         job_name = payload.get("job") or None
         batch, bdir = imagegen.new_batch(workspace, prompt, job=job_name)
-        run = _start_run("images", batch["slug"],
-                         lambda: imagegen.generate(workspace, bdir))
+
+        def do_images(cancel, report):
+            def on_progress(done, total, text):
+                report(done / total if total else None, text)
+            return imagegen.generate(workspace, bdir, cancel=cancel,
+                                     progress=on_progress)
+
+        run = _start_run("images", batch["slug"], do_images)
         return {"ok": True, "run": run, "batch": batch["slug"],
                 "detail": "generating — candidates appear below as they land"}
     if action == "decide":
@@ -288,7 +459,14 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         bdir = workspace / "images" / slug
         if bdir.parent != workspace / "images" or not bdir.is_dir():
             raise ValueError(f"no batch {slug!r}")
-        run = _start_run("images", slug, lambda: imagegen.generate(workspace, bdir))
+
+        def do_reroll(cancel, report):
+            def on_progress(done, total, text):
+                report(done / total if total else None, text)
+            return imagegen.generate(workspace, bdir, cancel=cancel,
+                                     progress=on_progress)
+
+        run = _start_run("images", slug, do_reroll)
         return {"ok": True, "run": run, "detail": "generating another round"}
     if action == "cloud-mesh":
         from . import cloudmesh
@@ -314,16 +492,51 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
                     f"job {job_name!r} is {job.state!r} — the cloud mesh "
                     "step only lands in a job still waiting at the plan gate")
 
-        def do_mesh():
+        def do_mesh(cancel, report):
+            stages = {"upload": 0.1, "preprocess": 0.25, "generate": 0.55,
+                      "extract": 0.85, "done": 1.0}
+
+            def on_progress(stage, detail):
+                report(stages.get(stage), f"{stage}: {detail}")
+
             result = cloudmesh.cloud_mesh(
                 workspace, photo_path, job=job_name,
-                seed=payload.get("seed"))
+                seed=payload.get("seed"), cancel=cancel, progress=on_progress)
             return (f"meshed {photo_path.name} into job {result['job']} "
                     f"({result['parts']} parts) — waiting at the plan gate")
         run = _start_run("cloud-mesh", photo_path.name, do_mesh)
         return {"ok": True, "run": run,
                 "detail": "meshing on Hugging Face's free GPU — a few "
                           "minutes; the photo leaves this machine"}
+    if action == "intake":
+        from .intake import intake_photo
+        photo = str(payload.get("photo", "")).strip()
+        if not photo:
+            raise ValueError("pick a photo first")
+        desc, dest_dir = intake_photo(workspace, photo)
+        job = Job.create(workspace / "jobs", desc)
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"photo filed as {dest_dir.name}; "
+                          f"job {job.dir.name} is waiting at the plan gate"}
+    if action == "ingest":
+        from .ingest import ingest
+
+        path = str(payload.get("file", "")).strip()
+        if not path:
+            raise ValueError("pick a file first")
+        desc = ingest(path)
+        job = Job.create(workspace / "jobs", desc)
+        return {"ok": True, "job": job.dir.name,
+                "detail": f"read {Path(path).name} into job {job.dir.name} — "
+                          "waiting at the plan gate; the original file "
+                          "was not changed"}
+    if action == "unreal-package":
+        from .unreal import package_unreal
+
+        job = _job(workspace, payload.get("job", ""))
+        dest_root = Path(payload.get("dest")) if payload.get("dest") else job.dir
+        dest = package_unreal(job, dest_root)
+        return {"ok": True, "detail": f"Unreal package written to {dest}"}
     if action == "settings":
         current = settings_mod.load_settings(workspace)
         if "critic_reference" in payload:
@@ -331,6 +544,126 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
             settings_mod.save_settings(workspace, current)
         return {"ok": True, "detail": "settings saved"}
     raise ValueError(f"unknown action {action!r}")
+
+
+# ------------------------------------------------- reports + recovery (v1.5)
+
+def build_report(workspace: Path, name: str) -> dict | None:
+    """The full build report for a job: the build-report.json record
+    plus the measured triangle count from the exporter's stats file
+    (when one landed). None when the job has never built."""
+    job = _job(workspace, name)
+    report_path = job.dir / "build-report.json"
+    if not report_path.exists():
+        return None
+    try:
+        report = json.loads(report_path.read_text())
+    except (OSError, ValueError):
+        return None
+    total_tris = None
+    per_part: dict = {}
+    if job.output_dir.exists():
+        for stats_path in sorted(job.output_dir.glob("*.stats.json")):
+            try:
+                stats = json.loads(stats_path.read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(stats.get("total_tris"), int):
+                total_tris = stats["total_tris"]
+            if isinstance(stats.get("parts"), dict):
+                per_part.update(stats["parts"])
+    report = dict(report)
+    report["total_tris"] = total_tris
+    report["tris_by_part"] = per_part
+    return report
+
+
+def recover_stale(workspace: Path) -> list[str]:
+    """Return jobs stranded in `building`/`checking` by a crash to
+    `approved` — unless a build is genuinely running (see
+    jobs.recover_stale_jobs). Returns the recovered job names."""
+    from .jobs import recover_stale_jobs
+
+    return recover_stale_jobs(workspace)
+
+
+def debug_report(workspace: Path, job: str | None = None) -> str:
+    """One readable report for diagnosing a problem: versions, engine
+    status, free RAM, the RAM floor, workspace state timing, the
+    selected job's state + session log tail + build report summary,
+    and recent runs. Never includes secrets — engine status is
+    booleans only, and token-shaped strings are scrubbed."""
+    import platform
+    import re
+    import sys
+
+    from . import governor
+
+    lines = ["SKULLPT debug report",
+             f"workspace: {workspace}",
+             f"python: {sys.version.split()[0]}  platform: {platform.system()} "
+             f"{platform.release()}"]
+    try:
+        import PySide6
+        lines.append(f"PySide6: {PySide6.__version__}")
+    except Exception:
+        lines.append("PySide6: not installed")
+    engines = engine_status(workspace)
+    lines.append("engines: " + ", ".join(
+        f"{k}={'ready' if v else 'missing'}" for k, v in engines.items()))
+    free = governor.free_ram_mb()
+    lines.append(f"free RAM: {free} MB (floor is "
+                 f"{governor.adaptive_min_free_mb()} MB)")
+    if LAST_STATE_MS is not None:
+        lines.append(f"last workspace_state: {LAST_STATE_MS:.1f} ms")
+    try:
+        from . import qtbench
+        timings = qtbench.startup_timings()
+        if timings:
+            lines.append("startup timings: " + "; ".join(
+                f"{stage} {ms:.0f} ms" for stage, ms in timings))
+    except Exception:
+        pass
+    state = workspace_state(workspace)
+    lines.append(f"jobs: {len(state['jobs'])}  batches: "
+                 f"{len(state['batches'])}  library: {len(state['library'])}")
+    if state.get("skipped"):
+        lines.append("could not read: " + "; ".join(
+            f"{s['where']}/{s['name']}: {s['reason']}" for s in state["skipped"]))
+    if job:
+        try:
+            target = _job(workspace, job)
+            lines.append(f"job {job}: state {target.state}")
+            report = build_report(workspace, job)
+            if report is not None:
+                lines.append(f"  last build: {'passed' if report.get('ok') else 'failed'}"
+                             + (f" (stage {report.get('stage')})" if report.get("stage") else ""))
+                for check in (report.get("machine_checks") or {}).get("checks", []):
+                    lines.append(f"  check {check.get('check')}: "
+                                 f"{'pass' if check.get('ok') else 'FAIL'} — {check.get('detail', '')}")
+                if report.get("total_tris") is not None:
+                    lines.append(f"  triangles: {report['total_tris']}")
+                problems = report.get("problems") or []
+                if problems:
+                    lines.append("  problems: " + "; ".join(problems[:5]))
+            log_path = target.log_path
+            if log_path.exists():
+                tail = log_path.read_text(errors="replace").splitlines()[-15:]
+                lines.append("  session log (last 15 lines):")
+                lines.extend(f"    {line}" for line in tail)
+        except Exception as exc:
+            lines.append(f"job {job}: could not read ({exc})")
+    runs = _runs()
+    if runs:
+        lines.append("recent runs:")
+        for run in runs[-5:]:
+            lines.append(f"  {run['kind']} {run['label']}: {run['status']}"
+                         + (f" — {run['detail']}" if run.get("detail") else ""))
+    text = "\n".join(lines) + "\n"
+    # Defensive scrub: a token pasted into a log line must never leave
+    # in a report the user sends on.
+    text = re.sub(r"(hf_|sk-|ghp_|github_pat_)[A-Za-z0-9_\-]{8,}", "[redacted]", text)
+    return text
 
 
 
@@ -432,6 +765,21 @@ _CHAT_HELP = ("Commands I take right here: \"make <what you want>\" drafts a job
               "build again; \"status\" reports the workshop.")
 
 
+def parse_plan_words(message: str) -> str | None:
+    """The words after a make/create/design/plan command, or None when
+    the message is not a drafting command. The chat router and the Qt
+    Bench share this so both agree on what "make ..." means."""
+    import re
+
+    low = message.strip().lower()
+    if low in ("build",):
+        return None
+    match = re.match(r"^(make|build me|create|design|plan)\s+(me\s+)?(.+)$", low)
+    if not match:
+        return None
+    return match.group(3).strip() or None
+
+
 def chat_reply(workspace: Path, message: str, selected: str | None = None) -> dict:
     """One chat turn: commands route to the same act() the buttons use;
     open conversation goes to the planner seat when its key is set, and
@@ -516,10 +864,8 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
         except Exception as exc:
             return {"reply": str(exc), "actions": actions}
 
-    make_match = re.match(
-        r"^(make|build me|create|design|plan)\s+(me\s+)?(.+)$", low)
-    if make_match and low not in ("build",):
-        words = make_match.group(3)
+    words = parse_plan_words(text)
+    if words:
         try:
             result = act(workspace, "plan", {"words": words, "kind": "scene"})
             job_name = result["job"]
@@ -550,34 +896,39 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
             detail = result.get("detail") or f"{verb} started for {job_name}"
             return {"reply": f"{detail}.", "actions": actions}
 
-    if _planner_ready(workspace):
-        try:
-            from . import live
-            from .seats import load_seats
-            seats_path = workspace / "seats.json"
-            seats = load_seats(seats_path if seats_path.exists() else None)
-            st = workspace_state(workspace)
-            context = ("You are the assistant inside the SKULLPT Bench, a local "
-                       "workshop that turns descriptions into assets. Jobs: "
-                       + ("; ".join(f"{j['name']} ({j['state']})" for j in st["jobs"])
-                          or "none")
-                       + f". Selected job: {selected or 'none'}. Answer briefly and "
-                       "plainly. If the user wants something made, tell them to start "
-                       "their message with 'make'.")
-            # gemini_text takes one seat dict, not the whole seats dict,
-            # and has no system kwarg — the context goes into the prompt.
-            seat = seats["planner"]
-            answer = live.gemini_text(seat, context + "\n\nUser: " + text)
-            return {"reply": answer.strip() or "(the planner seat answered with nothing)",
+    # Open conversation: the planner seat first, the local fallback
+    # seat second (T20). When neither brain can answer, the reply
+    # says so plainly instead of faking one.
+    try:
+        from . import live
+        from .seats import load_seats
+        seats_path = workspace / "seats.json"
+        seats = load_seats(seats_path if seats_path.exists() else None)
+        st = workspace_state(workspace)
+        context = ("You are the assistant inside the SKULLPT Bench, a local "
+                   "workshop that turns descriptions into assets. Jobs: "
+                   + ("; ".join(f"{j['name']} ({j['state']})" for j in st["jobs"])
+                      or "none")
+                   + f". Selected job: {selected or 'none'}. Answer briefly and "
+                   "plainly. If the user wants something made, tell them to start "
+                   "their message with 'make'.")
+        answer, role, _err = live.text_with_fallback(
+            seats, context + "\n\nUser: " + text)
+        reply = answer.strip() or "(the planner seat answered with nothing)"
+        if role == "fallback":
+            reply += (" (answered by the local fallback model — "
+                      "the Gemini seat could not be reached)")
+        return {"reply": reply, "actions": actions}
+    except Exception as exc:
+        from .live import SeatNotConfigured
+        if isinstance(exc, SeatNotConfigured):
+            return {"reply": "I take commands here — 'make …', 'picture of …', "
+                             "'mesh <photo path>', 'approve', 'build', 'file', 'retry', 'status'. "
+                             "For open conversation I need the "
+                             "Gemini key set in the environment (GEMINI_API_KEY) — without it "
+                             "there's no brain on this seat, and I won't fake one.",
                     "actions": actions}
-        except Exception as exc:
-            return {"reply": str(exc), "actions": actions}
-    return {"reply": "I take commands here — 'make …', 'picture of …', "
-                     "'mesh <photo path>', 'approve', 'build', 'file', 'retry', 'status'. "
-                     "For open conversation I need the "
-                     "Gemini key set in the environment (GEMINI_API_KEY) — without it "
-                     "there's no brain on this seat, and I won't fake one.",
-            "actions": actions}
+        return {"reply": str(exc), "actions": actions}
 
 
 def job_view_page(workspace: Path, name: str) -> str:
