@@ -1,4 +1,4 @@
-# SKULLPT — v1.8
+# SKULLPT — v1.8.1
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -532,6 +532,14 @@ there). The first real mesh happens on a machine with a token.
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
 
+## v1.8.1 — The new icon
+
+- **A stone skull with a chisel.** The desktop icon is now a stone
+  sculpture of a skull with a sculptor's chisel leaning against it,
+  replacing the flat cartoon skull. The amber accent in the Bench is
+  unchanged: it is now the fixed documented token `#f5a623`, the
+  value the old icon's amber crack carried.
+
 ## v1.8 — The seamless install (S1–S6)
 
 - **The default install is the full install.** One double-click
@@ -817,6 +825,6 @@ model are installed.
     examples/      example Description Files
     tests/         the test suite
     Install-SKULLPT.desktop   double-click installer (runs install.sh in GUI mode)
-    skullpt-icon.svg          the SKULLPT icon (skull motif)
+    skullpt-icon.png          the SKULLPT icon (stone skull sculpture with chisel)
     .venv/         private virtualenv, created by install.sh — PySide6
                    lives here and nowhere else

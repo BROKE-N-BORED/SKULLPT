@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
@@ -250,7 +249,7 @@ class InstallerTextTests(unittest.TestCase):
         self.assertIn("SKULLPT.desktop", self.install)
         self.assertIn(".local/share/applications", self.install)
         self.assertIn(".local/bin/skullpt", self.install)
-        self.assertIn("skullpt-icon.svg", self.install)
+        self.assertIn("skullpt-icon.png", self.install)
 
 
 class DesktopFileTests(unittest.TestCase):
@@ -283,12 +282,15 @@ class DesktopFileTests(unittest.TestCase):
         # v1.3: the double-click installer launches in GUI mode.
         self.assertIn("--gui", value)
 
-    def test_icon_is_valid_svg(self):
-        path = ROOT / "skullpt-icon.svg"
+    def test_icon_is_valid_png(self):
+        path = ROOT / "skullpt-icon.png"
         self.assertTrue(path.exists())
-        root = ET.parse(path).getroot()
-        self.assertTrue(root.tag.endswith("svg"))
-        self.assertGreater(len(list(root)), 0)
+        with path.open("rb") as handle:
+            self.assertEqual(handle.read(8), b"\x89PNG\r\n\x1a\n")
+            _length, kind = struct.unpack(">I4s", handle.read(8))
+            self.assertEqual(kind, b"IHDR")
+            width, height = struct.unpack(">II", handle.read(8))
+        self.assertEqual((width, height), (512, 512))
 
     def test_generated_launcher_template_is_glib_safe(self):
         install = (ROOT / "install.sh").read_text()
@@ -296,7 +298,7 @@ class DesktopFileTests(unittest.TestCase):
         # nested quotes, no command substitution.
         self.assertIn('Exec="$install_dir/run.sh"', install)
         self.assertIn("Terminal=false", install)
-        self.assertIn("Icon=$install_dir/skullpt-icon.svg", install)
+        self.assertIn("Icon=$install_dir/skullpt-icon.png", install)
         self.assertIn('chmod +x "$desktop_dir/SKULLPT.desktop"'
                       ' "$apps_dir/SKULLPT.desktop"', install)
 

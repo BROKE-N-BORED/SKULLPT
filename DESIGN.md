@@ -1,7 +1,7 @@
 ---
-version: 1.8
+version: 1.8.1
 name: SKULLPT-design-system
-description: The SKULLPT look, a native Linux design and asset shell. A warm near-black canvas, bone text, and amber as the one chromatic accent, sampled from the skull icon's amber crack. Warp-derived palette logic (warm dark, hairline-only elevation, tight radii), Cursor's one-accent discipline, JetBrains Mono on every code surface. Built for an 8 GB no-GPU Mint PC: cheap motion only, nothing decorative that costs a frame.
+description: The SKULLPT look, a native Linux design and asset shell. A warm near-black canvas, bone text, and amber as the one chromatic accent, the documented `#f5a623` token. Warp-derived palette logic (warm dark, hairline-only elevation, tight radii), Cursor's one-accent discipline, JetBrains Mono on every code surface. Built for an 8 GB no-GPU Mint PC: cheap motion only, nothing decorative that costs a frame.
 
 colors:
   primary: "#f5a623"
@@ -115,13 +115,15 @@ The redesign report said amber was "sampled from
 `skullpt-icon.svg`", but the v1.2 icon was monochrome (bone skull
 on canvas, no amber anywhere), so there was nothing to sample. v1.5
 fixed the premise instead of faking the sampling: the skull's crack
-is now amber `#f5a623`, and the code samples the icon's most
+is now amber `#f5a623`, and the code sampled the icon's most
 saturated hex at runtime (`qtdesign.sample_amber()`, the crack's
 chroma is 210; bone is 16, canvas is 5, so the pick is
-unambiguous). The icon is the single source of truth for the
-accent. If the icon cannot be read, the code falls back to the
-documented `#f5a623`, the fallback is the documented value, not a
-second guess.
+unambiguous). The icon was the single source of truth for the
+accent. v1.8.1 changed the icon to a raster stone sculpture of a
+skull with a chisel, which has no hex to sample, so the sampled
+value became the fixed documented token: `AMBER()` returns
+`#f5a623` directly, and the contrast table below still validates
+it. Nothing about the accent's value changed, only where it lives.
 
 `#f5a623` was chosen because near-black text on it passes WCAG AA
 at 8.55:1 and amber text on canvas passes at 8.55:1 (see the

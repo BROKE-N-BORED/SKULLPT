@@ -1,29 +1,30 @@
 """The SKULLPT look, in one place (R3).
 
 Tokens come from DESIGN.md (the single source of truth for how the
-Bench looks). The amber accent is sampled from skullpt-icon.svg at
-runtime - the icon is the single source of truth for the accent, so
-the hex is never guessed in code. If the icon cannot be read, the
-documented amber is used as a fallback (see DESIGN.md).
+Bench looks). The amber accent is the documented token #f5a623 -
+the value the v1.5 icon's amber crack carried, validated by the
+contrast table. It was sampled from the icon at runtime while the
+icon was an SVG (v1.5-v1.8); the v1.8.1 icon is a raster stone
+sculpture, so the sampled value became the fixed token instead of
+being guessed a second time (see DESIGN.md).
 
-Pure parts (tokens, amber sampling, contrast math) work without Qt;
-the font/icon/stylesheet parts need PySide6 and degrade silently
-when it is missing.
+Pure parts (tokens, contrast math) work without Qt; the font/icon/
+stylesheet parts need PySide6 and degrade silently when it is
+missing.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
-_ICON_PATH = _ROOT / "skullpt-icon.svg"
 _ICONS_DIR = _HERE / "icons"
 _FONTS_DIR = _HERE / "fonts"
 
-# The documented amber (DESIGN.md). Only used when the icon cannot
-# be read - the live value always comes from sample_amber().
-_FALLBACK_AMBER = "#f5a623"
+# The documented amber (DESIGN.md). The value the v1.5 icon's amber
+# crack carried, sampled at runtime in v1.5-v1.8; the fixed token
+# since the v1.8.1 icon became a raster image.
+_AMBER = "#f5a623"
 
 # Warp-derived tokens, skull-adapted (DESIGN.md). Canvas-soft and
 # hairline are Warp's steps above its canvas, applied to SKULLPT's
@@ -58,31 +59,9 @@ def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
     return "#%02x%02x%02x" % tuple(max(0, min(255, v)) for v in rgb)
 
 
-def _chroma(hex_value: str) -> int:
-    r, g, b = _hex_to_rgb(hex_value)
-    return max(r, g, b) - min(r, g, b)
-
-
-def sample_amber(icon_path: Path | None = None) -> str:
-    """The amber accent, read from the icon file: the most saturated
-    hex in the SVG. The icon carries exactly one chromatic color
-    (the amber crack, v1.5); canvas and bone are near-grey and lose
-    on chroma by a wide margin."""
-    path = Path(icon_path) if icon_path is not None else _ICON_PATH
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return _FALLBACK_AMBER
-    found = re.findall(r"#[0-9a-fA-F]{6}", text)
-    if not found:
-        return _FALLBACK_AMBER
-    best = max(found, key=_chroma)
-    return best.lower()
-
-
 def AMBER() -> str:
-    """The live accent hex (sampled, not hard-coded)."""
-    return sample_amber()
+    """The live accent hex: the documented token (DESIGN.md)."""
+    return _AMBER
 
 
 def lighten(hex_value: str, amount: float) -> str:

@@ -641,15 +641,16 @@ class ViewportGeometryTests(unittest.TestCase):
 # ------------------------------------------------------- R3 + R4 (no Qt)
 
 class DesignTokenTests(unittest.TestCase):
-    """R3/R4: the amber comes from the icon, every text pair passes
-    WCAG AA, and the Qt files carry no em dashes (U33)."""
+    """R3/R4: the amber is the documented token, every text pair
+    passes WCAG AA, and the Qt files carry no em dashes (U33)."""
 
-    def test_amber_is_sampled_from_the_icon(self):
+    def test_amber_is_the_documented_token(self):
         from skullpt import qtdesign
 
-        self.assertEqual(qtdesign.sample_amber(), "#f5a623")
-        icon_text = (ROOT / "skullpt-icon.svg").read_text()
-        self.assertIn("#f5a623", icon_text)
+        # v1.8.1: the icon is a raster stone sculpture, so the amber
+        # is the fixed documented token, not sampled at runtime.
+        self.assertEqual(qtdesign.AMBER(), "#f5a623")
+        self.assertTrue((ROOT / "skullpt-icon.png").exists())
 
     def test_every_text_pair_passes_wcag_aa(self):
         from skullpt import qtdesign

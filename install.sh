@@ -763,7 +763,7 @@ Type=Application
 Name=SKULLPT
 Comment=SKULLPT — native Linux design and asset workshop
 Exec="$install_dir/run.sh"
-Icon=$install_dir/skullpt-icon.svg
+Icon=$install_dir/skullpt-icon.png
 Terminal=false
 Categories=Development;Graphics;3DGraphics;
 EOF

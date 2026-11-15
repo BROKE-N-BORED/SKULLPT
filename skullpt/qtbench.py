@@ -103,12 +103,12 @@ def hex_to_rgb(value: str) -> tuple[float, float, float]:
 
 def _selection_rgb() -> tuple[float, float, float]:
     """The viewport's selection highlight in the identity amber,
-    sampled from the icon like every other amber in the app. Falls
+    the documented token like every other amber in the app. Falls
     back to a fixed amber when the design module cannot load."""
     try:
-        from .qtdesign import sample_amber
+        from .qtdesign import AMBER
 
-        return hex_to_rgb(sample_amber())
+        return hex_to_rgb(AMBER())
     except Exception:
         return (0.93, 0.62, 0.12)
 

@@ -1,5 +1,17 @@
 # SKULLPT — Changelog
 
+## v1.8.1 — 2026-11-15 — The new icon
+
+- NEW ICON: the desktop icon is now a stone sculpture of a skull
+  with a sculptor's chisel leaning against it (`skullpt-icon.png`,
+  512x512), replacing the flat cartoon skull SVG. The old icon
+  looked like a virus; the new one says what SKULLPT is - sculpting.
+- AMBER ACCENT UNCHANGED: the Bench accent is still `#f5a623`. It
+  was sampled from the old icon's amber crack at runtime (v1.5-v1.8);
+  a raster icon has no hex to sample, so the sampled value is now
+  the fixed documented token (`qtdesign.AMBER()`), and the contrast
+  table still validates it.
+
 ## v1.8 — 2026-11-14 — The seamless install (S1–S6)
 
 The double-click install now installs everything, the keys are set
