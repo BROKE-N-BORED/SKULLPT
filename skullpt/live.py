@@ -1,8 +1,11 @@
 """Live seats — real provider calls behind the planner and critic seats.
 
 Until v0.6 the seats were configuration only. This module is the wire:
-stdlib HTTP calls to the provider the seat names, keys read from the
-environment at call time and never stored. Endpoint overrides exist so
+stdlib HTTP calls to the provider the seat names. A key comes from the
+environment first, then from the workspace's key file (v1.8: Settings
+saves Gemini and Groq keys there, owner-only, gitignored — the same
+precedence the HF token has always had). A key is never stored by the
+shell anywhere else, and never logged. Endpoint overrides exist so
 the wiring itself can be tested against a local mock server:
 
   DESIGNSHELL_GEMINI_URL   replaces the Gemini generateContent endpoint
@@ -47,21 +50,39 @@ def _post(url: str, payload: dict, headers: dict | None = None, timeout: int = 1
         raise SeatCallFailed(f"provider returned non-JSON: {exc}") from exc
 
 
-def _key_for(seat: dict) -> str:
+def _key_for(seat: dict, workspace=None) -> str:
+    """The seat's key: environment first, then the workspace's key
+    file (v1.8). A seat with no env_key (Ollama) needs no key."""
     env_key = seat.get("env_key")
     if not env_key:
         return ""
     key = os.environ.get(env_key, "")
-    if not key:
-        raise SeatNotConfigured(
-            f"seat {seat.get('provider')}/{seat.get('model')} needs {env_key} "
-            "set in the environment — refusing to fake a live call")
-    return key
+    if key:
+        return key
+    if workspace is not None:
+        from . import tokenfile
+        stored = tokenfile.load_key_for_env(workspace, env_key)
+        if stored:
+            return stored
+    raise SeatNotConfigured(
+        f"seat {seat.get('provider')}/{seat.get('model')} has no key — "
+        "paste one in the Bench Settings window")
+
+
+def key_available(seat: dict, workspace=None) -> bool:
+    """True when the seat has a key to call with (env or key file).
+    The critic and the engine status use this; it never returns the
+    key itself."""
+    try:
+        return bool(_key_for(seat, workspace))
+    except SeatNotConfigured:
+        return False
 
 
 def gemini_text(seat: dict, prompt: str, image_png: bytes | None = None,
-                extra_images: list[bytes] | None = None) -> str:
-    key = _key_for(seat)
+                extra_images: list[bytes] | None = None,
+                workspace=None) -> str:
+    key = _key_for(seat, workspace)
     override = os.environ.get("DESIGNSHELL_GEMINI_URL")
     if override:
         url = override
@@ -87,8 +108,8 @@ def gemini_text(seat: dict, prompt: str, image_png: bytes | None = None,
     return text
 
 
-def groq_text(seat: dict, prompt: str) -> str:
-    key = _key_for(seat)
+def groq_text(seat: dict, prompt: str, workspace=None) -> str:
+    key = _key_for(seat, workspace)
     url = os.environ.get("DESIGNSHELL_GROQ_URL") or "https://api.groq.com/openai/v1/chat/completions"
     data = _post(url, {
         "model": seat.get("model", "gpt-oss-20b"),
@@ -113,14 +134,16 @@ def ollama_text(seat: dict, prompt: str) -> str:
     return text
 
 
-def seat_text(seat: dict, prompt: str, image_png: bytes | None = None) -> str:
+def seat_text(seat: dict, prompt: str, image_png: bytes | None = None,
+              workspace=None) -> str:
     provider = seat.get("provider")
     if provider == "gemini":
-        return gemini_text(seat, prompt, image_png=image_png)
+        return gemini_text(seat, prompt, image_png=image_png,
+                           workspace=workspace)
     if provider == "groq":
         if image_png is not None:
             raise SeatNotConfigured("the Groq seat is text-only here; vision belongs to the Gemini seat")
-        return groq_text(seat, prompt)
+        return groq_text(seat, prompt, workspace=workspace)
     if provider == "ollama":
         if image_png is not None:
             raise SeatNotConfigured("the Ollama fallback seat is text-only in this wiring")
@@ -146,7 +169,8 @@ def last_plan_seat() -> dict:
     return dict(_LAST_PLAN)
 
 
-def text_with_fallback(seats: dict, prompt: str) -> tuple[str, str, str | None]:
+def text_with_fallback(seats: dict, prompt: str,
+                       workspace=None) -> tuple[str, str, str | None]:
     """Ask the planner seat; if it cannot answer (no key, provider
     error, unreachable), ask the local fallback seat instead.
 
@@ -155,12 +179,14 @@ def text_with_fallback(seats: dict, prompt: str) -> tuple[str, str, str | None]:
     reason, not the fallback's connection-refused noise."""
     primary_error: Exception | None = None
     try:
-        return seat_text(seats.get("planner", {}), prompt), "planner", None
+        return seat_text(seats.get("planner", {}), prompt,
+                         workspace=workspace), "planner", None
     except (SeatNotConfigured, SeatCallFailed) as exc:
         primary_error = exc
     fallback_seat = seats.get("fallback", {})
     try:
-        return seat_text(fallback_seat, prompt), "fallback", str(primary_error)
+        return seat_text(fallback_seat, prompt,
+                         workspace=workspace), "fallback", str(primary_error)
     except (SeatNotConfigured, SeatCallFailed):
         assert primary_error is not None
         raise primary_error
@@ -207,21 +233,24 @@ def _json_from_text(text: str) -> dict:
         raise SeatCallFailed(f"model returned invalid JSON: {exc}") from exc
 
 
-def _repair_text(seats: dict, prompt: str) -> tuple[str, str, str | None]:
+def _repair_text(seats: dict, prompt: str,
+                 workspace=None) -> tuple[str, str, str | None]:
     """Ask the repairer seat to fix a draft; if it cannot answer (no
     key, provider error), the planner repairs its own draft instead
     (via text_with_fallback, which itself falls back to Ollama).
     Returns (text, role-used, repairer-error-or-None)."""
     repairer_error: Exception | None = None
     try:
-        return seat_text(seats.get("repairer", {}), prompt), "repairer", None
+        return seat_text(seats.get("repairer", {}), prompt,
+                         workspace=workspace), "repairer", None
     except (SeatNotConfigured, SeatCallFailed) as exc:
         repairer_error = exc
-    text, role, _ = text_with_fallback(seats, prompt)
+    text, role, _ = text_with_fallback(seats, prompt, workspace=workspace)
     return text, role, str(repairer_error)
 
 
-def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
+def plan_from_words(words: str, seats: dict, kind: str = "scene",
+                    workspace=None) -> dict:
     """Draft a Description File from plain words via the planner seat.
 
     The draft still goes through the plan gate — this fills in the form,
@@ -244,7 +273,7 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
         "into ONE Description File. Reply with ONLY the JSON object, no "
         "commentary.\n\n" + FORMAT_SPEC +
         f"\nKind: {kind}\nRequest: {words}\n")
-    raw, role = _plan_text(seats, prompt)
+    raw, role = _plan_text(seats, prompt, workspace=workspace)
     desc = _json_from_text(raw)
     desc.setdefault("kind", kind)
     problems = desc_mod.validate(desc)
@@ -258,7 +287,8 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
             "\nProblems:\n- " + "\n- ".join(problems) +
             "\n\nDraft:\n" + json.dumps(desc) + "\n")
         try:
-            repaired_raw, repair_role, _ = _repair_text(seats, repair_prompt)
+            repaired_raw, repair_role, _ = _repair_text(
+                seats, repair_prompt, workspace=workspace)
             repaired = _json_from_text(repaired_raw)
             repaired.setdefault("kind", kind)
             still = desc_mod.validate(repaired)
@@ -280,13 +310,15 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene") -> dict:
     return desc
 
 
-def _plan_text(seats: dict, prompt: str) -> tuple[str, str]:
+def _plan_text(seats: dict, prompt: str,
+               workspace=None) -> tuple[str, str]:
     """The planner call with fallback, recording which seat answered.
     The fallback only covers a seat that could not answer at all; a
     draft that parses to JSON but fails validation is repaired by
     plan_from_words (T22), not here."""
     try:
-        text, role, primary_error = text_with_fallback(seats, prompt)
+        text, role, primary_error = text_with_fallback(
+            seats, prompt, workspace=workspace)
     except (SeatNotConfigured, SeatCallFailed) as exc:
         _LAST_PLAN.update(seat=None, primary_error=str(exc))
         raise

@@ -240,7 +240,8 @@ def main(argv: list[str] | None = None) -> int:
             seats_path = ws / "seats.json"
             seats = load_seats(seats_path if seats_path.exists() else None)
             try:
-                desc = live.plan_from_words(" ".join(args.words), seats, kind=args.kind)
+                desc = live.plan_from_words(" ".join(args.words), seats, kind=args.kind,
+                                          workspace=ws)
             except (live.SeatNotConfigured, live.SeatCallFailed) as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
@@ -256,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             seats_path = ws / "seats.json"
             seats = load_seats(seats_path if seats_path.exists() else None)
             previews = [str(p) for p in sorted(job.output_dir.glob("*.png"))]
-            critic = GeminiCritic(seats.get("critic", {}))
+            critic = GeminiCritic(seats.get("critic", {}), workspace=ws)
             desc = job.load_description()
             reference_png = None
             from . import settings as settings_mod

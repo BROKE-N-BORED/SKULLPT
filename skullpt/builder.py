@@ -25,21 +25,21 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
                 cancel=None, progress=None):
     """Critic pass, with the vision patch loop when a live critic is seated.
 
-    The Gemini critic runs only when its key is in the environment;
-    otherwise the offline critic answers and says so. When the vision
-    critic returns machine-appliable patches, they are applied as
-    parameter changes, the Blender exporter re-runs, and the critic
-    looks again — at most MAX_VISION_ROUNDS rounds (blueprint cap).
+    The Gemini critic runs only when its key is set (environment or
+    the workspace's key file, v1.8); otherwise the offline critic
+    answers and says so. When the vision critic returns
+    machine-appliable patches, they are applied as parameter changes,
+    the Blender exporter re-runs, and the critic looks again — at most
+    MAX_VISION_ROUNDS rounds (blueprint cap).
     Returns (critique, rounds) where rounds records every patch applied.
     `cancel` is a threading.Event checked before each patch round;
     a set event raises governor.Cancelled.
     """
-    import os
+    from . import live
 
     critic_seat = seats.get("critic", {})
-    env_key = critic_seat.get("env_key")
-    prefer = "gemini" if env_key and os.environ.get(env_key) else "offline"
-    critic = get_critic(seats, prefer=prefer)
+    prefer = "gemini" if live.key_available(critic_seat, workspace) else "offline"
+    critic = get_critic(seats, prefer=prefer, workspace=workspace)
 
     # Reference comparison (Joshua's toggle): when the workspace switch
     # (or the job's own say-so) allows it and the job has a chosen
@@ -65,7 +65,6 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     rounds: list[dict] = []
     if not critique.get("vision") or desc.get("kind") != "scene":
         return critique, rounds
-    from . import live
     snapshot_saved = False
     for round_no in range(1, MAX_VISION_ROUNDS + 1):
         if cancel is not None and cancel.is_set():

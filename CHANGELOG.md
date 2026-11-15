@@ -1,5 +1,85 @@
 # SKULLPT — Changelog
 
+## v1.8 — 2026-11-14 — The seamless install (S1–S6)
+
+The double-click install now installs everything, the keys are set
+up in the app, and a first-run Setup check lists anything still
+missing with a Fix button for each. No terminal, no environment
+variable, no manual download anywhere in the flow.
+
+- FULL INSTALL BY DEFAULT (S1): the default run installs Blender
+  (pinned LTS — a newer installed Blender is never downgraded, and
+  the pinned version is never reinstalled when it is already there),
+  the image engine built from source plus its model, Character
+  Studio (MPFB2 plus the system assets pack, skipped when already
+  installed), and Ollama with the local model pulled. The `--with-*`
+  flags are kept for compatibility and change nothing now. The
+  progress steps cover the longer install honestly (5 Python, 15
+  Bench, 20 Blender, 32 image engine, 50 Character Studio, 60
+  Ollama, 70 tests, 85 finishing, 100 done, with install sub-steps
+  at 22/34/42/52/62/66 when the work actually runs). The installer
+  discloses the total download before anything starts — up to about
+  7.7 GB on a fresh machine, measured from the real sources
+  2026-11-14: PySide6 84,346,433 bytes, Blender 4.5.9 377,929,956
+  bytes, the sd.cpp source about 700 MB (a shallow recursive clone
+  occupies 715,260,125 bytes on disk), the LCM model 2,134,675,232
+  bytes, MPFB 45,956,992 bytes, the assets pack 280,737,770 bytes,
+  the Ollama bundle 1,545,767,640 bytes, qwen3:4b about 2.5 GB.
+  Anything already installed is skipped.
+- OLLAMA INSTALL + MODEL PULL (S2): the installer runs Ollama's
+  official install script with one GUI password prompt (there is no
+  .deb — the script installs to /usr, creates the ollama user, and
+  sets up + starts the systemd service; it verifies its own bundle
+  against the release's sha256sum.txt), starts the service when an
+  existing install has it stopped, waits for the server to answer
+  on 127.0.0.1:11434, pulls qwen3:4b (the model the fallback seat
+  already names), and confirms the model is listed before reporting
+  success. An Ollama failure is not fatal: the install completes
+  and says plainly, in the GUI, that the local model is missing and
+  the Bench's Setup check will offer to fetch it. New `ollama`
+  module: server/model status (cached 30 s so a down server never
+  stalls a refresh), model pull with a plain-language result.
+- IN-APP KEY SETUP (S3): Gemini and Groq keys are pasted and saved
+  in Settings, following the T9 HF-token pattern exactly — the key
+  is checked against the real provider before saving (one read-only
+  models-list call; a key that does not validate is never saved),
+  then stored in the workspace only (`gemini_key.key`,
+  `groq_key.key` — mode 0600, gitignored, never shown back, never in
+  a backup, never in code or the repo). The seats read the
+  environment first, then the key file — `live` threads the
+  workspace through the planner, chat, repairer, and critic paths,
+  and the builder's critic choice uses the same check. A "Get a
+  key" button opens the provider's key page in the browser, as a
+  fallback for someone who does not have a key yet; the primary
+  flow is pasting the key you already have. The "Set the
+  GEMINI_API_KEY environment variable" text is gone everywhere, as
+  are the manual-download fix texts — every fix is in-app.
+- FIRST-RUN SETUP CHECK (S4/S5): the Bench verifies every engine on
+  launch (Blender, image engine, image model, MPFB2 + assets,
+  Ollama server + model, Gemini key, Groq key, HF token) and, when
+  something is missing, shows one plain-language panel with a Fix
+  button for each item — engine fixes run the installer (which only
+  downloads what is missing), the model fix pulls it in a
+  background thread, key fixes open Settings. It shows once per
+  launch, with "Remind me later", and reopens any time from File,
+  then Setup check, or from the button in Settings. Settings gains
+  the two status lines the real-PC screenshot showed were missing:
+  Ollama (server up/down + model present/missing, with a fix line
+  that says which) and the Groq key.
+- WINDOWS OPEN MAXIMIZED, NOTHING CLIPPED (S6): every window opens
+  maximized on first run — a saved geometry still wins after that,
+  unless it is under the usable floor (900x560), in which case
+  maximized wins and the normal geometry is widened so un-maximizing
+  lands on a usable size. The Settings content scrolls, the engine
+  rows are name + wrapping status (not a form column), and every
+  long label wraps — no text ever runs off an edge. Verified by
+  geometry checks under Xvfb at 1366x768, not by string assertion.
+- ALSO IN THIS RELEASE: the dependency report and debug report show
+  the Ollama and Groq status (set/not set, never a value); the
+  Help index gains a Setup section; the stale "never written to any
+  file" line in the README (wrong since v1.5 saved the HF token) is
+  corrected; the About line in Help says v1.8 (it still said v1.6).
+
 ## v1.7 — 2026-11-14 — Character Studio (T26, the last task-list item)
 
 The final item on the task list: a rigged human, built headless by

@@ -105,7 +105,10 @@ class BenchFlowTests(BenchCase):
     def test_plan_without_key_refuses_plainly(self):
         with self.assertRaises(Exception) as ctx:
             bench.act(self.ws, "plan", {"words": "a stall", "kind": "scene"})
-        self.assertIn("GEMINI_API_KEY", str(ctx.exception))
+        # v1.8: the fix is in-app (paste the key in Settings), not an
+        # environment variable — the refusal says so.
+        self.assertIn("has no key", str(ctx.exception))
+        self.assertIn("Bench Settings window", str(ctx.exception))
 
     def test_images_and_decide_through_bench(self):
         bench.act(self.ws, "new-example", {"example": "shop-panel.description.json"})

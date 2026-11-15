@@ -129,6 +129,45 @@ echo "pkexec $*" >> "$PKEXEC_LOG"
 exit "${PKEXEC_EXIT:-0}"
 """
 
+# Stub engines (v1.8): the default install is the full install, so a
+# sim with no engines present would attempt real downloads. The stage
+# therefore ships every engine as "already installed": Blender at the
+# pinned version (the no-downgrade skip), sd-cli, Ollama, a model
+# file, and the MPFB extension with its skins. A test that wants an
+# engine missing removes its stub (see test_v18).
+STUB_BLENDER_PINNED = """#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Blender 4.5.9"; exit 0; fi
+exit 0
+"""
+
+STUB_SD_CLI = """#!/bin/sh
+exit 0
+"""
+
+STUB_OLLAMA = """#!/bin/sh
+echo "ollama $*" >> "$OLLAMA_LOG"
+case "$1" in
+  --version) echo "ollama version 0.40.16-stub" ;;
+  pull) exit "${STUB_OLLAMA_PULL_EXIT:-0}" ;;
+esac
+exit 0
+"""
+
+# Stub curl: fakes the Ollama API (server up, model present) so the
+# default sim never touches the network; delegates everything else to
+# the real curl. @REAL_CURL@ is replaced by _stage with the real path.
+STUB_CURL_OLLAMA = """#!/bin/sh
+url=""
+for arg in "$@"; do
+  case "$arg" in http*) url="$arg" ;; esac
+done
+case "$url" in
+  */api/version) echo '{"version":"0.40.16-stub"}'; exit 0 ;;
+  */api/tags) echo '{"models":[{"name":"qwen3:4b"}]}'; exit 0 ;;
+esac
+exec @REAL_CURL@ "$@"
+"""
+
 
 class _StagedInstall(unittest.TestCase):
     """Runs the real install.sh from a staged copy, with stub commands."""
@@ -171,9 +210,30 @@ class _StagedInstall(unittest.TestCase):
         (bin_dir / "fake-venv-python").chmod(0o755)
         (bin_dir / "pkexec").write_text(STUB_PKEXEC)
         (bin_dir / "pkexec").chmod(0o755)
+        # v1.8: every engine present, so the default full install
+        # skips them all and never touches the network.
+        for name, text in (("blender", STUB_BLENDER_PINNED),
+                           ("sd-cli", STUB_SD_CLI),
+                           ("ollama", STUB_OLLAMA)):
+            (bin_dir / name).write_text(text)
+            (bin_dir / name).chmod(0o755)
+        real_curl = shutil.which("curl") or "/usr/bin/curl"
+        (bin_dir / "curl").write_text(
+            STUB_CURL_OLLAMA.replace("@REAL_CURL@", real_curl))
+        (bin_dir / "curl").chmod(0o755)
         for name in dialogs:
             (bin_dir / name).write_text(STUB_DIALOG)
             (bin_dir / name).chmod(0o755)
+        # A model file (any .gguf counts — the pinned download is
+        # skipped when another model is already there) and the MPFB
+        # extension with its skins, so Character Studio skips too.
+        model_home = home / "design-shell-models"
+        model_home.mkdir()
+        (model_home / "other-model.gguf").write_bytes(b"fake-model")
+        mpfb_dir = (home / ".config" / "blender" / "4.5" / "extensions"
+                    / "user_default" / "mpfb")
+        (mpfb_dir / "data" / "skins").mkdir(parents=True)
+        (mpfb_dir / "__init__.py").write_text("# stub MPFB\n")
         state_dir = tmp / "state"
         state_dir.mkdir()
         dialog_dir = tmp / "dialogs"
@@ -193,6 +253,7 @@ class _StagedInstall(unittest.TestCase):
         env["DIALOG_LOG"] = str(dialog_dir / "dialog.log")
         env["DIALOG_DIR"] = str(dialog_dir)
         env["PKEXEC_LOG"] = str(tmp / "pkexec.log")
+        env["OLLAMA_LOG"] = str(tmp / "ollama.log")
         env["RUN_SH_MARKER"] = str(tmp / "run-sh-launched")
         env["ZENITY_QUESTION_EXIT"] = "1"  # "No" unless a test says yes
         paths = {
@@ -255,6 +316,19 @@ class GuiInstallerTests(_StagedInstall):
             self.assertIn("# Checking Python\n5", progress)
             self.assertIn("# Setting up the Bench window\n15", progress)
             self.assertIn("# Done\n100", progress)
+            # v1.8: the default install is the full install — every
+            # engine section was reached, and every engine was
+            # skipped as already installed (no downloads, no pkexec).
+            for label in ("# Checking Blender\n20",
+                          "# Checking the image engine\n32",
+                          "# Checking Character Studio\n50",
+                          "# Checking Ollama\n60"):
+                self.assertIn(label, progress)
+            log = paths["install_log"].read_text()
+            self.assertIn("Blender 4.5.9 is already installed", log)
+            self.assertIn("Character Studio is already installed", log)
+            self.assertIn("the local model (qwen3:4b) is ready", log)
+            self.assertIn("up to about 7.7 GB", log)
             # Everything is logged, and the durable results landed.
             self.assertIn("# Checking Python",
                           paths["install_log"].read_text())

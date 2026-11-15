@@ -309,7 +309,7 @@ class RepairLoopTests(unittest.TestCase):
         }
 
     def test_repairer_fixes_an_invalid_draft(self):
-        def fake_seat_text(seat, prompt, image_png=None, extra_images=None):
+        def fake_seat_text(seat, prompt, image_png=None, extra_images=None, workspace=None):
             if seat.get("provider") == "groq":
                 return json.dumps(_valid_draft())
             return json.dumps(_invalid_draft())
@@ -322,7 +322,7 @@ class RepairLoopTests(unittest.TestCase):
         self.assertEqual(used["repair_seat"], "repairer")
 
     def test_planner_repairs_when_the_repairer_has_no_key(self):
-        def fake_seat_text(seat, prompt, image_png=None, extra_images=None):
+        def fake_seat_text(seat, prompt, image_png=None, extra_images=None, workspace=None):
             if seat.get("provider") == "groq":
                 raise live.SeatNotConfigured("no GROQ_API_KEY")
             if "repairer seat" in prompt:
@@ -337,7 +337,7 @@ class RepairLoopTests(unittest.TestCase):
         self.assertEqual(used["repair_seat"], "planner")
 
     def test_a_clean_draft_is_not_repaired(self):
-        def fake_seat_text(seat, prompt, image_png=None, extra_images=None):
+        def fake_seat_text(seat, prompt, image_png=None, extra_images=None, workspace=None):
             return json.dumps(_valid_draft())
 
         with mock.patch.object(live, "seat_text", side_effect=fake_seat_text):
@@ -347,7 +347,7 @@ class RepairLoopTests(unittest.TestCase):
         self.assertIsNone(live.last_plan_seat()["repair_seat"])
 
     def test_a_failed_repair_names_both_attempts(self):
-        def fake_seat_text(seat, prompt, image_png=None, extra_images=None):
+        def fake_seat_text(seat, prompt, image_png=None, extra_images=None, workspace=None):
             return json.dumps(_invalid_draft())
 
         with mock.patch.object(live, "seat_text", side_effect=fake_seat_text):
@@ -381,7 +381,7 @@ class CriticAllRendersTests(unittest.TestCase):
     def test_every_render_is_judged_in_one_call(self):
         calls = []
 
-        def fake_gemini_text(seat, prompt, image_png=None, extra_images=None):
+        def fake_gemini_text(seat, prompt, image_png=None, extra_images=None, workspace=None):
             calls.append({"prompt": prompt, "image_png": image_png,
                           "extra_images": extra_images or []})
             return '{"fixes": []}'

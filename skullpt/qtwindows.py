@@ -9,10 +9,13 @@ Each window does one job (U1). Every window remembers its geometry
 from __future__ import annotations
 
 import json
+import subprocess
+import threading
 from pathlib import Path
 
 from . import bench as bench_mod
 from . import imagegen
+from . import keycheck
 from . import settings as settings_mod
 from . import tokenfile
 from .blender_export import MATERIALS
@@ -36,10 +39,48 @@ def _settings() -> "QtCore.QSettings":
     return QtCore.QSettings("BrokeNBored", "SKULLPT")
 
 
-def restore_geometry(window, key: str) -> None:
+# S6: a window smaller than this on the 1366x768 screen cannot show
+# its content: a saved geometry under this floor falls back to
+# maximized instead of reopening tiny and trapping content.
+MIN_USABLE_WIDTH = 900
+MIN_USABLE_HEIGHT = 560
+_DEFAULT_WIDTH = 1280
+_DEFAULT_HEIGHT = 720
+
+
+def restore_geometry(window, key: str) -> bool:
+    """Restore a saved geometry. Returns True when a usable saved
+    geometry was restored. When none was saved (first run), or the
+    saved one is under the usable floor (S6), the window starts
+    maximized instead, recorded on the window as _start_maximized,
+    which show_window() reads. The saved geometry is still applied
+    first, so a round-trip test sees the saved size."""
     geometry = _settings().value(f"{key}/geometry")
-    if geometry is not None:
-        window.restoreGeometry(geometry)
+    window._start_maximized = True
+    if geometry is None:
+        return False
+    window.restoreGeometry(geometry)
+    if window.isMaximized():
+        return True
+    if (window.width() >= MIN_USABLE_WIDTH
+            and window.height() >= MIN_USABLE_HEIGHT):
+        window._start_maximized = False
+        return True
+    return False
+
+
+def show_window(window) -> None:
+    """Show a window the S6 way: maximized on first run, or when the
+    saved geometry was too small to read; at its saved size
+    otherwise. A maximized window's normal geometry is the size it
+    returns to when un-maximized, so a tiny one is widened first."""
+    if getattr(window, "_start_maximized", False):
+        if (window.width() < MIN_USABLE_WIDTH
+                or window.height() < MIN_USABLE_HEIGHT):
+            window.resize(_DEFAULT_WIDTH, _DEFAULT_HEIGHT)
+        window.showMaximized()
+    else:
+        window.show()
 
 
 def save_geometry(window, key: str) -> None:
@@ -54,10 +95,42 @@ class _GeometryWindow(QtWidgets.QMainWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._geometry_key = self.GEOMETRY_KEY
+        # Until restore_geometry says otherwise, first open is
+        # maximized (S6).
+        self._start_maximized = True
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         save_geometry(self, self._geometry_key)
         super().closeEvent(event)
+
+
+# ------------------------------------------------------- background calls
+
+class _BackgroundCall(QtCore.QObject):
+    """Run a function off the UI thread (U30), call back on it.
+
+    `finished` emits the function's return value (or the exception
+    it raised, so the callback can report it plainly. Qt queues the
+    signal across threads, so the callback always runs on the UI
+    thread. Keep a reference until it finishes; the thread holds the
+    call alive, and a deleted receiver drops the signal safely."""
+
+    finished = QtCore.Signal(object)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def start(self) -> None:
+        thread = threading.Thread(target=self._run, daemon=True)
+        thread.start()
+
+    def _run(self) -> None:
+        try:
+            result = self._fn()
+        except Exception as exc:  # noqa: BLE001 - the callback reports it
+            result = exc
+        self.finished.emit(result)
 
 
 # ------------------------------------------------------------- stage pill (R6)
@@ -823,13 +896,13 @@ class CharacterWindow(_GeometryWindow):
             self._status_note.setText(
                 "Character Studio is missing its skins: MPFB2 is "
                 "installed, but the MakeHuman system assets pack was "
-                "not found with it. Re-run the SKULLPT installer with "
-                "the Character Studio option to install it.")
+                "not found with it. Use the Setup check to install "
+                "it, or re-run the SKULLPT installer.")
         elif not status["installed"]:
             self._status_note.setText(
-                "Character Studio is not installed. Re-run the SKULLPT "
-                "installer with the Character Studio option to install "
-                "MPFB2 and its skins (about 311 MB to download). "
+                "Character Studio is not installed. Use the Setup "
+                "check to install MPFB2 and its skins (about 311 MB "
+                "to download), or re-run the SKULLPT installer. "
                 "You can still create a character job; it builds once "
                 "the studio is installed.")
         else:
@@ -1297,56 +1370,107 @@ _ENGINE_LABELS = {
     "image_engine": "Image engine (draws reference pictures)",
     "image_model": "Image model (the picture model file)",
     "gemini_key": "Gemini key (planner and critic seats)",
+    "groq_key": "Groq key (repair seat)",
+    "ollama": "Ollama (local model, no key needed)",
     "hf_token": "Hugging Face token (photo to mesh)",
     "character_studio": "Character Studio (MPFB2 and its skins)",
 }
 
+# v1.8: every fix is in-app: the Setup check, the installer, or a
+# key section below. No fix text points at the terminal, an
+# environment variable, or a manual download.
 _ENGINE_FIXES = {
-    "blender": "Install Blender 5.2 LTS or newer, with the blender "
-               "program installed where SKULLPT can find it.",
-    "image_engine": imagegen.engine_missing_text(),
-    "image_model": imagegen.model_missing_text(),
-    "gemini_key": "Set the GEMINI_API_KEY environment variable. "
-                  "Without it the planner and critic seats cannot answer.",
-    "hf_token": "Save a Hugging Face token below, or set the HF_TOKEN "
-                "environment variable, to turn photos into meshes.",
-    "character_studio": "Re-run the SKULLPT installer with the "
-                        "Character Studio option to install MPFB2 and "
-                        "its skins (about 311 MB to download).",
+    "blender": "Use the Setup check to install it, or re-run the "
+               "SKULLPT installer.",
+    "image_engine": "Use the Setup check to install it, or re-run the "
+                    "SKULLPT installer.",
+    "image_model": "Use the Setup check to download it, or re-run the "
+                   "SKULLPT installer.",
+    "gemini_key": "Paste your Gemini key below and save it.",
+    "groq_key": "Paste your Groq key below and save it.",
+    "ollama": "Use the Setup check to install it, or to pull the "
+              "local model.",
+    "hf_token": "Save a Hugging Face token below to turn photos "
+                "into meshes.",
+    "character_studio": "Use the Setup check to install it, or "
+                        "re-run the SKULLPT installer.",
 }
 
 
 class SettingsWindow(_GeometryWindow):
-    """Engines, switches, and the Hugging Face token (T9). The token
-    is stored in a local file the repo never sees, and this window
-    never shows the token back - only whether one is saved."""
+    """Engines, switches, and the keys (T9, v1.8 S3). A key is stored
+    in a local file the repo never sees, and this window never shows
+    a key back - only whether one is saved."""
 
     GEOMETRY_KEY = "SettingsWindow"
+
+    # Key status lines: (saved in the workspace, set in the
+    # environment, not set). Never the value itself.
+    _KEY_STATUS = {
+        "hf": ("Token saved.", "Token set in the environment.",
+               "No token saved."),
+        "gemini": ("Gemini key saved.",
+                   "Gemini key set in the environment.",
+                   "No Gemini key saved."),
+        "groq": ("Groq key saved.",
+                 "Groq key set in the environment.",
+                 "No Groq key saved."),
+    }
+    _KEY_ENGINE = {"hf": "hf_token", "gemini": "gemini_key",
+                   "groq": "groq_key"}
 
     def __init__(self, bench, workspace: Path, parent=None):
         super().__init__(parent)
         self._bench = bench
         self._workspace = Path(workspace)
+        self._key_fields: dict[str, QtWidgets.QLineEdit] = {}
+        self._key_statuses: dict[str, QtWidgets.QLabel] = {}
+        self._key_save_buttons: dict[str, QtWidgets.QPushButton] = {}
+        self._key_calls: dict[str, _BackgroundCall] = {}
         self.setWindowTitle("SKULLPT - Settings")
         self.setMinimumSize(520, 420)
 
-        central = QtWidgets.QWidget()
-        self.setCentralWidget(central)
-        main = QtWidgets.QVBoxLayout(central)
+        # S6: the settings content scrolls, so nothing is ever hidden
+        # off the bottom edge with no indication it exists.
+        content = QtWidgets.QWidget()
+        main = QtWidgets.QVBoxLayout(content)
         main.setContentsMargins(12, 12, 12, 12)
         main.setSpacing(12)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidget(content)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff)
+        self.setCentralWidget(scroll)
 
         engines_title = QtWidgets.QLabel("Engines")
         engines_title.setObjectName("heading")
         main.addWidget(engines_title)
-        self._engine_rows = QtWidgets.QFormLayout()
+        # S6: one row per engine (name + status), not a form: the
+        # status label takes the full remaining width and wraps, so
+        # a long fix line can never run off the right edge.
+        self._engine_rows = QtWidgets.QVBoxLayout()
         self._engine_labels: dict[str, QtWidgets.QLabel] = {}
         for key, label in _ENGINE_LABELS.items():
+            row = QtWidgets.QHBoxLayout()
+            name = QtWidgets.QLabel(label)
+            name.setWordWrap(True)
+            row.addWidget(name)
             value = QtWidgets.QLabel()
             value.setWordWrap(True)
             self._engine_labels[key] = value
-            self._engine_rows.addRow(label, value)
+            row.addWidget(value, 1)
+            self._engine_rows.addLayout(row)
         main.addLayout(self._engine_rows)
+        setup_btn = QtWidgets.QPushButton("Open the Setup check")
+        setup_btn.clicked.connect(self._open_setup_check)
+        main.addWidget(setup_btn)
+        setup_note = QtWidgets.QLabel(
+            "The Setup check lists what is missing and fixes it from "
+            "inside the app.")
+        setup_note.setWordWrap(True)
+        setup_note.setObjectName("muted")
+        main.addWidget(setup_note)
 
         switches_title = QtWidgets.QLabel("Switches")
         switches_title.setObjectName("heading")
@@ -1418,6 +1542,24 @@ class SettingsWindow(_GeometryWindow):
         self._token_status.setObjectName("muted")
         main.addWidget(self._token_status)
 
+        self._add_key_section(
+            main, "gemini", "Gemini key",
+            "The Gemini key runs the planner and critic seats. Paste "
+            "the key you already have. It is saved in your workspace "
+            "only, in a file the repo never sees. SKULLPT checks the "
+            "key works before saving it, and never shows it back.",
+            "Paste your Gemini key",
+            keycheck.GEMINI_KEY_PAGE)
+        self._add_key_section(
+            main, "groq", "Groq key",
+            "The Groq key runs the repair seat, which fixes drafts "
+            "that fail validation. Paste the key you already have. "
+            "it is saved in your workspace only, in a file the repo "
+            "never sees. SKULLPT checks the key works before saving "
+            "it, and never shows it back.",
+            "Paste your Groq key",
+            keycheck.GROQ_KEY_PAGE)
+
         workspace_title = QtWidgets.QLabel("Workspace")
         workspace_title.setObjectName("heading")
         main.addWidget(workspace_title)
@@ -1433,8 +1575,8 @@ class SettingsWindow(_GeometryWindow):
         backup_title.setObjectName("heading")
         main.addWidget(backup_title)
         main.addWidget(QtWidgets.QLabel(
-            "Back up the whole workspace into one zip file. The Hugging "
-            "Face token is never in a backup."))
+            "Back up the whole workspace into one zip file. Your keys "
+            "are never in a backup."))
         backup_btn = QtWidgets.QPushButton("Back up workspace")
         backup_btn.clicked.connect(self._backup_workspace)
         main.addWidget(backup_btn)
@@ -1492,20 +1634,30 @@ class SettingsWindow(_GeometryWindow):
         Toast.show_toast(self, result["note"])
 
     def refresh(self) -> None:
-        """Re-read the engine status and the token state."""
+        """Re-read the engine status and the key states."""
         status = bench_mod.engine_status(self._workspace)
         for key, label in self._engine_labels.items():
             ready = status.get(key, False)
             if ready:
                 label.setText("Ready")
+            elif key == "ollama":
+                # Two ways to be missing: the server is down, or the
+                # model is not pulled yet. Say which one.
+                if not status.get("ollama_server"):
+                    label.setText("Missing. The Ollama server is not "
+                                  "running. Use the Setup check to "
+                                  "install it.")
+                else:
+                    label.setText("Missing. The server is running but "
+                                  "the local model is not pulled yet. "
+                                  "Use the Setup check to pull it.")
             else:
                 label.setText(f"Missing. {_ENGINE_FIXES[key]}")
-        if tokenfile.has_token(self._workspace):
-            self._token_status.setText("Token saved.")
-        elif bench_mod.engine_status(self._workspace).get("hf_token"):
-            self._token_status.setText("Token set in the environment.")
-        else:
-            self._token_status.setText("No token saved.")
+        self._token_status.setText(self._key_status_text("hf", status))
+        self._key_statuses["gemini"].setText(
+            self._key_status_text("gemini", status))
+        self._key_statuses["groq"].setText(
+            self._key_status_text("groq", status))
         last = settings_mod.last_render_engine(self._workspace)
         if last.get("engine"):
             self._last_engine_label.setText(
@@ -1515,6 +1667,105 @@ class SettingsWindow(_GeometryWindow):
         else:
             self._last_engine_label.setText(
                 "No render has run yet, so the working engine is not known.")
+
+    def _key_status_text(self, kind: str, status: dict) -> str:
+        """Saved / set in the environment / not set. Never the value."""
+        saved, env, none = self._KEY_STATUS[kind]
+        if tokenfile.has_key(kind, self._workspace):
+            return saved
+        if status.get(self._KEY_ENGINE[kind]):
+            return env
+        return none
+
+    def _add_key_section(self, main, kind: str, title: str, note: str,
+                         placeholder: str, key_page: str) -> None:
+        """A Gemini/Groq key section (v1.8 S3): paste the key you
+        already have, save it (validated first), clear it. The "Get
+        a key" button is only for someone who does not have one yet."""
+        heading = QtWidgets.QLabel(title)
+        heading.setObjectName("heading")
+        main.addWidget(heading)
+        note_label = QtWidgets.QLabel(note)
+        note_label.setWordWrap(True)
+        note_label.setObjectName("muted")
+        main.addWidget(note_label)
+        row = QtWidgets.QHBoxLayout()
+        field = QtWidgets.QLineEdit()
+        field.setEchoMode(QtWidgets.QLineEdit.Password)
+        field.setPlaceholderText(placeholder)
+        row.addWidget(field, 1)
+        save_btn = QtWidgets.QPushButton(f"Save {title}")
+        save_btn.setObjectName("primary")
+        save_btn.clicked.connect(lambda: self._save_key(kind))
+        row.addWidget(save_btn)
+        clear_btn = QtWidgets.QPushButton(f"Clear {title}")
+        clear_btn.clicked.connect(lambda: self._clear_key(kind))
+        row.addWidget(clear_btn)
+        main.addLayout(row)
+        get_row = QtWidgets.QHBoxLayout()
+        get_btn = QtWidgets.QPushButton(
+            f"Get a {title} (opens your browser)")
+        get_btn.clicked.connect(
+            lambda: QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl(key_page)))
+        get_row.addWidget(get_btn)
+        get_row.addStretch(1)
+        main.addLayout(get_row)
+        status = QtWidgets.QLabel()
+        status.setObjectName("muted")
+        main.addWidget(status)
+        self._key_fields[kind] = field
+        self._key_statuses[kind] = status
+        self._key_save_buttons[kind] = save_btn
+
+    def _save_key(self, kind: str) -> None:
+        """Validate the pasted key against the real provider, then
+        save it. The check runs off the UI thread (U30); a key that
+        does not validate is never saved."""
+        value = self._key_fields[kind].text().strip()
+        if not value:
+            QtWidgets.QMessageBox.warning(
+                self, "No key", "Paste a key first.")
+            return
+        self._key_statuses[kind].setText("Checking the key...")
+        self._key_save_buttons[kind].setEnabled(False)
+        validate = (keycheck.validate_gemini_key if kind == "gemini"
+                    else keycheck.validate_groq_key)
+        call = _BackgroundCall(lambda: validate(value))
+        call.finished.connect(
+            lambda result: self._on_key_validated(kind, value, result))
+        self._key_calls[kind] = call
+        call.start()
+
+    def _on_key_validated(self, kind: str, value: str, result) -> None:
+        self._key_save_buttons[kind].setEnabled(True)
+        self._key_calls.pop(kind, None)
+        if isinstance(result, Exception):
+            self._key_statuses[kind].setText(
+                f"The check failed ({result}). The key was not saved.")
+            return
+        ok, message = result
+        if not ok:
+            self._key_statuses[kind].setText(message)
+            return
+        tokenfile.save_key(kind, self._workspace, value)
+        self._key_fields[kind].clear()
+        self.refresh()
+        self._bench.refresh()
+        title = "Gemini key" if kind == "gemini" else "Groq key"
+        Toast.show_toast(self, f"{title} saved in your workspace.")
+
+    def _clear_key(self, kind: str) -> None:
+        tokenfile.clear_key(kind, self._workspace)
+        self.refresh()
+        self._bench.refresh()
+        title = "Gemini key" if kind == "gemini" else "Groq key"
+        Toast.show_toast(self, f"{title} cleared.")
+
+    def _open_setup_check(self) -> None:
+        opener = getattr(self._bench, "_open_window", None)
+        if callable(opener):
+            opener("setup")
 
     def _save_critic_toggle(self, checked: bool) -> None:
         current = settings_mod.load_settings(self._workspace)
@@ -1548,6 +1799,169 @@ class SettingsWindow(_GeometryWindow):
         Toast.show_toast(self, "Workspace saved. It opens next time SKULLPT starts.")
 
 
+# -------------------------------------------------------------- setup window
+
+class SetupWindow(_GeometryWindow):
+    """The first-run setup check (v1.8, S4/S5): everything missing, one
+    Fix button each. Fixes run the installer (engines), pull the local
+    model (Ollama), or open Settings (keys). No terminal anywhere."""
+
+    GEOMETRY_KEY = "SetupWindow"
+
+    def __init__(self, bench, workspace: Path, parent=None):
+        super().__init__(parent)
+        self._bench = bench
+        self._workspace = Path(workspace)
+        self._pull_call: _BackgroundCall | None = None
+        self.setWindowTitle("SKULLPT - Setup check")
+        self.setMinimumSize(560, 420)
+
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        main = QtWidgets.QVBoxLayout(central)
+        main.setContentsMargins(12, 12, 12, 12)
+        main.setSpacing(12)
+
+        intro = QtWidgets.QLabel(
+            "Everything SKULLPT needs, in one place. What is missing "
+            "is listed below. Press Fix and the app takes care of it.")
+        intro.setWordWrap(True)
+        main.addWidget(intro)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff)
+        content = QtWidgets.QWidget()
+        self._items_layout = QtWidgets.QVBoxLayout(content)
+        self._items_layout.setSpacing(12)
+        scroll.setWidget(content)
+        main.addWidget(scroll, 1)
+
+        bottom = QtWidgets.QHBoxLayout()
+        check_btn = QtWidgets.QPushButton("Check again")
+        check_btn.clicked.connect(self.refresh)
+        bottom.addWidget(check_btn)
+        bottom.addStretch(1)
+        later_btn = QtWidgets.QPushButton("Remind me later")
+        later_btn.clicked.connect(self._remind_later)
+        bottom.addWidget(later_btn)
+        main.addLayout(bottom)
+
+        restore_geometry(self, self.GEOMETRY_KEY)
+        self.refresh()
+
+    def _remind_later(self) -> None:
+        """Close until the next launch: the Bench only offers the
+        setup check once per launch, so closing is the dismissal."""
+        self._bench._setup_dismissed = True
+        self.close()
+
+    def refresh(self) -> None:
+        """Re-check every engine and rebuild the missing list."""
+        while self._items_layout.count():
+            item = self._items_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
+        items = bench_mod.missing_setup_items(self._workspace)
+        if not items:
+            done = QtWidgets.QLabel(
+                "Everything is ready. Nothing is missing.")
+            done.setWordWrap(True)
+            self._items_layout.addWidget(done)
+        for item in items:
+            self._items_layout.addWidget(self._row(item))
+        self._items_layout.addStretch(1)
+
+    def _row(self, item: dict) -> QtWidgets.QFrame:
+        frame = QtWidgets.QFrame()
+        frame.setObjectName("card")
+        layout = QtWidgets.QHBoxLayout(frame)
+        text = QtWidgets.QVBoxLayout()
+        title = QtWidgets.QLabel(item["title"])
+        title.setObjectName("heading")
+        text.addWidget(title)
+        detail = QtWidgets.QLabel(item["detail"])
+        detail.setWordWrap(True)
+        detail.setObjectName("muted")
+        text.addWidget(detail)
+        layout.addLayout(text, 1)
+        fix = item["fix"]
+        if fix == "installer":
+            btn = QtWidgets.QPushButton("Install")
+            btn.clicked.connect(
+                lambda: self._run_installer(item["key"]))
+        elif fix == "pull_model":
+            btn = QtWidgets.QPushButton("Pull the model")
+            btn.clicked.connect(lambda: self._pull_model(btn))
+        else:
+            btn = QtWidgets.QPushButton("Add in Settings")
+            btn.clicked.connect(self._open_settings)
+        layout.addWidget(btn)
+        return frame
+
+    def _run_installer(self, key: str) -> None:
+        """Launch the SKULLPT installer GUI. The installer only
+        downloads what is missing, so the full run is the fix for
+        any single engine."""
+        install_sh = Path(__file__).resolve().parent.parent / "install.sh"
+        if not install_sh.exists():
+            QtWidgets.QMessageBox.warning(
+                self, "Installer not found",
+                "The SKULLPT installer was not found next to this app.")
+            return
+        try:
+            subprocess.Popen([str(install_sh), "--gui"],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not start the installer", str(exc))
+            return
+        Toast.show_toast(
+            self, "Installer is running. It only downloads what is "
+                  "missing.")
+
+    def _pull_model(self, button: QtWidgets.QPushButton) -> None:
+        """Pull the local model with the Ollama CLI, off the UI
+        thread (U30). The pull resumes if it is interrupted."""
+        from . import ollama as ollama_mod
+
+        button.setEnabled(False)
+        button.setText("Pulling...")
+        call = _BackgroundCall(ollama_mod.pull_model)
+        call.finished.connect(
+            lambda result: self._on_pull_done(button, result))
+        self._pull_call = call
+        call.start()
+
+    def _on_pull_done(self, button: QtWidgets.QPushButton, result) -> None:
+        from . import ollama as ollama_mod
+
+        self._pull_call = None
+        button.setEnabled(True)
+        button.setText("Pull the model")
+        if isinstance(result, Exception):
+            QtWidgets.QMessageBox.warning(self, "Pull failed", str(result))
+            return
+        ok, message = result
+        if not ok:
+            QtWidgets.QMessageBox.warning(self, "Pull failed", message)
+            return
+        ollama_mod.status(force=True)
+        self.refresh()
+        Toast.show_toast(self, message)
+
+    def _open_settings(self) -> None:
+        opener = getattr(self._bench, "_open_window", None)
+        if callable(opener):
+            opener("settings")
+        self.close()
+
+
 # -------------------------------------------------------------- help window
 
 _HELP_HTML = """<html><body>
@@ -1562,7 +1976,14 @@ status bar. <b>Render</b> shows the selected job as a 3D scene you
 can orbit, and lets you pick a part and edit it. <b>Images</b> is
 where you keep or reject generated pictures. <b>Library</b> holds
 everything you have filed. <b>Settings</b> shows which engines are
-ready and holds the Hugging Face token.</p>
+ready and holds your keys (Gemini, Groq, Hugging Face).</p>
+<h3>Setup</h3>
+<p>The first time SKULLPT opens, the Setup check lists anything
+missing: an engine, the local model, or a key, with a Fix button
+for each. Engines install from inside the app; keys are pasted in
+Settings and saved in your workspace only, in files the repo never
+sees. The Setup check can be opened any time from File, then Setup
+check, or from the button in Settings.</p>
 <h3>The five steps</h3>
 <ol>
 <li><b>Make.</b> Type "make a wooden shop panel" in the chat, or open
@@ -1615,12 +2036,12 @@ still draft descriptions and show the viewport.</p>
 <p>Everything lives in your workspace folder: jobs, the library,
 image batches, and settings. The folder is shown in Settings. File,
 then Back up workspace, to zip the whole workspace into one file
-(the Hugging Face token is never in a backup). File, then Open
-workspace, switches to another folder right away. Help, then Check
-for updates, asks GitHub whether a newer SKULLPT is out; it never
-downloads anything by itself.</p>
+(your keys are never in a backup). File, then Open workspace,
+switches to another folder right away. Help, then Check for updates,
+asks GitHub whether a newer SKULLPT is out; it never downloads
+anything by itself.</p>
 <h3>About</h3>
-<p>SKULLPT v1.6. A standalone Linux design and asset shell, by
+<p>SKULLPT v1.8. A standalone Linux design and asset shell, by
 Broke n Bored Studio. Source: github.com/BROKE-N-BORED/SKULLPT</p>
 </body></html>"""
 

@@ -497,6 +497,21 @@ echo "stub blender: unexpected args $*" >&2
 exit 1
 """
 
+# v1.8: the default install is the full install, so the staged runs
+# ship Blender at the pinned version (the no-downgrade skip) unless a
+# test overrides it, and the MPFB extension with its skins (Character
+# Studio skips). sd-cli and the model file are per-test: the
+# image-engine test must NOT have them (it proves the build and the
+# download), while the Blender test needs both (it proves the skip).
+STUB_BLENDER_PINNED = """#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Blender 4.5.9"; exit 0; fi
+exit 0
+"""
+
+STUB_SD_CLI = """#!/bin/sh
+exit 0
+"""
+
 STUB_CURL_FAIL = """#!/bin/sh
 echo "curl $*" >> "$CURL_LOG"
 exit 1
@@ -538,7 +553,7 @@ class _StagedInstallV14(unittest.TestCase):
     """Runs the real install.sh from a staged copy, with stub commands
     (terminal mode — no dialogs needed for these paths)."""
 
-    def _stage(self, tmp, stubs):
+    def _stage(self, tmp, stubs, seed_model=False):
         tmp = Path(tmp)
         stage = tmp / "stage"
         # Exclude .venv: a real .venv in the stage makes the nested
@@ -560,11 +575,26 @@ class _StagedInstallV14(unittest.TestCase):
         state_dir.mkdir()
         scripts = {"python3": STUB_PYTHON3,
                    "fake-venv-python": FAKE_VENV_PYTHON,
-                   "pkexec": STUB_PKEXEC, **stubs}
+                   "pkexec": STUB_PKEXEC,
+                   "blender": STUB_BLENDER_PINNED,
+                   **stubs}
         for name, text in scripts.items():
             path = bin_dir / name
             path.write_text(text)
             path.chmod(0o755)
+        # MPFB with its skins, for both Blender config versions the
+        # stubs report (4.5 pinned, 5.3 newer) — Character Studio
+        # skips in both runs. A model file only when asked: the
+        # image-engine test must prove the download happens.
+        for ver in ("4.5", "5.3"):
+            mpfb_dir = (home / ".config" / "blender" / ver / "extensions"
+                        / "user_default" / "mpfb")
+            (mpfb_dir / "data" / "skins").mkdir(parents=True)
+            (mpfb_dir / "__init__.py").write_text("# stub MPFB\n")
+        if seed_model:
+            model_home = home / "design-shell-models"
+            model_home.mkdir()
+            (model_home / "other-model.gguf").write_bytes(b"fake-model")
         env = dict(os.environ)
         env["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
         env["HOME"] = str(home)
@@ -595,17 +625,21 @@ class StagedInstallerTests(_StagedInstallV14):
         with tempfile.TemporaryDirectory() as tmp:
             stage, home, env, tmp_path = self._stage(tmp, {
                 "blender": STUB_BLENDER_NEW,
+                "sd-cli": STUB_SD_CLI,
                 "curl": STUB_CURL_FAIL,
-            })
+            }, seed_model=True)
             res = self._run_install(stage, env, "--terminal", "--with-blender")
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertIn("Blender 5.3.0 is already installed", res.stdout)
             self.assertIn("leaving it alone", res.stdout)
-            # No download was attempted at all.
+            # No Blender download was attempted at all (curl still
+            # runs for the Ollama server check — v1.8 — but never
+            # for Blender).
             curl_log = tmp_path / "curl.log"
-            self.assertFalse(curl_log.exists(),
-                             "curl ran despite the newer Blender: "
-                             + (curl_log.read_text() if curl_log.exists() else ""))
+            if curl_log.exists():
+                log_text = curl_log.read_text()
+                self.assertNotIn("blender-4.5.9", log_text)
+                self.assertNotIn("download.blender.org", log_text)
             # And no pkexec Blender install ran.
             pkexec_log = tmp_path / "pkexec.log"
             if pkexec_log.exists():

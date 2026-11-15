@@ -609,8 +609,8 @@ class InstallerTests(unittest.TestCase):
     def test_download_verified_takes_a_fallback(self):
         self.assertIn('fallback="${5:-}"', self.install)
 
-    def test_step_60_installs_the_studio(self):
-        self.assertIn('step 60 "Installing Character Studio"', self.install)
+    def test_step_52_installs_the_studio(self):
+        self.assertIn('step 52 "Installing Character Studio"', self.install)
         self.assertIn("extension install-file", self.install)
         self.assertIn("data/skins", self.install)
 

@@ -25,34 +25,32 @@
 #      from the venv.) If python3-venv is missing, the installer
 #      installs that one system package itself (one GUI password
 #      prompt) and retries — it never asks the user to type anything.
-#   3. Checks Blender: reports the version it finds. With --with-blender
-#      it downloads the pinned Blender LTS and installs it to
-#      /opt/blender (+ a blender command on your PATH), replacing what
-#      was there. Without the flag it never touches your Blender.
-#      With --with-character-studio it also installs Character Studio
-#      (the MPFB2 extension plus the MakeHuman system assets pack,
-#      about 311 MB to download) into the Blender it found — Blender
-#      has to exist first, so that option refuses plainly without it.
+#   3. Installs everything SKULLPT needs, skipping what is already
+#      there: Blender (the pinned LTS — a newer installed Blender is
+#      never downgraded, and the pinned version is never reinstalled),
+#      the image engine (stable-diffusion.cpp built from source, plus
+#      its model), Character Studio (the MPFB2 extension plus the
+#      MakeHuman system assets pack), and Ollama with the local model
+#      (qwen3:4b — the no-key fallback seat). A fresh machine downloads
+#      up to about 7.7 GB in total; the sizes are disclosed before
+#      anything starts, and anything already installed is skipped, so
+#      a re-run downloads far less — or nothing at all. Downloads
+#      resume and verify.
 #   4. Runs the shell's own test suite as the install proof.
 #   5. Prints a dependency report: everything checked, with versions.
 #   6. Puts a SKULLPT launcher on the Desktop and in the app menu, and
 #      a `skullpt` command on your PATH.
 #
 # Usage:
-#   ./install.sh                     install (GUI when launched without
-#                                    a terminal and a dialog tool
+#   ./install.sh                     install everything (GUI when launched
+#                                    without a terminal and a dialog tool
 #                                    exists, else the terminal installer)
 #   ./install.sh --gui               install with the progress window
 #   ./install.sh --terminal          install in the terminal
-#   ./install.sh --with-blender      also install/upgrade Blender (needs
-#                                    admin permission — it will ask)
-#   ./install.sh --with-image-engine also build the image engine from
-#                                    source and download its model
-#                                    (needs git, cmake, a C++ compiler)
-#   ./install.sh --with-character-studio
-#                                    also install Character Studio
-#                                    (MPFB2 + the system assets pack,
-#                                    about 311 MB; needs Blender first)
+#   ./install.sh --with-blender      kept for compatibility — the default
+#   ./install.sh --with-image-engine install already includes Blender,
+#   ./install.sh --with-character-studio the image engine, Character
+#   ./install.sh --with-ollama       Studio, and Ollama + the local model
 set -euo pipefail
 
 # Resolve our own real location (this script may be reached via a link).
@@ -91,12 +89,28 @@ MPFB_URL="https://extensions.blender.org/download/sha256:${MPFB_SHA256}/add-on-m
 ASSETS_SHA256="b542127a8e25547c7c29c19f2d1d2adb9a664c80396ecd694095dbc8028a0107"
 ASSETS_URL="https://files2.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip"
 ASSETS_URL_FALLBACK="https://files.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip"
+# Ollama (v1.8): the local model server. There is no .deb — the
+# official install script is the supported route; it installs the
+# binary to /usr, creates the ollama user, and sets up + starts the
+# systemd service. The script downloads the Linux bundle
+# (ollama-linux-amd64.tar.zst, 1,545,767,640 bytes at v0.40.16) and
+# verifies it against the release's sha256sum.txt itself, so the
+# installer does not re-verify it here.
+OLLAMA_INSTALL_URL="https://ollama.com/install.sh"
+# The local model the fallback seat uses (seats.py names the same
+# model); about 2.5 GB from the Ollama library.
+OLLAMA_MODEL="qwen3:4b"
 # Persistent download cache: a mktemp dir is wiped on every run, so a
 # download that can be resumed needs a place that survives.
 DOWNLOAD_CACHE="$HOME/.cache/skullpt"
-WITH_BLENDER=0
-WITH_IMAGE=0
-WITH_CHARACTER=0
+# v1.8: the default install is the FULL install — Blender, the image
+# engine + model, Character Studio, and Ollama + the local model.
+# The --with-* flags are kept for compatibility (re-runs, scripts
+# that already pass them); they change nothing now.
+WITH_BLENDER=1
+WITH_IMAGE=1
+WITH_CHARACTER=1
+WITH_OLLAMA=1
 GUI_WANTED=""   # "gui" | "terminal" | "" (auto-detect)
 WORKER=0
 for arg in "$@"; do
@@ -104,6 +118,7 @@ for arg in "$@"; do
     --with-blender) WITH_BLENDER=1 ;;
     --with-image-engine) WITH_IMAGE=1 ;;
     --with-character-studio) WITH_CHARACTER=1 ;;
+    --with-ollama) WITH_OLLAMA=1 ;;
     --gui) GUI_WANTED="gui" ;;
     --terminal) GUI_WANTED="terminal" ;;
     --_run-worker) WORKER=1 ;;
@@ -222,6 +237,16 @@ download_verified() {
 
 # --- The install body (runs in the worker subprocess) ----------------------
 do_install() {
+  # v1.8: say what the install downloads BEFORE anything starts.
+  # Fresh-machine total, measured from the real sources 2026-11-14:
+  # PySide6 about 80 MB, Blender about 360 MB, the image engine
+  # source about 700 MB, the image model about 2.1 GB, Character
+  # Studio about 311 MB, Ollama about 1.5 GB, the local model about
+  # 2.5 GB — up to about 7.7 GB in total. Anything already installed
+  # is skipped, so a re-run downloads far less — or nothing at all.
+  echo "This install downloads everything SKULLPT needs — up to about 7.7 GB"
+  echo "in total on a fresh machine. Anything already installed is skipped,"
+  echo "so a re-run downloads far less — or nothing at all."
   # --- 1. Python -----------------------------------------------------------
   step 5 "Checking Python"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -277,22 +302,27 @@ do_install() {
   fi
 
   # --- 3. Blender ------------------------------------------------------------
-  step 55 "Checking Blender and the image engine"
+  step 20 "Checking Blender"
   BLENDER_BIN="$(find_blender)"
   if [ "$WITH_BLENDER" = "1" ]; then
-    # Never downgrade: if the Blender already on the machine is newer
-    # than the pinned LTS, leave it alone and say so plainly. An
-    # unparseable version falls through to the install (better to
-    # install a known-good Blender than to trust a version string
-    # that could not be read).
+    # Never downgrade, never reinstall: if the Blender already on the
+    # machine is the pinned LTS or newer, leave it alone and say so
+    # plainly. An unparseable version falls through to the install
+    # (better to install a known-good Blender than to trust a version
+    # string that could not be read).
     FOUND_VER=""
     if [ -n "$BLENDER_BIN" ]; then
       FOUND_VER="$("$BLENDER_BIN" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     fi
-    if [ -n "$FOUND_VER" ] && [ "$FOUND_VER" != "$BLENDER_VERSION" ] \
+    if [ -n "$FOUND_VER" ] \
        && [ "$(printf '%s\n%s\n' "$BLENDER_VERSION" "$FOUND_VER" | sort -V | head -1)" = "$BLENDER_VERSION" ]; then
-      echo "Blender $FOUND_VER is already installed — newer than the pinned $BLENDER_VERSION, so leaving it alone."
+      if [ "$FOUND_VER" = "$BLENDER_VERSION" ]; then
+        echo "Blender $BLENDER_VERSION is already installed — leaving it alone."
+      else
+        echo "Blender $FOUND_VER is already installed — newer than the pinned $BLENDER_VERSION, so leaving it alone."
+      fi
     else
+      step 22 "Installing Blender"
       echo "Installing Blender $BLENDER_VERSION to /opt/blender (this needs admin permission — a password window will appear)..."
       mkdir -p "$DOWNLOAD_CACHE"
       if ! download_verified "$BLENDER_URL" "$DOWNLOAD_CACHE/$BLENDER_TARBALL" \
@@ -315,11 +345,11 @@ do_install() {
     echo "blender: $BLENDER_BIN — $BLENDER_VER"
   else
     echo "blender: NOT FOUND — scene builds will fail until Blender exists."
-    echo "         The installer can add it (see the README's install options),"
-    echo "         or install Blender yourself."
+    echo "         Re-run the installer to install it."
   fi
 
   # --- 3b. Image engine (stable-diffusion.cpp + LCM model) --------------------
+  step 32 "Checking the image engine"
   SD_BIN="$(find_sd)"
   if [ "$WITH_IMAGE" = "1" ]; then
     if [ -z "$SD_BIN" ]; then
@@ -349,6 +379,7 @@ do_install() {
       fi
       echo "Building the image engine (stable-diffusion.cpp) from source..."
       echo "(one-time compile — several minutes on a small machine)"
+      step 34 "Building the image engine"
       TMPD="$(mktemp -d)"
       git clone --depth 1 --recursive "$SD_REPO" "$TMPD/sd"
       cmake -S "$TMPD/sd" -B "$TMPD/sd/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
@@ -372,6 +403,7 @@ do_install() {
       # corrupt file from an interrupted run is resumed, not trusted.
       # (When some other .gguf is already there and the pinned file is
       # not, the download is skipped as before.)
+      step 42 "Downloading the image model"
       mkdir -p "$SD_MODEL_HOME"
       if ! download_verified "$SD_MODEL_URL" "$SD_MODEL_HOME/$SD_MODEL_FILE" \
           "$SD_MODEL_SHA256" "the image model ($SD_MODEL_FILE, about 2.1 GB)"; then
@@ -387,21 +419,20 @@ do_install() {
     echo "sd-cli: $SD_BIN"
   else
     echo "sd-cli: NOT FOUND — image generation will refuse until the engine exists."
-    echo "        (The README's install options cover adding it.)"
+    echo "        Re-run the installer to install it."
   fi
   if [ -n "$SD_MODEL" ]; then
     echo "image model: $SD_MODEL"
   else
-    echo "image model: NOT FOUND — download $SD_MODEL_FILE (about 2.1 GB) into"
-    echo "        $SD_MODEL_HOME/ (the installer's image-engine option does this for you —"
-    echo "        see the README's install options)."
+    echo "image model: NOT FOUND — re-run the installer to download it (about 2.1 GB)."
   fi
 
   # --- 3c. Character Studio (MPFB2 + system assets pack) ----------------------
   # MPFB2 is a Blender extension, so Blender has to exist first. The
   # status is checked whether or not the flag was set, so the report
   # always says what is there.
-  MPFB_STATUS="not installed (Character Studio — see the README's install options)"
+  step 50 "Checking Character Studio"
+  MPFB_STATUS="not installed (Character Studio — re-run the installer)"
   MPFB_EXT_DIR=""
   if [ -n "$BLENDER_BIN" ]; then
     BLENDER_CFG_VER="$("$BLENDER_BIN" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
@@ -413,10 +444,12 @@ do_install() {
     fi
   fi
   if [ "$WITH_CHARACTER" = "1" ]; then
-    step 60 "Installing Character Studio"
+    if [ "$MPFB_STATUS" = "installed (Blender $BLENDER_CFG_VER)" ]; then
+      echo "Character Studio is already installed ($MPFB_STATUS) — leaving it alone."
+    else
     if [ -z "$BLENDER_BIN" ]; then
       echo "ERROR: Character Studio needs Blender, and Blender was not found." >&2
-      gui_fail "Character Studio needs Blender first — install Blender, then re-run the installer with the Character Studio option."
+      gui_fail "Character Studio needs Blender first — install Blender, then re-run the installer."
       return 1
     fi
     if [ -z "$BLENDER_CFG_VER" ]; then
@@ -424,6 +457,7 @@ do_install() {
       gui_fail "Character Studio could not read Blender's version — re-run the installer."
       return 1
     fi
+    step 52 "Installing Character Studio"
     echo "Character Studio downloads two files: MPFB $MPFB_VERSION (about 44 MB)"
     echo "and the MakeHuman system assets pack (about 268 MB). Together about 311 MB."
     mkdir -p "$DOWNLOAD_CACHE"
@@ -467,6 +501,76 @@ do_install() {
     fi
     MPFB_STATUS="MPFB $MPFB_VERSION + system assets (Blender $BLENDER_CFG_VER)"
     echo "Character Studio installed: $MPFB_STATUS."
+    fi
+  fi
+
+  # --- 3d. Ollama + the local model (qwen3:4b) --------------------------------
+  # The fallback seat needs the Ollama server answering on
+  # 127.0.0.1:11434 with the model pulled. Ollama has no .deb: the
+  # official install script (run with pkexec — it installs to /usr
+  # and sets up the systemd service) is the supported route. An
+  # Ollama failure is NOT fatal: the install completes and the
+  # Bench's Setup check offers to fetch the local model.
+  OLLAMA_STATUS="not installed"
+  OLLAMA_MODEL_STATUS="not pulled"
+  OLLAMA_BIN="$(command -v ollama || true)"
+  step 60 "Checking Ollama"
+  if [ -z "$OLLAMA_BIN" ] && [ "$WITH_OLLAMA" = "1" ]; then
+    step 62 "Installing Ollama"
+    echo "Installing Ollama (about 1.5 GB — the installer downloads the official package; this needs admin permission — a password window will appear)..."
+    mkdir -p "$DOWNLOAD_CACHE"
+    if curl -fSL -C - "$OLLAMA_INSTALL_URL" -o "$DOWNLOAD_CACHE/ollama-install.sh"; then
+      if pkexec sh "$DOWNLOAD_CACHE/ollama-install.sh"; then
+        OLLAMA_BIN="$(command -v ollama || true)"
+      else
+        echo "Ollama: the install was declined or failed — the local model will not be available."
+      fi
+    else
+      echo "Ollama: the install script could not be downloaded — check the network."
+    fi
+  fi
+  if [ -n "$OLLAMA_BIN" ]; then
+    OLLAMA_STATUS="installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -1 || echo 'version unknown'))"
+    # The install script starts the service, but an existing install
+    # may have it stopped — start it (a declined prompt is fine, the
+    # Setup check can try again).
+    if ! ollama_server_up; then
+      if command -v systemctl >/dev/null 2>&1; then
+        pkexec systemctl enable --now ollama >/dev/null 2>&1 || true
+      fi
+      # Wait briefly for the server to answer.
+      _try=0
+      while [ "$_try" -lt 3 ] && ! ollama_server_up; do
+        sleep 3
+        _try=$((_try + 1))
+      done
+    fi
+  fi
+  if ollama_server_up; then
+    if ollama_model_present; then
+      OLLAMA_MODEL_STATUS="pulled"
+      echo "Ollama: the local model ($OLLAMA_MODEL) is ready."
+    elif [ "$WITH_OLLAMA" = "1" ] && [ -n "$OLLAMA_BIN" ]; then
+      step 66 "Pulling the local model"
+      echo "Pulling the local model ($OLLAMA_MODEL, about 2.5 GB) — this takes a few minutes..."
+      if "$OLLAMA_BIN" pull "$OLLAMA_MODEL"; then
+        if ollama_model_present; then
+          OLLAMA_MODEL_STATUS="pulled"
+          echo "Ollama: the local model ($OLLAMA_MODEL) is ready."
+        fi
+      fi
+      if [ "$OLLAMA_MODEL_STATUS" != "pulled" ]; then
+        echo "The local model could not be pulled — the Bench's Setup check will offer to fetch it."
+        if [ -z "$WARNING" ]; then
+          WARNING="The local model (Ollama) is missing — the Bench's Setup check can fetch it."
+        fi
+      fi
+    fi
+  else
+    echo "Ollama: the server is not answering — the local model will not be available."
+    if [ -z "$WARNING" ]; then
+      WARNING="Ollama is not running — the Bench's Setup check can fetch it."
+    fi
   fi
 
   # --- 4. Verify -------------------------------------------------------------
@@ -512,19 +616,26 @@ do_install() {
   if [ -n "$BLENDER_BIN" ]; then
     echo "blender   ${BLENDER_VER:-found} at $BLENDER_BIN (pinned LTS: $BLENDER_VERSION)"
   else
-    echo "blender   MISSING (pinned LTS: $BLENDER_VERSION — the installer can add it; see the README)"
+    echo "blender   MISSING (pinned LTS: $BLENDER_VERSION — re-run the installer)"
   fi
   if [ -n "$SD_BIN" ]; then
     echo "sd-cli    $SD_BIN (image engine: stable-diffusion.cpp)"
   else
-    echo "sd-cli    MISSING (image engine — see the README's install options)"
+    echo "sd-cli    MISSING (image engine — re-run the installer)"
   fi
   if [ -n "$SD_MODEL" ]; then
     echo "img model $SD_MODEL"
   else
-    echo "img model MISSING ($SD_MODEL_FILE into $SD_MODEL_HOME/)"
+    echo "img model MISSING (the image model — re-run the installer)"
   fi
   echo "char stud $MPFB_STATUS"
+  if [ "$OLLAMA_MODEL_STATUS" = "pulled" ]; then
+    echo "ollama    $OLLAMA_STATUS — local model $OLLAMA_MODEL ready"
+  elif [ -n "$OLLAMA_BIN" ]; then
+    echo "ollama    $OLLAMA_STATUS — local model NOT PULLED (the Bench's Setup check can fetch it)"
+  else
+    echo "ollama    MISSING (the local model server — the Bench's Setup check can fetch it)"
+  fi
   echo "core      stdlib only — no pip packages in the system Python"
 
   # --- 6. Desktop launcher + `skullpt` command -------------------------------
@@ -620,6 +731,19 @@ find_sd_model() {
   echo "$first"
 }
 
+# The Ollama server answers on 127.0.0.1:11434 by default; the base
+# URL is overridable (DESIGNSHELL_OLLAMA_BASE — the same variable the
+# shell's ollama module reads) so the check can be pointed at a test
+# server. The version check reads the body, not just the exit code:
+# a server that answers without a version is not a working Ollama.
+ollama_server_up() {
+  curl -fsS --max-time 2 "${DESIGNSHELL_OLLAMA_BASE:-http://127.0.0.1:11434}/api/version" 2>/dev/null | grep -q '"version"'
+}
+
+ollama_model_present() {
+  curl -fsS --max-time 5 "${DESIGNSHELL_OLLAMA_BASE:-http://127.0.0.1:11434}/api/tags" 2>/dev/null | grep -q "\"$OLLAMA_MODEL\""
+}
+
 make_launcher() {
   local install_dir desktop_dir apps_dir
   install_dir="$(pwd)"
@@ -689,11 +813,12 @@ PASSTHROUGH=()
 [ "$WITH_BLENDER" = "1" ] && PASSTHROUGH+=(--with-blender)
 [ "$WITH_IMAGE" = "1" ] && PASSTHROUGH+=(--with-image-engine)
 [ "$WITH_CHARACTER" = "1" ] && PASSTHROUGH+=(--with-character-studio)
+[ "$WITH_OLLAMA" = "1" ] && PASSTHROUGH+=(--with-ollama)
 
 if [ "$GUI_MODE" = "1" ]; then
   echo "== SKULLPT install =="
   set +e
-  SKULLPT_GUI_MODE=1 bash "$SCRIPT_PATH" --_run-worker "${PASSTHROUGH[@]}" 2>&1 | tee "$LOG" | "$DIALOG_CMD" --progress --title="Installing SKULLPT" --text="Starting…" --percentage=0 --auto-close --no-cancel --width=400
+  SKULLPT_GUI_MODE=1 bash "$SCRIPT_PATH" --_run-worker "${PASSTHROUGH[@]}" 2>&1 | tee "$LOG" | "$DIALOG_CMD" --progress --title="Installing SKULLPT" --text="Installing everything SKULLPT needs — up to about 7.7 GB of downloads. Things already installed are skipped." --percentage=0 --auto-close --no-cancel --width=400
   _statuses=("${PIPESTATUS[@]}")
   set -e
   worker_status=${_statuses[0]}

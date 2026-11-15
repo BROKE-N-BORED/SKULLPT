@@ -212,30 +212,100 @@ def engine_status(workspace: Path) -> dict:
     import os
 
     from .blender_export import find_blender
-    from . import tokenfile
+    from . import live, ollama as ollama_mod, tokenfile
 
     seats_path = workspace / "seats.json"
-    critic_key = None
+    gemini_key = False
+    groq_key = False
     try:
         from .seats import load_seats
         seats = load_seats(seats_path if seats_path.exists() else None)
-        env_key = seats.get("critic", {}).get("env_key")
-        critic_key = bool(env_key and os.environ.get(env_key))
+        # A key counts when it is set in the environment OR saved in
+        # the workspace's key file (v1.8) — never the value itself.
+        gemini_key = live.key_available(seats.get("critic", {}), workspace)
+        groq_key = live.key_available(seats.get("repairer", {}), workspace)
     except Exception:
-        critic_key = False
+        gemini_key = False
+        groq_key = False
     # Character Studio (v1.7, T26): ready only when MPFB2 AND its
     # system assets pack are both installed for some Blender.
     from .blender_character import find_mpfb
     mpfb = find_mpfb()
+    # Ollama (v1.8, S5): the local model counts as ready only when
+    # the server is up AND the model is pulled. The check is cached
+    # briefly inside the ollama module, so a down server never
+    # stalls a refresh.
+    ollama = ollama_mod.status()
     return {
         "blender": find_blender() is not None,
         "image_engine": imagegen.find_engine() is not None,
         "image_model": imagegen.find_model(workspace) is not None,
-        "gemini_key": critic_key,
+        "gemini_key": gemini_key,
+        "groq_key": groq_key,
+        "ollama": bool(ollama["server"] and ollama["model"]),
+        "ollama_server": ollama["server"],
+        "ollama_model": ollama["model"],
         "hf_token": bool(os.environ.get("HF_TOKEN"))
         or tokenfile.has_token(workspace),
         "character_studio": bool(mpfb["installed"] and mpfb["assets"]),
     }
+
+
+def missing_setup_items(workspace: Path) -> list[dict]:
+    """Everything the setup check lists (v1.8, S4): one item per
+    missing engine or key, with the fix the Setup window offers.
+    "installer" runs the SKULLPT installer GUI, "pull_model" pulls
+    the local model, "settings" opens the Settings window's key
+    sections. Empty when everything is ready."""
+    status = engine_status(workspace)
+    items = []
+    if not status["blender"]:
+        items.append({"key": "blender", "title": "Blender",
+                      "detail": "Blender builds the 3D files and the "
+                                "renders. It is not installed.",
+                      "fix": "installer"})
+    if not status["image_engine"]:
+        items.append({"key": "image_engine", "title": "Image engine",
+                      "detail": "The image engine draws reference "
+                                "pictures. It is not installed.",
+                      "fix": "installer"})
+    if not status["image_model"]:
+        items.append({"key": "image_model", "title": "Image model",
+                      "detail": "The picture model file (about 2.1 GB) "
+                                "is not downloaded.",
+                      "fix": "installer"})
+    if not status["character_studio"]:
+        items.append({"key": "character_studio", "title": "Character Studio",
+                      "detail": "MPFB2 and its skins are not installed, "
+                                "so character jobs cannot build.",
+                      "fix": "installer"})
+    if not status["ollama"]:
+        if not status["ollama_server"]:
+            items.append({"key": "ollama", "title": "Ollama (local model)",
+                          "detail": "The local model server is not "
+                                    "running. The installer sets it up.",
+                          "fix": "installer"})
+        else:
+            items.append({"key": "ollama", "title": "Ollama model",
+                          "detail": "The server is running, but the "
+                                    "local model is not pulled yet.",
+                          "fix": "pull_model"})
+    if not status["gemini_key"]:
+        items.append({"key": "gemini_key", "title": "Gemini key",
+                      "detail": "The planner and critic seats need your "
+                                "Gemini key. Paste it in Settings.",
+                      "fix": "settings"})
+    if not status["groq_key"]:
+        items.append({"key": "groq_key", "title": "Groq key",
+                      "detail": "The repair seat needs your Groq key. "
+                                "Paste it in Settings.",
+                      "fix": "settings"})
+    if not status["hf_token"]:
+        items.append({"key": "hf_token", "title": "Hugging Face token",
+                      "detail": "Turning a photo into a 3D mesh needs a "
+                                "Hugging Face token. Save it in Settings.",
+                      "fix": "settings"})
+    return items
 
 
 # ------------------------------------------------------- state cache (P7)
@@ -524,7 +594,8 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         words = str(payload.get("words", "")).strip()
         if not words:
             raise ValueError("type what you want first")
-        desc = live.plan_from_words(words, seats, kind=str(payload.get("kind", "scene")))
+        desc = live.plan_from_words(words, seats, kind=str(payload.get("kind", "scene")),
+                                  workspace=workspace)
         job = Job.create(workspace / "jobs", desc)
         detail = f"draft job created: {job.dir.name} — approve it to build"
         used = live.last_plan_seat()
@@ -1094,7 +1165,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
                    "plainly. If the user wants something made, tell them to start "
                    "their message with 'make'.")
         answer, role, _err = live.text_with_fallback(
-            seats, context + "\n\nUser: " + text)
+            seats, context + "\n\nUser: " + text, workspace=workspace)
         reply = answer.strip() or "(the planner seat answered with nothing)"
         if role == "fallback":
             reply += (" (answered by the local fallback model — "

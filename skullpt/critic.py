@@ -58,20 +58,22 @@ class OfflineCritic:
 class GeminiCritic:
     name = "gemini"
 
-    def __init__(self, seat: dict):
+    def __init__(self, seat: dict, workspace=None):
         self.seat = seat
+        # The workspace is where a saved Gemini key lives (v1.8);
+        # without it only the environment is consulted.
+        self.workspace = workspace
 
     def critique(self, desc: dict, previews: list[str],
                  reference_png: bytes | None = None) -> dict:
-        import os
         from pathlib import Path
 
         from . import live
 
-        env_key = self.seat.get("env_key")
-        if not env_key or not os.environ.get(env_key):
+        if not live.key_available(self.seat, self.workspace):
             raise CriticNotConfigured(
-                f"Gemini critic needs {env_key} set in the environment — refusing to fake a visual verdict")
+                "Gemini critic needs a Gemini key — paste one in the "
+                "Bench Settings window")
         # Every render, not just the first (T23): the build's cameras
         # are different angles of the same object, and a flaw visible
         # from one angle is a flaw in the build.
@@ -110,7 +112,8 @@ class GeminiCritic:
                 f"{rubric}\n\nThe description's parts (centimetres, z-up):\n{parts}\n\n"
                 + reply_spec)
             text = live.gemini_text(self.seat, prompt, image_png=reference_png,
-                                    extra_images=render_bytes)
+                                    extra_images=render_bytes,
+                                    workspace=self.workspace)
         else:
             prompt = (
                 "You are the vision critic of a design workshop. "
@@ -119,7 +122,8 @@ class GeminiCritic:
                 f"{rubric}\n\nThe description's parts (centimetres, z-up):\n{parts}\n\n"
                 + reply_spec)
             text = live.gemini_text(self.seat, prompt, image_png=render_bytes[0],
-                                    extra_images=render_bytes[1:])
+                                    extra_images=render_bytes[1:],
+                                    workspace=self.workspace)
         try:
             data = live._json_from_text(text)
         except live.SeatCallFailed as exc:
@@ -137,7 +141,7 @@ class GeminiCritic:
                             if reference_png is not None else ""))}
 
 
-def get_critic(seats: dict, prefer: str = "offline"):
+def get_critic(seats: dict, prefer: str = "offline", workspace=None):
     if prefer == "gemini":
-        return GeminiCritic(seats.get("critic", {}))
+        return GeminiCritic(seats.get("critic", {}), workspace=workspace)
     return OfflineCritic()

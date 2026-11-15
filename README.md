@@ -1,4 +1,4 @@
-# SKULLPT — v1.7
+# SKULLPT — v1.8
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -52,10 +52,19 @@ Blender — 11 macro sliders, a skin from the MakeHuman system assets
 pack, and a rig (GameEngine by default). Character builds are real
 builds now; only `project` builds still fail loudly (that exporter
 is still empty).
+v1.8 is the seamless install: the double-click install now installs
+EVERYTHING — Blender, the image engine and its model, Character
+Studio, and Ollama with the local model pulled — with the total
+download (up to about 7.7 GB on a fresh machine) disclosed before
+anything starts. Gemini and Groq keys are pasted and validated in
+Settings, like the Hugging Face token, and a first-run Setup check
+lists anything still missing with a Fix button for each. Windows
+open maximized, and no text is ever clipped off an edge.
 The core shell (install, demo, build loop, library filing) was
-verified on the target PC on 2026-11-11; the Blender install, the
-image-engine install, the Bench's real-PC run, and the first real
-cloud mesh are still open verdicts.
+verified on the target PC on 2026-11-11, and the Bench opened there
+on 2026-11-14 (Settings window, Blender Ready); the full install,
+the first real cloud mesh, and the first real Blender build through
+the shell are still open verdicts.
 
 ## How it works (the short version)
 
@@ -110,22 +119,44 @@ the install runs behind a progress window, and when it finishes it
 asks "SKULLPT is installed. Open it now?" — say yes and the Bench
 opens. Everything the install does is logged to `install.log` in
 this folder, so a failure can be diagnosed from the log. The
-installer:
+installer installs EVERYTHING the shell needs, in one run:
 
-- checks Python (>= 3.10) and Blender,
+- checks Python (>= 3.10),
 - creates a private `.venv` in this folder and installs PySide6 into it
   (the Bench window's only dependency — Mint's Python refuses to
   install packages outside a venv, so the shell keeps its own). If
   python3-venv is missing, the installer adds that one system package
   itself (one GUI password prompt) and carries on — it never asks
   you to type anything,
+- installs Blender (the pinned LTS — a newer installed Blender is
+  never downgraded, and the pinned version is never reinstalled),
+- builds the image engine from source and downloads its model
+  (about 2.1 GB),
+- installs Character Studio (MPFB2 plus the MakeHuman system assets
+  pack, about 311 MB),
+- installs Ollama and pulls the local model (qwen3:4b, about 2.5 GB)
+  — the no-key fallback seat, so the planner works with no keys at
+  all,
 - runs the shell's test suite as the install proof,
 - prints a dependency report,
 - puts a **SKULLPT** launcher on the Desktop and in the app menu, and
   a `skullpt` command on your PATH (so `skullpt` works anywhere).
 
+A fresh machine downloads up to about 7.7 GB in total (PySide6 about
+80 MB, Blender about 360 MB, the image engine source about 700 MB,
+the image model about 2.1 GB, Character Studio about 311 MB, Ollama
+about 1.5 GB, the local model about 2.5 GB) — the installer says so
+before it starts, and anything already installed is skipped, so a
+re-run downloads far less, or nothing at all. All downloads resume
+if interrupted and are SHA-256 verified.
+
 Then start it from the launcher, or from `skullpt` — both open the
-Bench, the native desktop window.
+Bench, the native desktop window. The first time it opens, the Setup
+check lists anything still missing — an engine, the local model, or
+a key — with a Fix button for each. Your Gemini and Groq keys go in
+Settings: paste the key you already have, the app checks it works
+and saves it in your workspace only (owner-only, never shown back).
+No key is ever typed into a terminal or put in a file by hand.
 
 The shell's core runs on Python's standard library alone — PySide6 is
 only for the Bench window, and it lives in the private `.venv`, never
@@ -144,27 +175,13 @@ run path requires them.
                                  terminal installer)
     ./install.sh --gui           install with the progress window
     ./install.sh --terminal      install in the terminal
-    ./install.sh --with-blender  also download + install the pinned Blender LTS
-                                 (4.5.9) into /opt/blender (needs admin
-                                 permission — it will ask; replaces an
-                                 existing /opt/blender, but never
-                                 downgrades: a newer installed Blender
-                                 is left alone. The download resumes if
-                                 interrupted and is SHA-256 verified.)
+    ./install.sh --with-blender  kept for compatibility — the default
     ./install.sh --with-image-engine
-                                 also build the image engine from source and
-                                 download its model (see the image step below;
-                                 needs git, cmake, and a C++ compiler — the
-                                 installer adds them itself if they are missing)
     ./install.sh --with-character-studio
-                                 also install Character Studio: MPFB 2.0.18
-                                 (about 44 MB) plus the MakeHuman system
-                                 assets pack (about 268 MB) into the Blender
-                                 it finds — Blender has to exist first, so
-                                 this refuses plainly without it. Both
-                                 downloads resume if interrupted and are
-                                 SHA-256 verified; the assets pack has a
-                                 backup mirror if the first one fails.
+    ./install.sh --with-ollama   install already includes Blender, the
+                                 image engine, Character Studio, and
+                                 Ollama + the local model; these flags
+                                 change nothing now
     ./run.sh                     start the Bench — the shell's window
                                  (live render view + chat + folders),
                                  a native Linux desktop window
@@ -216,8 +233,12 @@ exporter, and the game-ready gate all work on the expanded set.
 actual shapes — cylinders, spheres, extruded profiles, lathes, and
 tubes — not bounding boxes. The camera system is unchanged.
 
-**Live seats (talk to it).** Keys come from environment variables only
-(`GEMINI_API_KEY`, `GROQ_API_KEY`), never stored:
+**Live seats (talk to it).** A key comes from the environment first
+(`GEMINI_API_KEY`, `GROQ_API_KEY`), then from the workspace's key
+file — Settings saves Gemini and Groq keys there (validated against
+the real provider before saving, owner-only, gitignored, never
+shown back), the same way the Hugging Face token has worked since
+v1.5. No key is ever stored anywhere else:
 
     python3 -m skullpt plan <workspace> "a small market stall with a wood counter"
     python3 -m skullpt critique <workspace> <job>
@@ -327,7 +348,7 @@ with the fix in plain words; nothing is faked. Generation runs under
 the governor's heavy-job lock and RAM floor, like a Blender build.
 One honest wrinkle: the prebuilt Linux binary for sd.cpp needs
 glibc 2.43 (Ubuntu 26.04) and will not run on Mint (glibc 2.39), which
-is why the installer's image-engine option builds it from source.
+is why the installer builds it from source.
 
 **The second lane** is manual, and needs no building: make the picture
 in the Gemini app (best free quality) and drop the file in through
@@ -430,10 +451,12 @@ awaiting_approval: nothing builds until the description is approved.
 
 What it needs and what it says:
 
-- **HF_TOKEN in the environment** (free account at huggingface.co,
-  Settings → Access Tokens → New token, Read role). The token is
-  never written to any file — same rule as GEMINI_API_KEY. Without
-  it the step refuses and names the fix; no network call is made.
+- **HF_TOKEN in the environment, or saved in Settings** (free account
+  at huggingface.co, Settings → Access Tokens → New token, Read
+  role). A saved token goes to a file in the workspace only
+  (`hf_token.key`, owner-only, gitignored) — same rule as the Gemini
+  and Groq keys. Without it the step refuses and names the fix; no
+  network call is made.
 - **Disclosure first.** Every run says plainly, before anything is
   sent, that the photo is uploaded to Hugging Face's free GPU and
   leaves the machine.
@@ -499,7 +522,7 @@ there). The first real mesh happens on a machine with a token.
   the image model download with resume (an interrupted run picks up
   where it left off) and are SHA-256 verified against hashes
   recorded in install.sh. A newer installed Blender is never
-  downgraded — `--with-blender` leaves it alone and says so. The
+  downgraded — the installer leaves it alone and says so. The
   image-engine compile is capped at `-j2` on machines with 8 GB of
   RAM or less.
 - **Smaller fixes.** The chat transcript is saved to the workspace
@@ -508,6 +531,45 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.8 — The seamless install (S1–S6)
+
+- **The default install is the full install.** One double-click
+  installs everything: Blender (pinned LTS, never downgraded, never
+  reinstalled when the pinned version is already there), the image
+  engine built from source plus its model, Character Studio (MPFB2
+  plus the system assets pack), and Ollama with the local model
+  pulled. The `--with-*` flags are kept for compatibility and change
+  nothing now. A fresh machine downloads up to about 7.7 GB in total
+  — the installer discloses that before anything starts (progress
+  window and log), and anything already installed is skipped.
+- **Ollama and the local model.** The installer runs Ollama's
+  official install script with one GUI password prompt (there is no
+  .deb), starts the service, pulls qwen3:4b (about 2.5 GB), and
+  confirms the server answers before reporting success. If the model
+  pull fails, the install still completes and says plainly that the
+  local model is missing — the Bench's Setup check offers to fetch
+  it.
+- **Keys in Settings.** Gemini and Groq keys are pasted and saved in
+  Settings, the same way the Hugging Face token works: the app
+  checks the key against the real provider before saving it, and
+  stores it in the workspace only (`gemini_key.key`, `groq_key.key`
+  — owner-only, gitignored, never shown back, never in a backup).
+  The seats read the environment first, then the key file. No fix
+  text anywhere points at an environment variable or a terminal.
+- **The Setup check.** The first time the Bench opens, one panel
+  lists everything missing — an engine, the local model, or a key —
+  with a Fix button for each. Engine fixes run the installer (which
+  only downloads what is missing); the model fix pulls it; key fixes
+  open Settings. It shows once per launch, with "Remind me later",
+  and can be reopened any time from File, then Setup check, or from
+  Settings. Settings now has Ollama and Groq status lines too — the
+  two gaps the real-PC screenshot exposed.
+- **Windows open maximized, nothing clipped.** Every window opens
+  maximized on first run (a saved geometry still wins after that,
+  unless it is too small to read — then maximized wins). The
+  Settings content scrolls, and the engine status lines wrap, so no
+  text ever runs off an edge.
 
 ## v1.7 — Character Studio (T26, the last task-list item)
 

@@ -23,9 +23,10 @@ from .governor import stamp
 BACKED_UP_DIRS = ("jobs", "library", "images", "intake", "meshes")
 # Loose files at the workspace root that hold the user's work.
 BACKED_UP_FILES = ("settings.json", "chat.jsonl", "seats.json")
-# Never in a backup: the HF token is a secret; the lock and caches
+# Never in a backup: the key files are secrets; the lock and caches
 # are machine state, not work.
-EXCLUDED_NAMES = {"hf_token.key", ".heavy.lock"}
+EXCLUDED_NAMES = {"hf_token.key", "gemini_key.key", "groq_key.key",
+                  ".heavy.lock"}
 EXCLUDED_SUFFIXES = (".pyc",)
 EXCLUDED_DIRS = {"__pycache__"}
 
@@ -70,13 +71,14 @@ def backup_workspace(workspace: str | Path, dest: str | Path | None = None) -> d
             "workspace": ws.name,
             "made": stamp(),
             "files": sorted(files),
-            "note": ("The Hugging Face token file (hf_token.key) is "
-                     "never in a backup — it is a secret. Re-save the "
-                     "token in Settings after restoring."),
+            "note": ("The key files (hf_token.key, gemini_key.key, "
+                     "groq_key.key) are never in a backup — they are "
+                     "secrets. Re-save your keys in Settings after "
+                     "restoring."),
         }
         zf.writestr("backup-manifest.json", json.dumps(manifest, indent=2) + "\n")
     size = dest.stat().st_size
     return {"ok": True, "path": str(dest), "files": len(files), "bytes": size,
-            "note": ("Backed up " + str(len(files)) + " files. The Hugging "
-                     "Face token is not in the backup — re-save it in "
-                     "Settings after restoring.")}
+            "note": ("Backed up " + str(len(files)) + " files. Your keys "
+                     "are not in the backup — re-save them in Settings "
+                     "after restoring.")}

@@ -117,18 +117,17 @@ def find_model(workspace: str | Path | None = None) -> Path | None:
 
 def engine_missing_text() -> str:
     return ("the image engine (stable-diffusion.cpp) is not installed — "
-            "nothing was generated and nothing was faked. Fix: add the "
-            "image engine through the installer's image-engine option "
-            "(see the README's install options). It builds the engine "
-            "from source; the prebuilt Linux binary needs a newer system "
-            "library than Mint ships.")
+            "nothing was generated and nothing was faked. Fix: open the "
+            "Bench and use the Setup check, or re-run the SKULLPT "
+            "installer — it builds the engine from source; the prebuilt "
+            "Linux binary needs a newer system library than Mint ships.")
 
 
 def model_missing_text() -> str:
     return (f"the image model is not downloaded — nothing was generated. "
-            f"Fix: download {MODEL_FILENAME} (about 2.1 GB) from "
-            f"{MODEL_URL} and put it in ~/design-shell-models/, or set "
-            f"DESIGNSHELL_SD_MODEL to its path.")
+            f"Fix: open the Bench and use the Setup check, or re-run the "
+            f"SKULLPT installer — it downloads {MODEL_FILENAME} "
+            f"(about 2.1 GB) for you.")
 
 
 def _find_guidance_model(workspace: str | Path | None, env_name: str,

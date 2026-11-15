@@ -2,8 +2,10 @@
 
 Four seats, all wired (v1.6): Gemini plans and sees, Groq repairs
 drafts that fail validation, local Ollama is the offline fallback when
-Gemini cannot be reached. Keys are read from environment variables at
-call time and are NEVER stored by the shell.
+Gemini cannot be reached. A key comes from the environment first, then
+from the workspace's key file (v1.8: Settings saves Gemini and Groq
+keys there, owner-only, gitignored — the same precedence the HF token
+has always had). A key is never stored anywhere else, and never logged.
 
 Seats removed in v1.5 (they were advertised but had no caller and no
 live wiring — the config promised a six-brain workshop and two seats

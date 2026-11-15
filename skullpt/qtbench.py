@@ -887,6 +887,9 @@ if QT_AVAILABLE:
             self._poll_timer = QtCore.QTimer(self)
             self._poll_timer.timeout.connect(self._poll_runs)
             self._poll_timer.start(500)
+            # S4: the setup check is offered once per launch; the
+            # user dismissing it lasts until the next launch.
+            self._setup_dismissed = False
 
         @property
         def _viewport(self):
@@ -1123,6 +1126,8 @@ if QT_AVAILABLE:
                                 self._switch_workspace)
             file_menu.addAction("Back up workspace...",
                                 self._backup_workspace)
+            file_menu.addAction("Setup check...",
+                                lambda: self._open_window("setup"))
             file_menu.addSeparator()
             quit_action = QtGui.QAction("Quit", self)
             quit_action.setShortcut(QtGui.QKeySequence.Quit)
@@ -1176,10 +1181,25 @@ if QT_AVAILABLE:
             self._ram_label = QtWidgets.QLabel("RAM free: -")
             bar.addPermanentWidget(self._ram_label)
 
+        def _maybe_show_setup(self) -> None:
+            """First-run setup check (v1.8, S4): when something
+            required is missing, open the Setup window once. The
+            user dismissing it lasts until the next launch. A check
+            that cannot run must never break the launch."""
+            if getattr(self, "_setup_dismissed", False):
+                return
+            try:
+                missing = bench_mod.missing_setup_items(self.workspace)
+            except Exception:
+                return
+            if missing:
+                self._open_window("setup")
+
         # -- windows ----------------------------------------------------
         def _open_window(self, name: str) -> None:
             from .qtwindows import (CharacterWindow, HelpWindow, ImagesWindow,
-                                    LibraryWindow, SettingsWindow)
+                                    LibraryWindow, SettingsWindow, SetupWindow,
+                                    show_window)
 
             if name == "jobs":
                 self.show()
@@ -1198,6 +1218,8 @@ if QT_AVAILABLE:
                     window = LibraryWindow(self, self.workspace)
                 elif name == "settings":
                     window = SettingsWindow(self, self.workspace)
+                elif name == "setup":
+                    window = SetupWindow(self, self.workspace)
                 elif name == "help":
                     window = HelpWindow(self)
                 else:
@@ -1209,7 +1231,7 @@ if QT_AVAILABLE:
                 refresh = getattr(window, "refresh", None)
                 if callable(refresh):
                     refresh()
-            window.show()
+            show_window(window)
             window.raise_()
             window.activateWindow()
 
@@ -1861,8 +1883,13 @@ if QT_AVAILABLE:
             window.activateWindow()
 
         server.newConnection.connect(_on_new_connection)
-        window.show()
+        from .qtwindows import show_window
+
+        show_window(window)
         log_startup("window shown")
+        # S4: once the window is up, offer the setup check when
+        # something required is missing. Once per launch only.
+        QtCore.QTimer.singleShot(500, window._maybe_show_setup)
         return app.exec()
 
 else:

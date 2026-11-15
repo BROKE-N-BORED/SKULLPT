@@ -1,8 +1,8 @@
-"""SKULLPT — standalone design & asset workshop (v1.7).
+"""SKULLPT — standalone design & asset workshop (v1.8).
 
 Plan -> Approve -> Build, Description File at the centre,
 recipes instead of raw generation, machine checks + vision critique loop,
 Asset Library as memory. Stdlib only: runs anywhere Python 3.10+ runs.
 """
 
-__version__ = "1.7"
+__version__ = "1.8"

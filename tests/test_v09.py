@@ -104,7 +104,10 @@ class ChatTests(BenchV9Case):
 
     def test_make_without_key_refuses_plainly(self):
         reply = bench.chat_reply(self.ws, "make a market stall")
-        self.assertIn("GEMINI_API_KEY", reply["reply"])
+        # v1.8: the fix is in-app (paste the key in Settings), not an
+        # environment variable — the refusal says so.
+        self.assertIn("has no key", reply["reply"])
+        self.assertIn("Bench Settings window", reply["reply"])
 
     def test_open_chat_without_key_is_honest(self):
         reply = bench.chat_reply(self.ws, "what do you think of elm wood?")

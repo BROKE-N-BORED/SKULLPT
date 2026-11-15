@@ -43,7 +43,7 @@ fi
 
 if [ -z "${DESIGNSHELL_BLENDER:-}" ] && ! command -v blender >/dev/null 2>&1 \
    && [ ! -x /opt/blender/blender ]; then
-  echo "Note: Blender not found — scenes cannot build yet (the installer's Blender option adds it — see the README's install options)."
+  echo "Note: Blender not found — scenes cannot build yet (re-run the SKULLPT installer to install it, or use the Bench's Setup check)."
 fi
 
 if [ "$#" -eq 0 ]; then
