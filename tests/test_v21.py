@@ -89,7 +89,7 @@ class MaterialSpecValidationTests(unittest.TestCase):
 
     def test_bad_family_rejected(self):
         desc = _mat_desc()
-        desc["parts"][0]["material"]["family"] = "stone"
+        desc["parts"][0]["material"]["family"] = "plastic"
         problems = desc_mod.validate(desc)
         self.assertTrue(any("family" in p for p in problems), problems)
 
@@ -101,7 +101,7 @@ class MaterialSpecValidationTests(unittest.TestCase):
 
     def test_bad_layout_rejected(self):
         desc = _mat_desc()
-        desc["parts"][0]["material"]["layout"] = "herringbone"
+        desc["parts"][0]["material"]["layout"] = "basket_weave"
         problems = desc_mod.validate(desc)
         self.assertTrue(any("layout" in p for p in problems), problems)
 
@@ -247,7 +247,9 @@ class MaterialScriptTests(unittest.TestCase):
         spec = payload["parts"][0]["material_spec"]
         self.assertFalse(spec["boards"])
         self.assertIsNone(spec["board_prescale"])
-        self.assertEqual(spec["nodes"], 20)  # base + knots, no boards
+        # base + knots, no boards, +1 for the wear node (WOOD_SPEC
+        # carries dirt 0.2; v1.12 M9 renders wear).
+        self.assertEqual(spec["nodes"], 21)
 
     def test_no_knots_means_no_knot_nodes(self):
         desc = _mat_desc()
@@ -256,7 +258,9 @@ class MaterialScriptTests(unittest.TestCase):
         payload = blender_export.build_payload(desc, Path("/tmp"), "t")
         spec = payload["parts"][0]["material_spec"]
         self.assertEqual(spec["knots"], 0)
-        self.assertEqual(spec["nodes"], 17)
+        # Base 17 + 1 for the wear node (WOOD_SPEC carries dirt 0.2;
+        # v1.12 M9 renders wear).
+        self.assertEqual(spec["nodes"], 18)
 
     def test_ring_spacing_changes_the_wave_scale(self):
         wide = _mat_desc()
@@ -277,7 +281,9 @@ class MaterialScriptTests(unittest.TestCase):
         self.assertIsNone(plank["texture"])
         self.assertEqual(plank["material_spec"]["breadcrumb"],
                          "Wood · Walnut · Boards")
-        self.assertEqual(plank["material_spec"]["nodes"], 23)
+        # 23 (base + knots + boards) + 1 for the wear node (WOOD_SPEC
+        # carries dirt 0.2; v1.12 M9 renders wear).
+        self.assertEqual(plank["material_spec"]["nodes"], 24)
 
     def test_string_materials_keep_the_old_texture_chain(self):
         script = self._script(_mat_desc())
@@ -400,7 +406,9 @@ class BuildReportMaterialsTests(unittest.TestCase):
         self.assertEqual(set(report), {"plank"})
         self.assertEqual(report["plank"]["breadcrumb"],
                          "Wood · Walnut · Boards")
-        self.assertEqual(report["plank"]["nodes"], 23)
+        # 23 (base + knots + boards) + 1 for the wear node (WOOD_SPEC
+        # carries dirt 0.2; v1.12 M9 renders wear).
+        self.assertEqual(report["plank"]["nodes"], 24)
 
     def test_material_report_empty_without_object_materials(self):
         self.assertEqual(builder_mod.material_report(SHOP), {})
@@ -797,7 +805,9 @@ class MaterialEndToEndTests(unittest.TestCase):
             stats = json.loads(
                 (out_dir / "mattest.stats.json").read_text())
             mats = stats["materials"]
-            self.assertEqual(mats["plank"]["nodes"], 23)
+            # 23 (base + knots + boards) + 1 for the wear node
+            # (WOOD_SPEC carries dirt 0.2; v1.12 M9 renders wear).
+            self.assertEqual(mats["plank"]["nodes"], 24)
             self.assertEqual(mats["plank"]["breadcrumb"],
                              "Wood · Walnut · Boards")
             # Measured == predicted for every object part.

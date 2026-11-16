@@ -397,9 +397,11 @@ class DialFace(QtWidgets.QWidget):
 
     def set_spec(self, spec: dict) -> None:
         self._spec = materials_mod.normalize_material_spec(spec)
+        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
         if (self._active_knob is not None
-                and self._active_knob not in
-                materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]):
+                and self._active_knob not in table
+                and self._active_knob
+                not in materials_mod.WEAR_PARAMS):
             self._active_knob = None
         self.update()
         self.specChanged.emit(self.spec())
@@ -425,9 +427,22 @@ class DialFace(QtWidgets.QWidget):
         self.update()
 
     # -- items ------------------------------------------------------
+    def _knob_meta(self, name: str) -> tuple:
+        """The 7-tuple for a knob, param or wear. Wear knobs share
+        the param tables' shape (label, min, max, default, unit,
+        simple?, page) but live in spec["wear"]."""
+        if name in materials_mod.WEAR_PARAMS:
+            return materials_mod.WEAR_PARAMS[name]
+        return materials_mod.PARAMS_BY_FAMILY[self._spec["family"]][name]
+
+    def _knob_store(self, name: str) -> dict:
+        """The spec dict a knob's value lives in."""
+        if name in materials_mod.WEAR_PARAMS:
+            return self._spec["wear"]
+        return self._spec["params"]
+
     def _knob_visible(self, name: str) -> bool:
-        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
-        return self._advanced or table[name][5]
+        return self._advanced or self._knob_meta(name)[5]
 
     def _items(self) -> list[dict]:
         """The outer ring's items for the active page."""
@@ -449,6 +464,14 @@ class DialFace(QtWidgets.QWidget):
         if page == "Saved":
             return [{"key": name, "label": name, "kind": "preset"}
                     for name in sorted(self._presets)[:12]]
+        if page == "Life":
+            # Wear knobs, gated per family (moss only on wood,
+            # stone and ground; rust only on metal).
+            return [{"key": name, "label": meta[0], "kind": "knob",
+                     "value": self._format_value(name)}
+                    for name, meta in materials_mod.WEAR_PARAMS.items()
+                    if materials_mod.wear_applies(family, name)
+                    and self._knob_visible(name)]
         table = materials_mod.PARAMS_BY_FAMILY[family]
         return [{"key": name, "label": meta[0], "kind": "knob",
                  "value": self._format_value(name)}
@@ -456,9 +479,9 @@ class DialFace(QtWidgets.QWidget):
                 if meta[6] == page and self._knob_visible(name)]
 
     def _format_value(self, name: str) -> str:
-        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
-        _label, _low, _high, _default, unit, _simple, _page = table[name]
-        value = self._spec["params"][name]
+        _label, _low, _high, _default, unit, _simple, _page = \
+            self._knob_meta(name)
+        value = self._knob_store(name)[name]
         if name == "seed":
             return str(int(value))
         if unit:
@@ -474,7 +497,8 @@ class DialFace(QtWidgets.QWidget):
             return self._spec["style"]
         if page == "Layout":
             return self._spec["layout"]
-        if page in ("Detail", "Form", "Surface", "Colour", "Depth"):
+        if page in ("Detail", "Form", "Surface", "Life", "Colour",
+                    "Depth"):
             return self._active_knob
         return None
 
@@ -504,21 +528,22 @@ class DialFace(QtWidgets.QWidget):
         self.update()
 
     def _knob_step(self, name: str) -> float:
-        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
-        _label, low, high, _default, _unit, _simple, _page = table[name]
+        _label, low, high, _default, _unit, _simple, _page = \
+            self._knob_meta(name)
         if name == "seed":
             return 1.0
         return (high - low) / 50.0
 
     def _set_knob(self, name: str, value: float) -> None:
-        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
-        _label, low, high, _default, _unit, _simple, _page = table[name]
+        _label, low, high, _default, _unit, _simple, _page = \
+            self._knob_meta(name)
         value = max(low, min(high, value))
         if name == "seed":
             value = int(round(value))
-        if self._spec["params"][name] == value:
+        store = self._knob_store(name)
+        if store[name] == value:
             return
-        self._spec["params"][name] = value
+        store[name] = value
         self.update()
         self.specChanged.emit(self.spec())
 
@@ -526,7 +551,7 @@ class DialFace(QtWidgets.QWidget):
         if self._active_knob is None:
             return
         step = self._knob_step(self._active_knob)
-        current = self._spec["params"][self._active_knob]
+        current = self._knob_store(self._active_knob)[self._active_knob]
         self._set_knob(self._active_knob, current + direction * step)
         self.specSettled.emit(self.spec())
 
@@ -552,7 +577,8 @@ class DialFace(QtWidgets.QWidget):
         if radius < _DIAL_R_CENTER and self._active_knob is not None:
             self._dragging = True
             self._drag_start_y = pos.y()
-            self._drag_start_value = self._spec["params"][self._active_knob]
+            self._drag_start_value = \
+                self._knob_store(self._active_knob)[self._active_knob]
             return
         angle = self._angle_at(pos.x(), pos.y())
         if _DIAL_R_PAGE_IN <= radius < _DIAL_R_PAGE_OUT:
@@ -570,9 +596,8 @@ class DialFace(QtWidgets.QWidget):
         if not self._dragging or self._active_knob is None:
             super().mouseMoveEvent(event)
             return
-        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
         _label, low, high, _default, _unit, _simple, _page = \
-            table[self._active_knob]
+            self._knob_meta(self._active_knob)
         # Dragging up increases the value; 200 px spans the range.
         moved = self._drag_start_y - event.position().toPoint().y()
         value = self._drag_start_value + moved / 200.0 * (high - low)
@@ -598,6 +623,10 @@ class DialFace(QtWidgets.QWidget):
         key = event.key()
         if QtCore.Qt.Key_1 <= key <= QtCore.Qt.Key_9:
             self.set_page(key - QtCore.Qt.Key_1)
+            return
+        if key == QtCore.Qt.Key_0:
+            # Ten pages: 1-9 pick pages 0-8, 0 picks page 9 (Saved).
+            self.set_page(len(_DIAL_PAGES) - 1)
             return
         if key == QtCore.Qt.Key_Up:
             self._nudge_knob(1)
@@ -759,10 +788,10 @@ class DialFace(QtWidgets.QWidget):
                                 materials_mod.breadcrumb(self._spec))
 
     def _paint_knob_center(self, painter: QtGui.QPainter) -> None:
-        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
         name = self._active_knob
-        label, low, high, _default, unit, _simple, _page = table[name]
-        value = self._spec["params"][name]
+        label, low, high, _default, unit, _simple, _page = \
+            self._knob_meta(name)
+        value = self._knob_store(name)[name]
         fraction = 0.0 if high <= low else (value - low) / (high - low)
         rect = QtCore.QRectF(_DIAL_CX - _DIAL_R_CENTER + 6,
                              _DIAL_CY - _DIAL_R_CENTER + 6,
@@ -3209,10 +3238,16 @@ approval.</p>
 real procedural material: pick a part in the Render window, press
 Dial (or double-click the part), and the Material Dial opens. The
 inner ring is the pages (Material, Style, Layout, Detail, Form,
-Surface, Colour, Depth, Saved); the outer ring holds the page's
-swatches or knobs; the centre shows the active knob with its gauge.
-Drag up or down on the centre to turn a knob, or scroll over it.
-Number keys 1 to 9 pick pages. Surprise rolls a random material and
+Surface, Life, Colour, Depth, Saved); the outer ring holds the
+page's swatches or knobs; the centre shows the active knob with its
+gauge. Drag up or down on the centre to turn a knob, or scroll over
+it. Number keys 1 to 9 pick pages, 0 picks Saved. The Life page
+holds the wear knobs: dirt, edge wear and wet show in Simple mode,
+the rest (grime, dust, moss, rust, chips, scratches) in Advanced.
+Moss only grows on wood, stone and ground; rust only on metal.
+Simple mode shows only the knobs that matter for each material;
+Advanced shows everything. The preview at the bottom re-renders
+when a knob settles. Surprise rolls a random material and
 records its seed, so it can be made again exactly. Save stores the
 material as a preset for later. Close applies the material to the
 part. A part with no material shows "No material here - open the

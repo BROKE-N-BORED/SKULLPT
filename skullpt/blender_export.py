@@ -97,9 +97,11 @@ def resolve_material(part: dict) -> tuple[str, float, float]:
     name = part.get("material")
     if isinstance(name, dict):
         # object form (v1.11, M1/M2): the style's base colour and
-        # gloss-adjusted roughness; wood is never metallic
+        # gloss-adjusted roughness; the metallic comes from the
+        # resolved spec (metal styles are metallic, the rest are not)
         resolved = materials_mod.resolve_spec(name)
-        return (materials_mod.spec_base_color(name), 0.0,
+        return (materials_mod.spec_base_color(name),
+                resolved.get("metallic", 0.0),
                 resolved["roughness"])
     if isinstance(name, str) and name.startswith("#") and len(name) == 7:
         return name, 0.0, 0.8
@@ -161,14 +163,135 @@ def _grain_rotation(size_cm, flow: float) -> tuple[float, float, float]:
     return (0.0, 0.0, 0.0)
 
 
+def _face_frame(size_cm):
+    """(rotation, row_axis, unit_axis) for a bond layout (M8): the
+    Brick node reads texture X and Y, so the mapping rotation puts
+    the part's largest face on texture XY. The row axis is the one
+    the courses stack along (the block height), the unit axis the
+    one the blocks run along (the block length). Axes are 0 (X) or
+    1 (Y) into the separated texture vector."""
+    x, y, z = (float(v) for v in size_cm)
+    if z <= x and z <= y:
+        # face XY (a floor): no rotation, rows stack along Y
+        return (0.0, 0.0, 0.0), 1, 0
+    if y <= x and y <= z:
+        # face XZ (a wall): rotate about X, rows stack along Y
+        return (math.pi / 2.0, 0.0, 0.0), 1, 0
+    # face YZ (a wall facing X): rotate about Y, rows stack along X
+    return (0.0, math.pi / 2.0, 0.0), 0, 1
+
+
+def _chevron_fold_axis(size_cm):
+    """Which texture axis the chevron fold runs on (M8): the face
+    axis across the grain (texture Z holds the grain after the
+    grain rotation). 0 is X, 1 is Y."""
+    x, y, z = (float(v) for v in size_cm)
+    order = sorted(((x, 0), (y, 1), (z, 2)), reverse=True)
+    longest = order[0][1]
+    second = order[1][1]
+    if longest == 0:
+        # rotation about Y: texture X is part Z, texture Y is part Y
+        return 1 if second == 1 else 0
+    if longest == 1:
+        # rotation about X: texture X is part X, texture Y is part Z
+        return 0 if second == 0 else 1
+    # identity: texture axes are the part axes
+    return 0 if second == 0 else 1
+
+
+def _layout_rot_axis(size_cm, map_rot):
+    """Which texture axis the wood layout rotation turns about
+    (M8): the face normal in the texture frame. The grain rotation
+    is a single-axis rotation, so the frame it is closer to (90
+    degrees or identity) decides the mapping. A result of 2 (the
+    grain axis itself, only when flow is high) falls back to 0:
+    rotating about the grain axis would be a no-op, while any
+    perpendicular axis tilts the grain visibly."""
+    x, y, z = (float(v) for v in size_cm)
+    smallest = min(((x, 0), (y, 1), (z, 2)))[1]
+    rx, ry, _rz = map_rot
+    if abs(ry) > math.pi / 4.0:
+        # ~90 deg about Y: texture X is part Z, texture Y is part Y
+        axis = 1 if smallest == 1 else 0
+    elif abs(rx) > math.pi / 4.0:
+        # ~90 deg about X: texture X is part X, texture Y is part Z
+        axis = 0 if smallest == 0 else 1
+    else:
+        axis = smallest
+    return axis if axis < 2 else 0
+
+
 def _part_material_spec(src: dict, size_cm) -> dict | None:
     """The resolved material spec for a part, or None for a string
-    material. Adds the grain rotation (which needs the part size)."""
+    material. Adds the size-dependent geometry: the grain rotation
+    (wood only), the bond face frame and prescale (bond layouts),
+    and the chevron fold axis (chevron)."""
     material = src.get("material")
     if not isinstance(material, dict):
         return None
     resolved = materials_mod.resolve_spec(material)
-    resolved["map_rot"] = _grain_rotation(size_cm, resolved["flow"])
+    bond = resolved.get("bond")
+    if resolved["family"] == "wood":
+        resolved["map_rot"] = _grain_rotation(size_cm, resolved["flow"])
+        if resolved["layout"] in ("parquet", "herringbone"):
+            resolved["layout_rot_axis"] = _layout_rot_axis(
+                size_cm, resolved["map_rot"])
+    elif bond:
+        rot, row, unit = _face_frame(size_cm)
+        resolved["map_rot"] = rot
+        resolved["bond_row"] = row
+        resolved["bond_unit"] = unit
+        cs = resolved["coord_scale"]
+        # The bond prescale is UNIFORM on the face axes (one cell
+        # is one block height), so the Brick node's single Mortar
+        # Size is the same real width on both axes. Basket weave
+        # shows the brick's depth face, so its cell is one depth.
+        if bond["kind"] == "basket_weave":
+            cell_cm = materials_mod.BRICK_DEPTH_CM
+            width = (materials_mod.BRICK_LENGTH_CM
+                     / materials_mod.BRICK_DEPTH_CM)
+        else:
+            cell_cm = bond["height_cm"]
+            width = bond["length_cm"] / bond["height_cm"]
+        # The Brick node's Width runs along texture X: when the
+        # blocks run along Y (a wall facing X), width and height
+        # swap so the length still runs horizontally. Headers show
+        # the brick's depth face (english/flemish only).
+        if unit == 0:
+            brick_width, row_height = width, 1.0
+            header_width = (materials_mod.BRICK_DEPTH_CM
+                            / bond["height_cm"])
+            header_row_height = 1.0
+        else:
+            brick_width, row_height = 1.0, width
+            header_width = 1.0
+            header_row_height = (materials_mod.BRICK_DEPTH_CM
+                                 / bond["height_cm"])
+        resolved["bond_prescale"] = (
+            1.0 / (cell_cm / 100.0 * cs),
+            1.0 / (cell_cm / 100.0 * cs),
+            1.0,
+        )
+        resolved["brick_width"] = brick_width
+        resolved["row_height"] = row_height
+        resolved["header_width"] = header_width
+        resolved["header_row_height"] = header_row_height
+        if bond["kind"] == "basket_weave":
+            # Basket parity cells are one brick length square.
+            basket = 1.0 / (materials_mod.BRICK_LENGTH_CM / 100.0 * cs)
+            resolved["basket_prescale"] = (basket, basket, basket)
+    else:
+        resolved["map_rot"] = (0.0, 0.0, 0.0)
+    if resolved["layout"] == "chevron":
+        fold = _chevron_fold_axis(size_cm)
+        cs = resolved["coord_scale"]
+        cell = 1.0 / (resolved["chevron_cell_cm"] / 100.0 * cs)
+        prescale = [1.0, 1.0, 1.0]
+        prescale[fold] = cell
+        prescale[2] = cell
+        resolved["fold_axis"] = fold
+        resolved["fold_prescale"] = tuple(prescale)
+        resolved["fold_unscale"] = tuple(1.0 / v for v in prescale)
     return resolved
 
 
@@ -443,6 +566,329 @@ def _shade(hex_color, k):
     b = int(hex_color[5:7], 16) / 255.0 * k
     return (max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b)), 1.0)
 
+_WEAR_GROUP = None
+
+def _wear_group():
+    """The shared SKULLPT Wear node group (v1.12, M9): one group per
+    .blend, instanced by every worn material. 32 internal nodes
+    (materials.WEAR_GROUP_NODE_COUNT). The group takes the base
+    colour, base roughness, a coordinate vector and the ten wear
+    amounts, and returns the worn colour and roughness. Wear that
+    does not apply to a family is zeroed host-side, so a zero
+    amount is a no-op pass, not a branch."""
+    global _WEAR_GROUP
+    if _WEAR_GROUP is not None:
+        return _WEAR_GROUP
+    grp = bpy.data.node_groups.new("SKULLPT Wear", "ShaderNodeTree")
+    have_in = {s.name for s in grp.interface.items_tree
+               if s.in_out == "INPUT"}
+    have_out = {s.name for s in grp.interface.items_tree
+                if s.in_out == "OUTPUT"}
+
+    def _socket(name, io, stype):
+        have = have_in if io == "INPUT" else have_out
+        if name not in have:
+            # Signature is new_socket(name, description="",
+            # in_out=..., socket_type=...): everything after the
+            # name must be a keyword (probed on Blender 4.5.9).
+            grp.interface.new_socket(name, description="",
+                                     in_out=io, socket_type=stype)
+
+    _socket("Base Color", "INPUT", "NodeSocketColor")
+    _socket("Base Roughness", "INPUT", "NodeSocketFloat")
+    _socket("Vector", "INPUT", "NodeSocketVector")
+    for _name in ("dirt", "grime", "edge_wear", "edge_width", "dust",
+                  "wet", "moss", "rust", "chips", "scratches"):
+        _socket(_name, "INPUT", "NodeSocketFloat")
+    _socket("Color", "OUTPUT", "NodeSocketColor")
+    _socket("Roughness", "OUTPUT", "NodeSocketFloat")
+    nt = grp
+    links = nt.links
+    gin = nt.nodes.new("NodeGroupInput")
+    gout = nt.nodes.new("NodeGroupOutput")
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    links.new(geo.outputs["Normal"], sep.inputs["Vector"])
+    top_range = nt.nodes.new("ShaderNodeMapRange")
+    top_range.inputs["From Min"].default_value = 0.5
+    top_range.inputs["From Max"].default_value = 1.0
+    top_range.inputs["To Min"].default_value = 0.0
+    top_range.inputs["To Max"].default_value = 1.0
+    links.new(sep.outputs["Z"], top_range.inputs["Value"])
+    edge_range = nt.nodes.new("ShaderNodeMapRange")
+    edge_range.inputs["From Min"].default_value = 0.0
+    edge_range.inputs["To Min"].default_value = 0.0
+    edge_range.inputs["To Max"].default_value = 1.0
+    links.new(geo.outputs["Pointiness"], edge_range.inputs["Value"])
+    edge_mult = nt.nodes.new("ShaderNodeMath")
+    edge_mult.operation = "MULTIPLY"
+    edge_mult.inputs[1].default_value = 0.8
+    links.new(gin.outputs["edge_width"], edge_mult.inputs[0])
+    edge_sub = nt.nodes.new("ShaderNodeMath")
+    edge_sub.operation = "SUBTRACT"
+    edge_sub.inputs[0].default_value = 1.0
+    links.new(edge_mult.outputs["Value"], edge_sub.inputs[1])
+    links.new(edge_sub.outputs["Value"], edge_range.inputs["From Max"])
+    ao = nt.nodes.new("ShaderNodeAmbientOcclusion")
+    ao.inputs["Distance"].default_value = 1.0
+    dep_noise = nt.nodes.new("ShaderNodeTexNoise")
+    dep_noise.inputs["Scale"].default_value = 6.0
+    dep_noise.inputs["Detail"].default_value = 3.0
+    links.new(gin.outputs["Vector"], dep_noise.inputs["Vector"])
+    dep_top = nt.nodes.new("ShaderNodeMath")
+    dep_top.operation = "MULTIPLY"
+    links.new(top_range.outputs["Result"], dep_top.inputs[0])
+    links.new(dep_noise.outputs["Fac"], dep_top.inputs[1])
+    dep_add = nt.nodes.new("ShaderNodeMath")
+    dep_add.operation = "ADD"
+    dep_add.use_clamp = True
+    links.new(gin.outputs["dirt"], dep_add.inputs[0])
+    links.new(gin.outputs["dust"], dep_add.inputs[1])
+    dep_mask = nt.nodes.new("ShaderNodeMath")
+    dep_mask.operation = "MULTIPLY"
+    links.new(dep_top.outputs["Value"], dep_mask.inputs[0])
+    links.new(dep_add.outputs["Value"], dep_mask.inputs[1])
+    dep_mix = nt.nodes.new("ShaderNodeMix")
+    dep_mix.data_type = "RGBA"
+    dep_mix.inputs["B"].default_value = (0.35, 0.30, 0.25, 1.0)
+    links.new(gin.outputs["Base Color"], dep_mix.inputs["A"])
+    links.new(dep_mask.outputs["Value"], dep_mix.inputs["Factor"])
+    grime_inv = nt.nodes.new("ShaderNodeMath")
+    grime_inv.operation = "SUBTRACT"
+    grime_inv.inputs[0].default_value = 1.0
+    links.new(ao.outputs["AO"], grime_inv.inputs[1])
+    grime_mask = nt.nodes.new("ShaderNodeMath")
+    grime_mask.operation = "MULTIPLY"
+    links.new(grime_inv.outputs["Value"], grime_mask.inputs[0])
+    links.new(gin.outputs["grime"], grime_mask.inputs[1])
+    grime_mix = nt.nodes.new("ShaderNodeMix")
+    grime_mix.data_type = "RGBA"
+    grime_mix.inputs["B"].default_value = (0.12, 0.11, 0.10, 1.0)
+    links.new(dep_mix.outputs["Result"], grime_mix.inputs["A"])
+    links.new(grime_mask.outputs["Value"], grime_mix.inputs["Factor"])
+    moss_mask = nt.nodes.new("ShaderNodeMath")
+    moss_mask.operation = "MULTIPLY"
+    links.new(top_range.outputs["Result"], moss_mask.inputs[0])
+    links.new(gin.outputs["moss"], moss_mask.inputs[1])
+    moss_mix = nt.nodes.new("ShaderNodeMix")
+    moss_mix.data_type = "RGBA"
+    moss_mix.inputs["B"].default_value = (0.25, 0.35, 0.15, 1.0)
+    links.new(grime_mix.outputs["Result"], moss_mix.inputs["A"])
+    links.new(moss_mask.outputs["Value"], moss_mix.inputs["Factor"])
+    rust_mask = nt.nodes.new("ShaderNodeMath")
+    rust_mask.operation = "MULTIPLY"
+    links.new(dep_noise.outputs["Fac"], rust_mask.inputs[0])
+    links.new(gin.outputs["rust"], rust_mask.inputs[1])
+    rust_mix = nt.nodes.new("ShaderNodeMix")
+    rust_mix.data_type = "RGBA"
+    rust_mix.inputs["B"].default_value = (0.45, 0.25, 0.12, 1.0)
+    links.new(moss_mix.outputs["Result"], rust_mix.inputs["A"])
+    links.new(rust_mask.outputs["Value"], rust_mix.inputs["Factor"])
+    chip_ramp = nt.nodes.new("ShaderNodeValToRGB")
+    chip_ramp.color_ramp.interpolation = "CONSTANT"
+    chip_ramp.color_ramp.elements[0].position = 0.75
+    chip_ramp.color_ramp.elements[0].color = (0.0, 0.0, 0.0, 1.0)
+    chip_ramp.color_ramp.elements[1].position = 0.85
+    chip_ramp.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+    links.new(dep_noise.outputs["Fac"], chip_ramp.inputs["Fac"])
+    chip_mask = nt.nodes.new("ShaderNodeMath")
+    chip_mask.operation = "MULTIPLY"
+    links.new(chip_ramp.outputs["Color"], chip_mask.inputs[0])
+    links.new(gin.outputs["chips"], chip_mask.inputs[1])
+    chip_mix = nt.nodes.new("ShaderNodeMix")
+    chip_mix.data_type = "RGBA"
+    chip_mix.inputs["B"].default_value = (0.15, 0.13, 0.12, 1.0)
+    links.new(rust_mix.outputs["Result"], chip_mix.inputs["A"])
+    links.new(chip_mask.outputs["Value"], chip_mix.inputs["Factor"])
+    scratch_wave = nt.nodes.new("ShaderNodeTexWave")
+    scratch_wave.wave_type = "BANDS"
+    scratch_wave.bands_direction = "X"
+    scratch_wave.inputs["Scale"].default_value = 60.0
+    links.new(gin.outputs["Vector"], scratch_wave.inputs["Vector"])
+    scratch_mask = nt.nodes.new("ShaderNodeMath")
+    scratch_mask.operation = "MULTIPLY"
+    links.new(scratch_wave.outputs["Fac"], scratch_mask.inputs[0])
+    links.new(gin.outputs["scratches"], scratch_mask.inputs[1])
+    scratch_mix = nt.nodes.new("ShaderNodeMix")
+    scratch_mix.data_type = "RGBA"
+    scratch_mix.inputs["B"].default_value = (0.80, 0.78, 0.72, 1.0)
+    links.new(chip_mix.outputs["Result"], scratch_mix.inputs["A"])
+    links.new(scratch_mask.outputs["Value"], scratch_mix.inputs["Factor"])
+    edge_mask = nt.nodes.new("ShaderNodeMath")
+    edge_mask.operation = "MULTIPLY"
+    links.new(edge_range.outputs["Result"], edge_mask.inputs[0])
+    links.new(gin.outputs["edge_wear"], edge_mask.inputs[1])
+    edge_mix = nt.nodes.new("ShaderNodeMix")
+    edge_mix.data_type = "RGBA"
+    edge_mix.inputs["B"].default_value = (0.85, 0.82, 0.75, 1.0)
+    links.new(scratch_mix.outputs["Result"], edge_mix.inputs["A"])
+    links.new(edge_mask.outputs["Value"], edge_mix.inputs["Factor"])
+    links.new(edge_mix.outputs["Result"], gout.inputs["Color"])
+    wet_mult = nt.nodes.new("ShaderNodeMath")
+    wet_mult.operation = "MULTIPLY"
+    wet_mult.inputs[1].default_value = 0.7
+    links.new(gin.outputs["wet"], wet_mult.inputs[0])
+    wet_sub = nt.nodes.new("ShaderNodeMath")
+    wet_sub.operation = "SUBTRACT"
+    wet_sub.inputs[0].default_value = 1.0
+    links.new(wet_mult.outputs["Value"], wet_sub.inputs[1])
+    rough_mult = nt.nodes.new("ShaderNodeMath")
+    rough_mult.operation = "MULTIPLY"
+    links.new(gin.outputs["Base Roughness"], rough_mult.inputs[0])
+    links.new(wet_sub.outputs["Value"], rough_mult.inputs[1])
+    links.new(rough_mult.outputs["Value"], gout.inputs["Roughness"])
+    _WEAR_GROUP = grp
+    return grp
+
+def _parity_factor(nt, links, vec, prescale):
+    """A 3-axis checkerboard parity (M8): 8 nodes. FLOORED_MODULO,
+    not MODULO: plain MODULO gives -1 for negative coordinates and
+    the Mix factor clamps it to 0, which eats half the cells."""
+    pre = nt.nodes.new("ShaderNodeVectorMath")
+    pre.operation = "MULTIPLY"
+    pre.inputs[1].default_value = tuple(prescale)
+    links.new(vec, pre.inputs[0])
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    links.new(pre.outputs["Vector"], sep.inputs["Vector"])
+    floors = []
+    for out in ("X", "Y", "Z"):
+        f = nt.nodes.new("ShaderNodeMath")
+        f.operation = "FLOOR"
+        links.new(sep.outputs[out], f.inputs[0])
+        floors.append(f.outputs["Value"])
+    a1 = nt.nodes.new("ShaderNodeMath")
+    a1.operation = "ADD"
+    links.new(floors[0], a1.inputs[0])
+    links.new(floors[1], a1.inputs[1])
+    a2 = nt.nodes.new("ShaderNodeMath")
+    a2.operation = "ADD"
+    links.new(a1.outputs["Value"], a2.inputs[0])
+    links.new(floors[2], a2.inputs[1])
+    mod = nt.nodes.new("ShaderNodeMath")
+    mod.operation = "FLOORED_MODULO"
+    mod.inputs[1].default_value = 2.0
+    links.new(a2.outputs["Value"], mod.inputs[0])
+    return mod.outputs["Value"]
+
+def _rotate_90(nt, links, vec, axis, parity):
+    """A per-cell 90-degree rotation about a texture axis (M8):
+    4 nodes. axis 0 is X, 1 is Y (the face normal in the texture
+    frame, host-side). The wave rings encircle texture Z, so
+    rotating about the face normal flips the grain between the
+    two face directions."""
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    links.new(vec, sep.inputs["Vector"])
+    axes = ("X", "Y", "Z")
+    # The two axes that are not the rotation axis swap, one negated.
+    others = [a for a in (0, 1, 2) if a != axis]
+    neg = nt.nodes.new("ShaderNodeMath")
+    neg.operation = "MULTIPLY"
+    neg.inputs[1].default_value = -1.0
+    links.new(sep.outputs[axes[others[1]]], neg.inputs[0])
+    rot = nt.nodes.new("ShaderNodeCombineXYZ")
+    links.new(sep.outputs[axes[axis]], rot.inputs[axes[axis]])
+    links.new(neg.outputs["Value"], rot.inputs[axes[others[0]]])
+    links.new(sep.outputs[axes[others[0]]], rot.inputs[axes[others[1]]])
+    mixv = nt.nodes.new("ShaderNodeMix")
+    mixv.data_type = "VECTOR"
+    links.new(vec, mixv.inputs["A"])
+    links.new(rot.outputs["Vector"], mixv.inputs["B"])
+    links.new(parity, mixv.inputs["Factor"])
+    return mixv.outputs["Result"]
+
+def _rotate_90_z(nt, links, vec, parity):
+    """A per-cell 90-degree rotation about texture Z (M8): 4 nodes.
+    Basket weave only: the face rotation already puts the face on
+    texture XY, so Z is the face normal and the brick pattern flips
+    between running along X and along Y."""
+    return _rotate_90(nt, links, vec, 2, parity)
+
+def _rotate_45(nt, links, vec, axis, parity):
+    """A per-cell +-45-degree rotation about a texture axis (M8):
+    6 nodes. The 0.7071 factor is skipped: both parities scale
+    the same, so the ring spacing stays consistent."""
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    links.new(vec, sep.inputs["Vector"])
+    axes = ("X", "Y", "Z")
+    others = [a for a in (0, 1, 2) if a != axis]
+    add = nt.nodes.new("ShaderNodeMath")
+    add.operation = "ADD"
+    links.new(sep.outputs[axes[others[0]]], add.inputs[0])
+    links.new(sep.outputs[axes[others[1]]], add.inputs[1])
+    sub = nt.nodes.new("ShaderNodeMath")
+    sub.operation = "SUBTRACT"
+    links.new(sep.outputs[axes[others[0]]], sub.inputs[0])
+    links.new(sep.outputs[axes[others[1]]], sub.inputs[1])
+    m0 = nt.nodes.new("ShaderNodeMix")
+    m0.data_type = "FLOAT"
+    links.new(sub.outputs["Value"], m0.inputs["A"])
+    links.new(add.outputs["Value"], m0.inputs["B"])
+    links.new(parity, m0.inputs["Factor"])
+    m1 = nt.nodes.new("ShaderNodeMix")
+    m1.data_type = "FLOAT"
+    links.new(add.outputs["Value"], m1.inputs["A"])
+    links.new(sub.outputs["Value"], m1.inputs["B"])
+    links.new(parity, m1.inputs["Factor"])
+    comb = nt.nodes.new("ShaderNodeCombineXYZ")
+    links.new(sep.outputs[axes[axis]], comb.inputs[axes[axis]])
+    links.new(m0.outputs["Result"], comb.inputs[axes[others[0]]])
+    links.new(m1.outputs["Result"], comb.inputs[axes[others[1]]])
+    return comb.outputs["Vector"]
+
+def _chevron_vec(nt, links, vec, mspec):
+    """Fold + 45-degree rotation (M8): 7 nodes. The fold runs in
+    cell units and the result is scaled back to mapped units, so
+    the wave sees its normal coordinate scale."""
+    pre = nt.nodes.new("ShaderNodeVectorMath")
+    pre.operation = "MULTIPLY"
+    pre.inputs[1].default_value = tuple(mspec["fold_prescale"])
+    links.new(vec, pre.inputs[0])
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    links.new(pre.outputs["Vector"], sep.inputs["Vector"])
+    axes = ("X", "Y", "Z")
+    fold_axis = mspec["fold_axis"]
+    other_axis = 1 - fold_axis
+    fold = nt.nodes.new("ShaderNodeMath")
+    fold.operation = "PINGPONG"
+    fold.inputs[1].default_value = 1.0
+    links.new(sep.outputs[axes[fold_axis]], fold.inputs[0])
+    add = nt.nodes.new("ShaderNodeMath")
+    add.operation = "ADD"
+    links.new(fold.outputs["Value"], add.inputs[0])
+    links.new(sep.outputs["Z"], add.inputs[1])
+    sub = nt.nodes.new("ShaderNodeMath")
+    sub.operation = "SUBTRACT"
+    links.new(fold.outputs["Value"], sub.inputs[0])
+    links.new(sep.outputs["Z"], sub.inputs[1])
+    comb = nt.nodes.new("ShaderNodeCombineXYZ")
+    links.new(sep.outputs[axes[other_axis]],
+              comb.inputs[axes[other_axis]])
+    links.new(sub.outputs["Value"], comb.inputs[axes[fold_axis]])
+    links.new(add.outputs["Value"], comb.inputs["Z"])
+    unscale = nt.nodes.new("ShaderNodeVectorMath")
+    unscale.operation = "MULTIPLY"
+    unscale.inputs[1].default_value = tuple(mspec["fold_unscale"])
+    links.new(comb.outputs["Vector"], unscale.inputs[0])
+    return unscale.outputs["Vector"]
+
+def _brick_node(nt, links, vec, width, row_height, bias, mortar):
+    """One Brick node (M8): the 4.0+ Brick node has no
+    Offset/Frequency inputs (probed on Blender 4.5.9): Brick Width
+    and Row Height size the cells directly, and Bias 0 is a stack
+    bond, Bias 1 a running bond."""
+    brick = nt.nodes.new("ShaderNodeTexBrick")
+    brick.inputs["Scale"].default_value = 1.0
+    brick.inputs["Brick Width"].default_value = width
+    brick.inputs["Row Height"].default_value = row_height
+    brick.inputs["Mortar Size"].default_value = mortar
+    brick.inputs["Mortar Smooth"].default_value = 0.0
+    brick.inputs["Bias"].default_value = bias
+    brick.inputs["Color1"].default_value = (1.0, 1.0, 1.0, 1.0)
+    brick.inputs["Color2"].default_value = (0.82, 0.82, 0.82, 1.0)
+    brick.inputs["Mortar"].default_value = (0.45, 0.45, 0.45, 1.0)
+    links.new(vec, brick.inputs["Vector"])
+    return brick
+
 def make_material(part):
     hex_color = part["color"]
     r = int(hex_color[1:3], 16) / 255.0
@@ -457,12 +903,15 @@ def make_material(part):
     bsdf.inputs["Metallic"].default_value = part["metallic"]
     mspec = part.get("material_spec")
     if mspec:
-        # Parametric wood recipe (v1.11, M2): saw-profile ring wave,
-        # stretched noise fibres, a soft blotch, bump from fibre +
-        # ring. The structure follows the NK Wood Grain group in
-        # video-to-blender (MIT); the nodes are wired here in plain
-        # bpy. Node counts are predicted host-side (materials.py)
-        # and the measured count is recorded in the stats.
+        # Parametric recipes (v1.11 M2, v1.12 M7-M9): one branch per
+        # family, each producing color_out (the colour socket, or
+        # None for glass, whose Base Color is already the tinted
+        # style colour) and bump_height (the height socket, or
+        # None). The wood recipe's structure follows the NK Wood
+        # Grain group in video-to-blender (MIT); every recipe is
+        # wired here in plain bpy. Node counts are predicted
+        # host-side (materials.py) and the measured count is
+        # recorded in the stats.
         links = nt.links
         coord = nt.nodes.new("ShaderNodeTexCoord")
         mapping = nt.nodes.new("ShaderNodeMapping")
@@ -471,89 +920,372 @@ def make_material(part):
         cs = mspec["coord_scale"]
         mapping.inputs["Scale"].default_value = (cs, cs, cs)
         links.new(coord.outputs["Object"], mapping.inputs["Vector"])
-        # Rings: a saw-profile wave around Z (the grain axis after
-        # the mapping rotation), cubed for a sharp latewood edge.
-        wave = nt.nodes.new("ShaderNodeTexWave")
-        wave.wave_type = "RINGS"
-        wave.rings_direction = "Z"
-        wave.wave_profile = "SAW"
-        wave.inputs["Scale"].default_value = mspec["ring_scale"]
-        wave.inputs["Distortion"].default_value = mspec["distort"]
-        links.new(mapping.outputs["Vector"], wave.inputs["Vector"])
-        ring_pow = nt.nodes.new("ShaderNodeMath")
-        ring_pow.operation = "POWER"
-        ring_pow.inputs[1].default_value = 3.0
-        links.new(wave.outputs["Fac"], ring_pow.inputs[0])
-        # Fibres: noise stretched along the grain axis.
-        stretch = nt.nodes.new("ShaderNodeVectorMath")
-        stretch.operation = "MULTIPLY"
-        stretch.inputs[1].default_value = (40.0, 40.0, 1.5)
-        links.new(mapping.outputs["Vector"], stretch.inputs[0])
-        fibre = nt.nodes.new("ShaderNodeTexNoise")
-        fibre.inputs["Scale"].default_value = 1.0
-        fibre.inputs["Detail"].default_value = 4.0
-        links.new(stretch.outputs["Vector"], fibre.inputs["Vector"])
-        # Blotch: large soft tone variation.
-        blotch = nt.nodes.new("ShaderNodeTexNoise")
-        blotch.inputs["Scale"].default_value = 2.0
-        blotch.inputs["Detail"].default_value = 3.0
-        links.new(mapping.outputs["Vector"], blotch.inputs["Vector"])
-        blotch_range = nt.nodes.new("ShaderNodeMapRange")
-        blotch_range.inputs["From Min"].default_value = 0.3
-        blotch_range.inputs["From Max"].default_value = 0.7
-        blotch_range.inputs["To Min"].default_value = 0.9
-        blotch_range.inputs["To Max"].default_value = 1.08
-        links.new(blotch.outputs["Fac"], blotch_range.inputs["Value"])
-        # Colour: mix light/dark by ring + fibre, toned by blotch.
-        ring_term = nt.nodes.new("ShaderNodeMath")
-        ring_term.operation = "MULTIPLY"
-        ring_term.inputs[1].default_value = 0.85
-        links.new(ring_pow.outputs["Value"], ring_term.inputs[0])
-        fibre_term = nt.nodes.new("ShaderNodeMath")
-        fibre_term.operation = "MULTIPLY"
-        fibre_term.inputs[1].default_value = mspec["fibre_k"]
-        links.new(fibre.outputs["Fac"], fibre_term.inputs[0])
-        tone_t = nt.nodes.new("ShaderNodeMath")
-        tone_t.operation = "ADD"
-        tone_t.use_clamp = True
-        links.new(ring_term.outputs["Value"], tone_t.inputs[0])
-        links.new(fibre_term.outputs["Value"], tone_t.inputs[1])
-        mix = nt.nodes.new("ShaderNodeMix")
-        mix.data_type = "RGBA"
-        # The Mix node carries sockets for every data type, but
-        # Blender's name lookup returns the enabled (RGBA) sockets
-        # for the current data type - verified on Blender 4.5.9.
-        mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
-        mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
-        links.new(tone_t.outputs["Value"], mix.inputs["Factor"])
-        color_out = mix.outputs["Result"]
-        if mspec["knots"] > 0:
-            # Knots: a hard mask over high-frequency noise, mixed
-            # toward the dark colour. The knots value moves the
-            # ramp thresholds host-side (materials.resolve_spec).
-            knot_noise = nt.nodes.new("ShaderNodeTexNoise")
-            knot_noise.inputs["Scale"].default_value = mspec["knot_scale"]
-            knot_noise.inputs["Detail"].default_value = 3.0
-            links.new(mapping.outputs["Vector"], knot_noise.inputs["Vector"])
-            knot_ramp = nt.nodes.new("ShaderNodeValToRGB")
-            knot_ramp.color_ramp.interpolation = "CONSTANT"
-            knot_ramp.color_ramp.elements[0].position = mspec["knot_low"]
-            knot_ramp.color_ramp.elements[0].color = (0.0, 0.0, 0.0, 1.0)
-            knot_ramp.color_ramp.elements[1].position = mspec["knot_high"]
-            knot_ramp.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
-            links.new(knot_noise.outputs["Fac"], knot_ramp.inputs["Fac"])
-            knot_mix = nt.nodes.new("ShaderNodeMix")
-            knot_mix.data_type = "RGBA"
-            knot_mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
-            links.new(color_out, knot_mix.inputs["A"])
-            links.new(knot_ramp.outputs["Color"], knot_mix.inputs["Factor"])
-            color_out = knot_mix.outputs["Result"]
-        tone = nt.nodes.new("ShaderNodeVectorMath")
-        tone.operation = "SCALE"
-        links.new(color_out, tone.inputs["Vector"])
-        links.new(blotch_range.outputs["Result"], tone.inputs["Scale"])
-        color_out = tone.outputs["Vector"]
-        if mspec["boards"]:
+        vec = mapping.outputs["Vector"]
+        fam = mspec["family"]
+        layout = mspec["layout"]
+        if fam == "wood" and layout == "parquet":
+            vec = _rotate_90(nt, links, vec, mspec["layout_rot_axis"],
+                             _parity_factor(nt, links, vec,
+                                            mspec["parity_prescale"]))
+        elif fam == "wood" and layout == "herringbone":
+            vec = _rotate_45(nt, links, vec, mspec["layout_rot_axis"],
+                             _parity_factor(nt, links, vec,
+                                            mspec["parity_prescale"]))
+        elif fam == "wood" and layout == "chevron":
+            vec = _chevron_vec(nt, links, vec, mspec)
+        color_out = None
+        bump_height = None
+        if fam == "wood":
+            # Rings: a saw-profile wave around Z (the grain axis
+            # after the mapping rotation), cubed for a sharp
+            # latewood edge.
+            wave = nt.nodes.new("ShaderNodeTexWave")
+            wave.wave_type = "RINGS"
+            wave.rings_direction = "Z"
+            wave.wave_profile = "SAW"
+            wave.inputs["Scale"].default_value = mspec["ring_scale"]
+            wave.inputs["Distortion"].default_value = mspec["distort"]
+            links.new(vec, wave.inputs["Vector"])
+            ring_pow = nt.nodes.new("ShaderNodeMath")
+            ring_pow.operation = "POWER"
+            ring_pow.inputs[1].default_value = 3.0
+            links.new(wave.outputs["Fac"], ring_pow.inputs[0])
+            # Fibres: noise stretched along the grain axis.
+            stretch = nt.nodes.new("ShaderNodeVectorMath")
+            stretch.operation = "MULTIPLY"
+            stretch.inputs[1].default_value = (40.0, 40.0, 1.5)
+            links.new(vec, stretch.inputs[0])
+            fibre = nt.nodes.new("ShaderNodeTexNoise")
+            fibre.inputs["Scale"].default_value = 1.0
+            fibre.inputs["Detail"].default_value = 4.0
+            links.new(stretch.outputs["Vector"], fibre.inputs["Vector"])
+            # Blotch: large soft tone variation.
+            blotch = nt.nodes.new("ShaderNodeTexNoise")
+            blotch.inputs["Scale"].default_value = 2.0
+            blotch.inputs["Detail"].default_value = 3.0
+            links.new(vec, blotch.inputs["Vector"])
+            blotch_range = nt.nodes.new("ShaderNodeMapRange")
+            blotch_range.inputs["From Min"].default_value = 0.3
+            blotch_range.inputs["From Max"].default_value = 0.7
+            blotch_range.inputs["To Min"].default_value = 0.9
+            blotch_range.inputs["To Max"].default_value = 1.08
+            links.new(blotch.outputs["Fac"], blotch_range.inputs["Value"])
+            # Colour: mix light/dark by ring + fibre, toned by blotch.
+            ring_term = nt.nodes.new("ShaderNodeMath")
+            ring_term.operation = "MULTIPLY"
+            ring_term.inputs[1].default_value = 0.85
+            links.new(ring_pow.outputs["Value"], ring_term.inputs[0])
+            fibre_term = nt.nodes.new("ShaderNodeMath")
+            fibre_term.operation = "MULTIPLY"
+            fibre_term.inputs[1].default_value = mspec["fibre_k"]
+            links.new(fibre.outputs["Fac"], fibre_term.inputs[0])
+            tone_t = nt.nodes.new("ShaderNodeMath")
+            tone_t.operation = "ADD"
+            tone_t.use_clamp = True
+            links.new(ring_term.outputs["Value"], tone_t.inputs[0])
+            links.new(fibre_term.outputs["Value"], tone_t.inputs[1])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            # The Mix node carries sockets for every data type, but
+            # Blender's name lookup returns the enabled (RGBA)
+            # sockets for the current data type - verified on
+            # Blender 4.5.9.
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(tone_t.outputs["Value"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            if mspec["knots"] > 0:
+                # Knots: a hard mask over high-frequency noise,
+                # mixed toward the dark colour. The knots value
+                # moves the ramp thresholds host-side
+                # (materials.resolve_spec).
+                knot_noise = nt.nodes.new("ShaderNodeTexNoise")
+                knot_noise.inputs["Scale"].default_value = \
+                    mspec["knot_scale"]
+                knot_noise.inputs["Detail"].default_value = 3.0
+                links.new(vec, knot_noise.inputs["Vector"])
+                knot_ramp = nt.nodes.new("ShaderNodeValToRGB")
+                knot_ramp.color_ramp.interpolation = "CONSTANT"
+                knot_ramp.color_ramp.elements[0].position = \
+                    mspec["knot_low"]
+                knot_ramp.color_ramp.elements[0].color = (0.0, 0.0, 0.0, 1.0)
+                knot_ramp.color_ramp.elements[1].position = \
+                    mspec["knot_high"]
+                knot_ramp.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+                links.new(knot_noise.outputs["Fac"], knot_ramp.inputs["Fac"])
+                knot_mix = nt.nodes.new("ShaderNodeMix")
+                knot_mix.data_type = "RGBA"
+                knot_mix.inputs["B"].default_value = \
+                    tuple(mspec["dark"]) + (1.0,)
+                links.new(color_out, knot_mix.inputs["A"])
+                links.new(knot_ramp.outputs["Color"],
+                          knot_mix.inputs["Factor"])
+                color_out = knot_mix.outputs["Result"]
+            tone = nt.nodes.new("ShaderNodeVectorMath")
+            tone.operation = "SCALE"
+            links.new(color_out, tone.inputs["Vector"])
+            links.new(blotch_range.outputs["Result"], tone.inputs["Scale"])
+            color_out = tone.outputs["Vector"]
+            bump_add = nt.nodes.new("ShaderNodeMath")
+            bump_add.operation = "ADD"
+            links.new(fibre.outputs["Fac"], bump_add.inputs[0])
+            links.new(ring_pow.outputs["Value"], bump_add.inputs[1])
+            bump_height = bump_add.outputs["Value"]
+        elif fam == "brick":
+            # Kiln variation: one noise, remapped by the variation
+            # knob, mixing light and dark brick.
+            kiln = nt.nodes.new("ShaderNodeTexNoise")
+            kiln.inputs["Scale"].default_value = mspec["kiln_scale"]
+            kiln.inputs["Detail"].default_value = 3.0
+            links.new(vec, kiln.inputs["Vector"])
+            kiln_range = nt.nodes.new("ShaderNodeMapRange")
+            kiln_range.inputs["From Min"].default_value = 0.3
+            kiln_range.inputs["From Max"].default_value = 0.7
+            var = mspec["variation"]
+            kiln_range.inputs["To Min"].default_value = 0.5 - var * 0.45
+            kiln_range.inputs["To Max"].default_value = 0.5 + var * 0.45
+            links.new(kiln.outputs["Fac"], kiln_range.inputs["Value"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(kiln_range.outputs["Result"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            bump_height = kiln.outputs["Fac"]
+        elif fam == "stone":
+            vor = nt.nodes.new("ShaderNodeTexVoronoi")
+            vor.inputs["Scale"].default_value = mspec["vein_scale"]
+            links.new(vec, vor.inputs["Vector"])
+            grain = nt.nodes.new("ShaderNodeTexNoise")
+            grain.inputs["Scale"].default_value = mspec["grain_scale"]
+            grain.inputs["Detail"].default_value = 3.0
+            links.new(vec, grain.inputs["Vector"])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            ramp.color_ramp.elements[0].position = 0.25
+            ramp.color_ramp.elements[1].position = 0.75
+            links.new(vor.outputs["Distance"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            bump_add = nt.nodes.new("ShaderNodeMath")
+            bump_add.operation = "ADD"
+            links.new(vor.outputs["Distance"], bump_add.inputs[0])
+            links.new(grain.outputs["Fac"], bump_add.inputs[1])
+            bump_height = bump_add.outputs["Value"]
+        elif fam == "marble":
+            # Veins: noise sampled on coordinates distorted by a
+            # second noise, so the veins wander instead of
+            # running straight.
+            distort = nt.nodes.new("ShaderNodeTexNoise")
+            distort.inputs["Scale"].default_value = 2.0
+            distort.inputs["Detail"].default_value = 3.0
+            links.new(vec, distort.inputs["Vector"])
+            dscale = nt.nodes.new("ShaderNodeVectorMath")
+            dscale.operation = "MULTIPLY"
+            dk = 0.2 + mspec["contrast"] * 0.6
+            dscale.inputs[1].default_value = (dk, dk, dk)
+            links.new(distort.outputs["Color"], dscale.inputs[0])
+            dadd = nt.nodes.new("ShaderNodeVectorMath")
+            dadd.operation = "ADD"
+            links.new(vec, dadd.inputs[0])
+            links.new(dscale.outputs["Vector"], dadd.inputs[1])
+            veins = nt.nodes.new("ShaderNodeTexNoise")
+            veins.inputs["Scale"].default_value = mspec["vein_scale"]
+            veins.inputs["Detail"].default_value = 4.0
+            links.new(dadd.outputs["Vector"], veins.inputs["Vector"])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            vw = mspec["vein_width"]
+            ramp.color_ramp.elements[0].position = max(0.0, 0.7 - vw * 0.25)
+            ramp.color_ramp.elements[0].color = (0.0, 0.0, 0.0, 1.0)
+            ramp.color_ramp.elements[1].position = min(1.0, 0.7 + vw * 0.25)
+            ramp.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+            links.new(veins.outputs["Fac"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            bump_height = veins.outputs["Fac"]
+        elif fam == "concrete":
+            patch = nt.nodes.new("ShaderNodeTexNoise")
+            patch.inputs["Scale"].default_value = mspec["patch_scale"]
+            patch.inputs["Detail"].default_value = 3.0
+            links.new(vec, patch.inputs["Vector"])
+            agg = nt.nodes.new("ShaderNodeTexVoronoi")
+            agg.inputs["Scale"].default_value = mspec["aggregate_scale"]
+            links.new(vec, agg.inputs["Vector"])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            ramp.color_ramp.elements[0].position = 0.3
+            ramp.color_ramp.elements[1].position = 0.7
+            links.new(patch.outputs["Fac"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            bump_add = nt.nodes.new("ShaderNodeMath")
+            bump_add.operation = "ADD"
+            links.new(agg.outputs["Distance"], bump_add.inputs[0])
+            links.new(patch.outputs["Fac"], bump_add.inputs[1])
+            bump_height = bump_add.outputs["Value"]
+        elif fam == "metal":
+            # Brushed metal: noise stretched along one axis, so the
+            # brush lines run in one direction.
+            stretch = nt.nodes.new("ShaderNodeVectorMath")
+            stretch.operation = "MULTIPLY"
+            stretch.inputs[1].default_value = (
+                5.0 + mspec["brushed"] * 40.0, 1.0, 1.0)
+            links.new(vec, stretch.inputs[0])
+            brush = nt.nodes.new("ShaderNodeTexNoise")
+            brush.inputs["Scale"].default_value = 2.0
+            brush.inputs["Detail"].default_value = 2.0
+            links.new(stretch.outputs["Vector"], brush.inputs["Vector"])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            tarn = mspec["tarnish"]
+            ramp.color_ramp.elements[0].position = 0.45 - tarn * 0.35
+            ramp.color_ramp.elements[1].position = 0.55 + tarn * 0.35
+            links.new(brush.outputs["Fac"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            bump_height = brush.outputs["Fac"]
+        elif fam == "fabric":
+            # Weave: two perpendicular band waves, added.
+            wave_x = nt.nodes.new("ShaderNodeTexWave")
+            wave_x.wave_type = "BANDS"
+            wave_x.bands_direction = "X"
+            wave_x.inputs["Scale"].default_value = mspec["weave_scale"]
+            links.new(vec, wave_x.inputs["Vector"])
+            wave_y = nt.nodes.new("ShaderNodeTexWave")
+            wave_y.wave_type = "BANDS"
+            wave_y.bands_direction = "Y"
+            wave_y.inputs["Scale"].default_value = mspec["weave_scale"]
+            links.new(vec, wave_y.inputs["Vector"])
+            wadd = nt.nodes.new("ShaderNodeMath")
+            wadd.operation = "ADD"
+            wadd.use_clamp = True
+            links.new(wave_x.outputs["Fac"], wadd.inputs[0])
+            links.new(wave_y.outputs["Fac"], wadd.inputs[1])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            ramp.color_ramp.elements[0].position = 0.3
+            ramp.color_ramp.elements[1].position = 0.7
+            links.new(wadd.outputs["Value"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            fuzz = nt.nodes.new("ShaderNodeTexNoise")
+            fuzz.inputs["Scale"].default_value = mspec["fuzz_scale"]
+            fuzz.inputs["Detail"].default_value = 2.0
+            links.new(vec, fuzz.inputs["Vector"])
+            bump_height = fuzz.outputs["Fac"]
+        elif fam == "leather":
+            pores = nt.nodes.new("ShaderNodeTexVoronoi")
+            pores.inputs["Scale"].default_value = mspec["pore_scale"]
+            links.new(vec, pores.inputs["Vector"])
+            crease = nt.nodes.new("ShaderNodeTexNoise")
+            crease.inputs["Scale"].default_value = mspec["crease_scale"]
+            crease.inputs["Detail"].default_value = 3.0
+            links.new(vec, crease.inputs["Vector"])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            ramp.color_ramp.elements[0].position = 0.25
+            ramp.color_ramp.elements[1].position = 0.75
+            links.new(pores.outputs["Distance"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            bump_add = nt.nodes.new("ShaderNodeMath")
+            bump_add.operation = "ADD"
+            links.new(pores.outputs["Distance"], bump_add.inputs[0])
+            links.new(crease.outputs["Fac"], bump_add.inputs[1])
+            bump_height = bump_add.outputs["Value"]
+        elif fam == "ground":
+            clump = nt.nodes.new("ShaderNodeTexNoise")
+            clump.inputs["Scale"].default_value = mspec["clump_scale"]
+            clump.inputs["Detail"].default_value = 3.0
+            links.new(vec, clump.inputs["Vector"])
+            stones = nt.nodes.new("ShaderNodeTexVoronoi")
+            stones.inputs["Scale"].default_value = mspec["stone_scale"]
+            links.new(vec, stones.inputs["Vector"])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            ramp.color_ramp.elements[0].position = 0.3
+            ramp.color_ramp.elements[1].position = 0.7
+            links.new(clump.outputs["Fac"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            bump_add = nt.nodes.new("ShaderNodeMath")
+            bump_add.operation = "ADD"
+            links.new(clump.outputs["Fac"], bump_add.inputs[0])
+            links.new(stones.outputs["Distance"], bump_add.inputs[1])
+            bump_height = bump_add.outputs["Value"]
+        elif fam == "paint":
+            peel = nt.nodes.new("ShaderNodeTexNoise")
+            peel.inputs["Scale"].default_value = mspec["peel_scale"]
+            peel.inputs["Detail"].default_value = 2.0
+            links.new(vec, peel.inputs["Vector"])
+            ramp = nt.nodes.new("ShaderNodeValToRGB")
+            ramp.color_ramp.elements[0].position = 0.35
+            ramp.color_ramp.elements[1].position = 0.65
+            links.new(peel.outputs["Fac"], ramp.inputs["Fac"])
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+            mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(ramp.outputs["Color"], mix.inputs["Factor"])
+            color_out = mix.outputs["Result"]
+            if mspec["chip"] > 0:
+                # Chips: a hard mask over cell noise, mixed toward
+                # the dark substrate colour.
+                chip_vor = nt.nodes.new("ShaderNodeTexVoronoi")
+                chip_vor.inputs["Scale"].default_value = 12.0
+                links.new(vec, chip_vor.inputs["Vector"])
+                chip_ramp = nt.nodes.new("ShaderNodeValToRGB")
+                chip_ramp.color_ramp.interpolation = "CONSTANT"
+                chip_ramp.color_ramp.elements[0].position = \
+                    mspec["chip_low"]
+                chip_ramp.color_ramp.elements[0].color = (0.0, 0.0, 0.0, 1.0)
+                chip_ramp.color_ramp.elements[1].position = \
+                    mspec["chip_high"]
+                chip_ramp.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+                links.new(chip_vor.outputs["Distance"],
+                          chip_ramp.inputs["Fac"])
+                chip_mix = nt.nodes.new("ShaderNodeMix")
+                chip_mix.data_type = "RGBA"
+                chip_mix.inputs["B"].default_value = \
+                    tuple(mspec["dark"]) + (1.0,)
+                links.new(color_out, chip_mix.inputs["A"])
+                links.new(chip_ramp.outputs["Color"],
+                          chip_mix.inputs["Factor"])
+                color_out = chip_mix.outputs["Result"]
+            bump_height = peel.outputs["Fac"]
+        elif fam == "glass":
+            # No pattern nodes: the Base Color is already the
+            # tinted style colour, and transmission is set below.
+            if mspec["frost"] > 0:
+                frost_noise = nt.nodes.new("ShaderNodeTexNoise")
+                frost_noise.inputs["Scale"].default_value = \
+                    mspec["frost_scale"]
+                frost_noise.inputs["Detail"].default_value = 3.0
+                links.new(vec, frost_noise.inputs["Vector"])
+                bump_height = frost_noise.outputs["Fac"]
+        if mspec.get("boards"):
             # Boards: the Brick node on board-scaled coordinates,
             # staggered joints, tone variation per board plus
             # darker mortar grooves in one multiply.
@@ -562,11 +1294,6 @@ def make_material(part):
             prescale.inputs[1].default_value = tuple(mspec["board_prescale"])
             links.new(mapping.outputs["Vector"], prescale.inputs[0])
             brick = nt.nodes.new("ShaderNodeTexBrick")
-            # The 4.0+ Brick node has no Offset/Frequency inputs
-            # (probed on Blender 4.5.9): Brick Width and Row Height
-            # size the cells directly, and rows stagger by half a
-            # brick on their own. In board units, one cell is one
-            # board: 120 cm long, 12 cm wide.
             brick.inputs["Scale"].default_value = 1.0
             brick.inputs["Brick Width"].default_value = 1.0
             brick.inputs["Row Height"].default_value = 1.0
@@ -581,17 +1308,154 @@ def make_material(part):
             links.new(color_out, board_tone.inputs[0])
             links.new(brick.outputs["Color"], board_tone.inputs[1])
             color_out = board_tone.outputs["Vector"]
-        links.new(color_out, bsdf.inputs["Base Color"])
-        # Bump: fibre + ring as the height.
-        bump_add = nt.nodes.new("ShaderNodeMath")
-        bump_add.operation = "ADD"
-        links.new(fibre.outputs["Fac"], bump_add.inputs[0])
-        links.new(ring_pow.outputs["Value"], bump_add.inputs[1])
-        bump = nt.nodes.new("ShaderNodeBump")
-        bump.inputs["Strength"].default_value = mspec["bump"]
-        bump.inputs["Distance"].default_value = 0.005
-        links.new(bump_add.outputs["Value"], bump.inputs["Height"])
-        links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+        bond = mspec.get("bond")
+        if bond:
+            # Bond layouts (M8): the Brick node on face-rotated,
+            # uniformly-scaled coordinates, multiplying the family
+            # colour. The face rotation (host-side) puts the
+            # part's largest face on texture XY.
+            kind = bond["kind"]
+            mortar = mspec.get("mortar", 0.05)
+            axes = ("X", "Y", "Z")
+            if kind != "basket_weave":
+                # Basket weave prescales the rotated vector instead,
+                # so the shared prescale is not built for it (a dead
+                # node would break the predicted count).
+                prescale = nt.nodes.new("ShaderNodeVectorMath")
+                prescale.operation = "MULTIPLY"
+                prescale.inputs[1].default_value = tuple(
+                    mspec["bond_prescale"])
+                links.new(mapping.outputs["Vector"], prescale.inputs[0])
+            if kind in ("stack", "stretcher"):
+                brick = _brick_node(nt, links, prescale.outputs["Vector"],
+                                    mspec["brick_width"],
+                                    mspec["row_height"], bond["bias"],
+                                    mortar)
+                brick_color = brick.outputs["Color"]
+            elif kind == "english":
+                sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+                links.new(prescale.outputs["Vector"], sep.inputs["Vector"])
+                row_floor = nt.nodes.new("ShaderNodeMath")
+                row_floor.operation = "FLOOR"
+                links.new(sep.outputs[axes[mspec["bond_row"]]],
+                          row_floor.inputs[0])
+                row_mod = nt.nodes.new("ShaderNodeMath")
+                row_mod.operation = "FLOORED_MODULO"
+                row_mod.inputs[1].default_value = 2.0
+                links.new(row_floor.outputs["Value"], row_mod.inputs[0])
+                brick_s = _brick_node(nt, links,
+                                      prescale.outputs["Vector"],
+                                      mspec["brick_width"],
+                                      mspec["row_height"], 1.0, mortar)
+                brick_h = _brick_node(nt, links,
+                                      prescale.outputs["Vector"],
+                                      mspec["header_width"],
+                                      mspec["header_row_height"], 0.0,
+                                      mortar)
+                bond_mix = nt.nodes.new("ShaderNodeMix")
+                bond_mix.data_type = "RGBA"
+                links.new(brick_s.outputs["Color"], bond_mix.inputs["A"])
+                links.new(brick_h.outputs["Color"], bond_mix.inputs["B"])
+                links.new(row_mod.outputs["Value"],
+                          bond_mix.inputs["Factor"])
+                brick_color = bond_mix.outputs["Result"]
+            elif kind == "flemish":
+                sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+                links.new(prescale.outputs["Vector"], sep.inputs["Vector"])
+                divide = nt.nodes.new("ShaderNodeMath")
+                divide.operation = "DIVIDE"
+                divide.inputs[1].default_value = bond["unit_ratio"]
+                links.new(sep.outputs[axes[mspec["bond_unit"]]],
+                          divide.inputs[0])
+                row_floor = nt.nodes.new("ShaderNodeMath")
+                row_floor.operation = "FLOOR"
+                links.new(sep.outputs[axes[mspec["bond_row"]]],
+                          row_floor.inputs[0])
+                row_mod = nt.nodes.new("ShaderNodeMath")
+                row_mod.operation = "FLOORED_MODULO"
+                row_mod.inputs[1].default_value = 2.0
+                links.new(row_floor.outputs["Value"], row_mod.inputs[0])
+                offset = nt.nodes.new("ShaderNodeMath")
+                offset.operation = "MULTIPLY"
+                offset.inputs[1].default_value = 0.5
+                links.new(row_mod.outputs["Value"], offset.inputs[0])
+                unit_pos = nt.nodes.new("ShaderNodeMath")
+                unit_pos.operation = "ADD"
+                links.new(divide.outputs["Value"], unit_pos.inputs[0])
+                links.new(offset.outputs["Value"], unit_pos.inputs[1])
+                fract = nt.nodes.new("ShaderNodeMath")
+                fract.operation = "FRACT"
+                links.new(unit_pos.outputs["Value"], fract.inputs[0])
+                greater = nt.nodes.new("ShaderNodeMath")
+                greater.operation = "GREATER_THAN"
+                greater.inputs[1].default_value = bond["header_frac"]
+                links.new(fract.outputs["Value"], greater.inputs[0])
+                brick_s = _brick_node(nt, links,
+                                      prescale.outputs["Vector"],
+                                      mspec["brick_width"],
+                                      mspec["row_height"], 1.0, mortar)
+                brick_h = _brick_node(nt, links,
+                                      prescale.outputs["Vector"],
+                                      mspec["header_width"],
+                                      mspec["header_row_height"], 0.0,
+                                      mortar)
+                bond_mix = nt.nodes.new("ShaderNodeMix")
+                bond_mix.data_type = "RGBA"
+                links.new(brick_s.outputs["Color"], bond_mix.inputs["A"])
+                links.new(brick_h.outputs["Color"], bond_mix.inputs["B"])
+                links.new(greater.outputs["Value"],
+                          bond_mix.inputs["Factor"])
+                brick_color = bond_mix.outputs["Result"]
+            else:  # basket_weave
+                parity = _parity_factor(nt, links,
+                                        mapping.outputs["Vector"],
+                                        mspec["basket_prescale"])
+                rotated = _rotate_90_z(nt, links,
+                                       mapping.outputs["Vector"], parity)
+                bprescale = nt.nodes.new("ShaderNodeVectorMath")
+                bprescale.operation = "MULTIPLY"
+                bprescale.inputs[1].default_value = tuple(
+                    mspec["bond_prescale"])
+                links.new(rotated, bprescale.inputs[0])
+                brick = _brick_node(nt, links, bprescale.outputs["Vector"],
+                                    mspec["brick_width"],
+                                    mspec["row_height"], 0.0, mortar)
+                brick_color = brick.outputs["Color"]
+            bond_tone = nt.nodes.new("ShaderNodeVectorMath")
+            bond_tone.operation = "MULTIPLY"
+            links.new(color_out, bond_tone.inputs[0])
+            links.new(brick_color, bond_tone.inputs[1])
+            color_out = bond_tone.outputs["Vector"]
+        if mspec["wear_any"]:
+            # The shared wear group (M9): one group node per worn
+            # material. Glass has no colour socket of its own, so
+            # its Base Color goes in as the constant style colour.
+            grp = _wear_group()
+            wnode = nt.nodes.new("ShaderNodeGroup")
+            wnode.node_tree = grp
+            if color_out is not None:
+                links.new(color_out, wnode.inputs["Base Color"])
+            else:
+                wnode.inputs["Base Color"].default_value = (r, g, b, 1.0)
+            wnode.inputs["Base Roughness"].default_value = \
+                part["roughness"]
+            links.new(mapping.outputs["Vector"], wnode.inputs["Vector"])
+            for _name, _value in mspec["wear"].items():
+                wnode.inputs[_name].default_value = _value
+            color_out = wnode.outputs["Color"]
+            links.new(wnode.outputs["Roughness"],
+                      bsdf.inputs["Roughness"])
+        if color_out is not None:
+            links.new(color_out, bsdf.inputs["Base Color"])
+        if mspec.get("transmission"):
+            bsdf.inputs["Transmission Weight"].default_value = \
+                mspec["transmission"]
+        if bump_height is not None:
+            bump = nt.nodes.new("ShaderNodeBump")
+            bump.inputs["Strength"].default_value = mspec["bump"]
+            bump.inputs["Distance"].default_value = 0.005
+            links.new(bump_height, bump.inputs["Height"])
+            links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
         return mat
     texture = part.get("texture")
     if texture:
@@ -841,7 +1705,8 @@ sun.rotation_euler = (math.radians(50), math.radians(10), math.radians(-35))
 # the saved .blend and renders them, so an engine fallback re-runs
 # renders only (P3).
 dg = bpy.context.evaluated_depsgraph_get()
-stats = {"parts": {}, "total_tris": 0, "materials": MAT_STATS}
+stats = {"parts": {}, "total_tris": 0, "materials": MAT_STATS,
+         "wear_nodes": len(_WEAR_GROUP.nodes) if _WEAR_GROUP else 0}
 for o in scene.objects:
     if o.type != "MESH":
         continue

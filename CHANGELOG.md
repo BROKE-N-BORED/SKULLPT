@@ -1,5 +1,67 @@
 # SKULLPT — Changelog
 
+## v1.12 - 2026-11-16 - The material system, phase 2 (M7-M11)
+
+The PolyOrganic-inspired material system, second phase: ten more
+families, nine layouts, the wear layer rendered, the dial's Life
+page, real-world centimetre sizes. Nothing of PolyOrganic itself
+is used - it is a closed $29 add-on with no repo; the ideas are
+implemented from scratch here, and the wood recipe's structure
+follows the MIT video-to-blender NK Wood Grain group (attributed
+in the README). Tile and carpet are not in this phase: neither is
+named in the task list's M7 set, and they are not invented here.
+
+- M7: ten more families (brick, stone, marble, concrete, metal,
+  fabric, leather, ground, paint, glass), 51 styles across 11
+  families, each with its own parametric recipe on Blender's
+  standard nodes, its own knobs, and per-style defaults. Metal
+  styles carry real metallic values; glass carries real
+  transmission (its tint is baked into the base colour host-side
+  so the viewport, dial, and Blender all agree).
+- M8: nine layouts - Boards, Parquet, Herringbone, Chevron for
+  wood; Stack, Stretcher, English, Flemish, Basket Weave for
+  brick; Stack, Stretcher for stone and concrete; Solid
+  everywhere. The Brick node carries Stack (Bias 0) and Stretcher
+  (Bias 1) natively; English, Flemish and Basket Weave mix two
+  Brick nodes by row/course parity; the wood layouts rotate the
+  grain per cell on a floored-modulo 3-axis checkerboard. Bond
+  layouts rotate the part's largest face onto the texture plane.
+  Named gap: herringbone and parquet show the grain pattern but
+  no plank/block seams - a joint mask would need ~10 more nodes
+  and break the <40 budget with wear on.
+- M9: the wear layer renders, through one shared "SKULLPT Wear"
+  node group per .blend (32 nodes inside it, one group node per
+  worn material): dirt and dust settle on upward faces, grime in
+  crevices, edges wear light, moss, rust, chips, scratches, and
+  wet darkens and slicks. Moss only grows on wood, stone and
+  ground; rust only on metal (the dial hides them elsewhere).
+  Edge wear uses Geometry Pointiness, which is 0 in EEVEE - edge
+  wear shows in Cycles renders only. Glass transmission likewise
+  renders in Cycles; EEVEE shows the tint colour opaque.
+- M10: Simple mode curates 3-4 knobs per family (seed, scale,
+  and the ones that matter most); Advanced shows everything.
+  Preview renders cover the new families, layouts and wear,
+  still hash-cached and off the UI thread. The dial has ten
+  pages; number keys 1-9 pick pages 0-8, 0 picks Saved.
+- M11: every pattern size is a real size in centimetres - a
+  floor board 12 cm wide, a brick 21.5 by 6.5 cm, a parquet cell
+  30 cm square, a herringbone plank 60 by 12 cm, a stone block
+  40 by 20 cm. Bond cells are uniform (one block height on both
+  face axes) so the Brick node's single mortar size is the same
+  real width on both axes.
+- Node budgets: every family's solid recipe stays under 25
+  nodes; every family/style/layout/wear combination stays under
+  40 with wear (worst case: herringbone wood with knots and
+  wear, 35). Counts are predicted host-side and measured in the
+  build; the wear group's own count is reported in stats.json.
+- The planner's material vocabulary (live.py) now covers all
+  eleven families, their styles, layouts, and wear keys.
+- Flow edge case, recorded: with flow at 1 (grain straight up)
+  plus a rotation layout (parquet, herringbone) on a floor, the
+  layout rotation falls back to tilting the grain per cell, so
+  blocks read as end-grain against side-grain - visible, but
+  not the standard parquet look.
+
 ## v1.11 - 2026-11-16 - The material system, phase 1 (M1-M6)
 
 The PolyOrganic-inspired material system, first phase: object-form

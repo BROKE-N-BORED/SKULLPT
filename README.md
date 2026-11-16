@@ -1,4 +1,4 @@
-# SKULLPT - v1.11
+# SKULLPT - v1.12
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -81,6 +81,11 @@ dial (double-click a part, or press Dial): Simple or Advanced knobs,
 search, Surprise (the seed is recorded), saved presets in
 materials.json, and a live preview render on knob release. Ctrl+click
 a part to copy its material onto the selected part.
+v1.12 is the material system, phase 2 (M7-M11): ten more families
+(brick, stone, marble, concrete, metal, fabric, leather, ground,
+paint, glass), nine layouts (bonds for brick, parquet, herringbone
+and chevron for wood), a wear layer that renders (the dial gains
+its Life page), and every pattern size in real centimetres.
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11, and the Bench opened there
 on 2026-11-14 (Settings window, Blender Ready); the full install,
@@ -562,6 +567,53 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.12 - The material system, phase 2 (M7-M11)
+
+- **Ten more families (M7).** Brick, stone, marble, concrete,
+  metal, fabric, leather, ground, paint and glass join wood - 11
+  families, 51 styles. Each family has its own parametric recipe
+  on Blender's standard nodes (kiln noise for brick, Voronoi
+  cells for stone, wandering veins for marble, stretched brush
+  noise for metal, two-wave weave for fabric, and the rest), its
+  own knobs, and per-style defaults (frosted glass starts
+  frosted, aged paint starts chipped). Metal styles are really
+  metallic; glass really transmits. Skin is not a family -
+  Character Studio owns character materials.
+- **Nine layouts (M8).** Boards, Parquet, Herringbone and Chevron
+  for wood; Stack, Stretcher, English, Flemish and Basket Weave
+  for brick; Stack and Stretcher for stone and concrete; Solid
+  everywhere. The bonds are Brick-node-native (Bias 0 is a stack
+  bond, Bias 1 a running bond, probed on Blender 4.5.9); the wood
+  layouts rotate the grain per cell on a 3-axis checkerboard
+  (parquet flips 90 degrees, herringbone plus/minus 45, chevron
+  folds and turns). Bond layouts rotate the face onto the
+  texture plane, so a brick wall reads as brick on every face.
+  Herringbone and parquet show the grain pattern but no plank
+  joints yet (the joints would need ~10 more nodes and break the
+  node budget with wear on).
+- **The wear layer (M9).** The wear values v1.11 stored now
+  render, through one shared "SKULLPT Wear" node group per .blend
+  (32 nodes inside it, one group node per worn material): dirt
+  and dust settle on upward faces, grime gathers in crevices,
+  edges wear light, moss grows on top, rust blooms, chips flake,
+  scratches score, wet darkens and slicks. Moss only grows on
+  wood, stone and ground; rust only on metal. The dial gains its
+  Life page (the tenth).
+- **Simple vs Advanced, extended (M10).** Every family curates
+  its Simple knobs (seed, scale, and the one or two that matter
+  most); Advanced shows everything. Preview renders cover the
+  new families, layouts and wear, still hash-cached and off the
+  UI thread.
+- **Real-world sizes in centimetres (M11).** Every pattern size
+  is a real size: a floor board is 12 cm wide, a brick is 21.5 by
+  6.5 cm, a parquet cell is 30 cm square, a herringbone plank is
+  60 by 12 cm, a stone block is 40 by 20 cm.
+- **Node budgets.** Every family's solid recipe stays under 25
+  nodes; every combination stays under 40 with wear (worst case:
+  herringbone wood with knots and wear, 35). Counts are predicted
+  host-side, measured in the build, and listed in the build
+  report; the wear group's own count is reported separately.
 
 ## v1.11 - The material system, phase 1 (M1-M6)
 

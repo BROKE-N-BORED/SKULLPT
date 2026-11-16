@@ -237,11 +237,24 @@ Each part: {"id": lowercase_snake, "type": str, "shape": one of
 box|cylinder|sphere|extrude|lathe|tube, "position_cm": [x, y, base_z],
 "size_cm": [width, depth, height], "material": one of wood|dark_wood|maple|
 mahogany|cream|plastic_black|metal|black_metal|chrome|gold|brass|glass|
-leather|stone|paper, or a material object {"family": "wood",
-"style": one of oak|white_oak|walnut|maple|cherry|weathered,
-"layout": solid|boards, "params": {"seed": int, "knots": 0-1,
-"figure": 0-1}, "wear": {}} - the object form gives a real
-procedural wood material instead of a flat colour}.
+leather|stone|paper, or a material object {"family": one of wood|
+brick|stone|marble|concrete|metal|fabric|leather|ground|paint|glass,
+"style": a style of that family (wood: oak|white_oak|walnut|maple|
+cherry|weathered; brick: red|weathered_red|buff|dark|white_painted;
+stone: granite|sandstone|slate|limestone; marble: carrara|calacatta|
+nero|verde; concrete: plain|polished|rough|board_formed; metal:
+steel|brushed_steel|copper|brass|iron|blackened; fabric: canvas|
+linen|wool|denim; leather: tan|dark_brown|black|oxblood; ground:
+soil|gravel|sand|grass_dirt; paint: matte_white|gloss_red|
+eggshell_blue|satin_green|chalk_black|aged; glass: clear|frosted|
+tinted_green|smoked), "layout": solid, or boards|parquet|herringbone|
+chevron for wood, stack|stretcher|english|flemish|basket_weave for
+brick, stack|stretcher for stone and concrete, "params": {"seed":
+int, plus family knobs 0-1 like knots, figure, veins, brushed,
+weave, chip, frost}, "wear": {"dirt": 0-1, "edge_wear": 0-1,
+"wet": 0-1, "moss": 0-1 on wood|stone|ground only, "rust": 0-1 on
+metal only} - the object form gives a real procedural material
+instead of a flat colour}.
 All geometry is centimetres, z-up, ground plane at z=0. A part sitting on
 the floor has base_z equal to the floor's top. extrude parts also need
 "profile_cm": [[x, y], ...] outline points (>=3) inside the part's size.
