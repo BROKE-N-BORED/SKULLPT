@@ -16,6 +16,8 @@ import json
 import re
 from pathlib import Path
 
+from . import materials as materials_mod
+
 KINDS = ("ui_component", "website", "graphic", "character", "scene", "project")
 SHAPES = ("box", "cylinder", "sphere", "extrude", "lathe", "tube")
 TEXTURES = ("none", "wood_grain", "brushed_metal", "worn_leather")
@@ -188,8 +190,18 @@ def validate(desc: dict) -> list[str]:
                         if not isinstance(mirror.get("at_cm"), (int, float)):
                             problems.append(f"parts[{i}] ({pid!r}) mirror.at_cm must be a number")
                 material = part.get("material")
-                if material is not None and not isinstance(material, str):
-                    problems.append(f"parts[{i}].material must be a preset name or #hex string")
+                if material is None:
+                    pass
+                elif isinstance(material, str):
+                    pass  # preset name or #hex string (the old form)
+                elif isinstance(material, dict):
+                    # object form (v1.11, M1): closed vocabularies
+                    problems.extend(materials_mod.validate_material_spec(
+                        material, f"parts[{i}].material"))
+                else:
+                    problems.append(
+                        f"parts[{i}].material must be a preset name, "
+                        "a #hex string, or a material object")
                 # A part ingested from a real mesh carries its measured
                 # mesh data (v1.6, T30): the triangle count is real, not
                 # an estimate, and the budget gate uses it as such.
@@ -452,6 +464,11 @@ def summarize(desc: dict) -> str:
     lines.append(f"Parts ({len(desc['parts'])}):")
     for part in desc["parts"]:
         params = {k: v for k, v in part.items() if k not in ("id", "type")}
+        if isinstance(params.get("material"), dict):
+            # object materials render as their breadcrumb (M1/M5),
+            # not as a raw dict the user has to parse
+            params["material"] = materials_mod.breadcrumb(
+                params["material"])
         detail = ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
         lines.append(f"  - {part['id']} ({part['type']})" + (f": {detail}" if detail else ""))
     if desc.get("cameras"):

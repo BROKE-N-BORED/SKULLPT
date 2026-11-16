@@ -25,6 +25,9 @@ SETTINGS_FILE = "settings.json"
 
 DEFAULTS = {
     "critic_reference_check": True,
+    # The Material Dial (v1.11, M3): Simple shows only the simple
+    # knobs, Advanced shows every knob. Remembered per workspace.
+    "dial_advanced": False,
     # Render defaults (T25): how renders are made when a job does not
     # say otherwise. "auto" probes EEVEE and falls back to Cycles.
     "render_engine": "auto",
@@ -76,6 +79,18 @@ def critic_reference_enabled(workspace: str | Path, desc: dict) -> bool:
     if own is True or own is False:
         return own
     return bool(load_settings(workspace).get("critic_reference_check", True))
+
+
+def dial_advanced(workspace: str | Path) -> bool:
+    """Whether the Material Dial shows every knob (Advanced) or only
+    the simple knobs (v1.11, M3)."""
+    return bool(load_settings(workspace).get("dial_advanced", False))
+
+
+def set_dial_advanced(workspace: str | Path, advanced: bool) -> None:
+    settings = load_settings(workspace)
+    settings["dial_advanced"] = bool(advanced)
+    save_settings(workspace, settings)
 
 
 def reference_image_path(desc: dict) -> Path | None:

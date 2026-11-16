@@ -1,4 +1,4 @@
-# SKULLPT - v1.10
+# SKULLPT - v1.11
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -69,6 +69,18 @@ cloud mesh has a verified fallback Space, plans and chat cancel,
 damaged files fail in plain words, and the installer is hardened
 (pinned and verified Ollama script, cancellable, a new Blender only
 swaps in after it proves it runs).
+v1.11 is the material system, phase 1 (M1-M6): a material in a
+description can now be an object (family, style, layout, params,
+wear) instead of a flat preset name, and wood is the first family
+(six styles, Solid and Boards layouts, pattern sizes in centimetres).
+The wood recipe is a parametric Blender node tree (rings, fibres,
+blotch, bump; knots and boards when the spec asks for them), kept
+under 25 nodes, with the node count in the build report. The
+Material Dial in the Render window picks materials on a circular
+dial (double-click a part, or press Dial): Simple or Advanced knobs,
+search, Surprise (the seed is recorded), saved presets in
+materials.json, and a live preview render on knob release. Ctrl+click
+a part to copy its material onto the selected part.
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11, and the Bench opened there
 on 2026-11-14 (Settings window, Blender Ready); the full install,
@@ -550,6 +562,50 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.11 - The material system, phase 1 (M1-M6)
+
+- **Materials are objects now (M1).** A part's `material` can be an
+  object - `{family, style, layout, params, wear}` - validated
+  against closed vocabularies, with a breadcrumb ("Wood · White
+  Oak · Boards") in the summary, the part editor, and the build
+  report. The string form ("wood", "metal", a #hex) keeps working
+  exactly as before.
+- **A parametric wood recipe (M2/M4).** Wood is the first family:
+  six styles (oak, white oak, walnut, maple, cherry, weathered)
+  and two layouts (Solid, Boards), all pattern sizes in
+  centimetres (a floor board is 12 cm wide). The Blender recipe is
+  a node tree of standard nodes - saw-profile ring wave, stretched
+  noise fibres, a soft blotch, bump from fibre + ring, with knots
+  and a Brick-node boards branch when the spec asks for them. The
+  grain runs along the part's longest axis. Node counts stay under
+  25 (17 base, 23 worst case) and are predicted host-side, measured
+  in the build, and listed in the build report. The recipe's
+  structure follows the NK Wood Grain group in video-to-blender
+  (https://github.com/gokayfem/video-to-blender, MIT License); the
+  nodes are wired here from scratch in plain bpy.
+- **The Material Dial (M3).** A circular picker in the Render
+  window (double-click a part, or press Dial): nine pages on the
+  inner ring, swatches or knobs on the outer ring, the active knob
+  with its gauge in the centre. Simple shows the four simple knobs,
+  Advanced shows them all (remembered per workspace). Search finds
+  styles by name; Surprise rolls a random material and records its
+  seed; Save stores a preset. Knob changes recolour the part at
+  once; on release, a small Blender preview renders in the
+  background (cached by spec hash) and shows in the part editor.
+  Number keys 1-9 pick pages. The dial is draggable and minimises
+  to a bar. Close applies the material - only when it changed.
+- **Presets, breadcrumb, empty state (M5).** Presets live in
+  `materials.json` in the workspace (backed up with it) and show
+  on the dial's Saved page. A part with no material shows "No
+  material here - open the dial to start."
+- **The eyedropper (M6).** Ctrl+click a part to copy its material
+  onto the selected part - a snapshot, not a link. With nothing
+  selected, Ctrl+click selects the part instead.
+- **Wear is stored, not rendered yet.** Wear values (dirt, grime,
+  edge wear, and the rest) validate and save, but the wear node
+  layer is M9 (v1.12) - the dial shows no Life page until the
+  values do something.
 
 ## v1.10 - The P2 audit fixes (N22-N50, N52-N54)
 

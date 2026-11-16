@@ -18,6 +18,7 @@ from . import bench as bench_mod
 from . import graduate
 from . import imagegen
 from . import keycheck
+from . import materials as materials_mod
 from . import settings as settings_mod
 from . import tokenfile
 from .blender_export import MATERIALS
@@ -343,6 +344,703 @@ class _ClickableLabel(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
 
+# ------------------------------------------------------------ material dial
+#
+# The Material Dial (v1.11, M3): a circular picker for parametric
+# materials, drawn with QPainter (no image assets). Inner ring: the
+# nine pages. Outer ring: the active page's swatches or knobs.
+# Centre: the active knob with its gauge, or the picked swatch.
+#
+# The look follows the BNB UI design library's pie-menu entry (016):
+# flick, don't hunt - every slice keeps a distinct direction, and
+# number keys 1-9 select pages for people who cannot flick precisely.
+# Nine pages is one over the entry's eight-slice ceiling (the design
+# names ten pages; Life arrives with M9) - the keyboard alternative
+# is what keeps it usable, and DESIGN.md records the tension.
+
+_DIAL_PAGES = materials_mod.PAGES
+_DIAL_FACE_W = 560
+_DIAL_FACE_H = 520
+_DIAL_CX = _DIAL_FACE_W // 2
+_DIAL_CY = _DIAL_FACE_H // 2
+_DIAL_R_CENTER = 62
+_DIAL_R_PAGE_IN = 70
+_DIAL_R_PAGE_OUT = 150
+_DIAL_R_ITEM_IN = 155
+_DIAL_R_ITEM_OUT = 250
+
+
+class DialFace(QtWidgets.QWidget):
+    """The painted disc of the Material Dial. Owns the working spec,
+    the active page and the active knob; emits specChanged on every
+    change and specSettled on knob release or item pick."""
+
+    specChanged = QtCore.Signal(dict)
+    specSettled = QtCore.Signal(dict)
+
+    def __init__(self, spec: dict, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(_DIAL_FACE_W, _DIAL_FACE_H)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self._spec = materials_mod.normalize_material_spec(spec)
+        self._page = 1  # Style: the page a user most often wants
+        self._active_knob: str | None = None
+        self._advanced = False
+        self._presets: dict[str, dict] = {}
+        self._dragging = False
+        self._drag_start_y = 0
+        self._drag_start_value = 0.0
+
+    # -- state ------------------------------------------------------
+    def spec(self) -> dict:
+        return materials_mod.normalize_material_spec(self._spec)
+
+    def set_spec(self, spec: dict) -> None:
+        self._spec = materials_mod.normalize_material_spec(spec)
+        if (self._active_knob is not None
+                and self._active_knob not in
+                materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]):
+            self._active_knob = None
+        self.update()
+        self.specChanged.emit(self.spec())
+        self.specSettled.emit(self.spec())
+
+    def set_page(self, index: int) -> None:
+        self._page = max(0, min(len(_DIAL_PAGES) - 1, index))
+        self.update()
+
+    @property
+    def page(self) -> int:
+        return self._page
+
+    def set_advanced(self, advanced: bool) -> None:
+        self._advanced = advanced
+        if (self._active_knob is not None
+                and not self._knob_visible(self._active_knob)):
+            self._active_knob = None
+        self.update()
+
+    def set_presets(self, presets: dict) -> None:
+        self._presets = dict(presets)
+        self.update()
+
+    # -- items ------------------------------------------------------
+    def _knob_visible(self, name: str) -> bool:
+        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
+        return self._advanced or table[name][5]
+
+    def _items(self) -> list[dict]:
+        """The outer ring's items for the active page."""
+        page = _DIAL_PAGES[self._page]
+        family = self._spec["family"]
+        fam = materials_mod.FAMILIES[family]
+        if page == "Material":
+            return [{"key": name, "label": f["label"], "kind": "family"}
+                    for name, f in materials_mod.FAMILIES.items()]
+        if page == "Style":
+            return [{"key": name, "label": s["label"], "kind": "style",
+                     "color": s["base"]}
+                    for name, s in fam["styles"].items()]
+        if page == "Layout":
+            return [{"key": name,
+                     "label": materials_mod.LAYOUT_LABELS.get(name, name),
+                     "kind": "layout"}
+                    for name in fam["layouts"]]
+        if page == "Saved":
+            return [{"key": name, "label": name, "kind": "preset"}
+                    for name in sorted(self._presets)[:12]]
+        table = materials_mod.PARAMS_BY_FAMILY[family]
+        return [{"key": name, "label": meta[0], "kind": "knob",
+                 "value": self._format_value(name)}
+                for name, meta in table.items()
+                if meta[6] == page and self._knob_visible(name)]
+
+    def _format_value(self, name: str) -> str:
+        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
+        _label, _low, _high, _default, unit, _simple, _page = table[name]
+        value = self._spec["params"][name]
+        if name == "seed":
+            return str(int(value))
+        if unit:
+            return f"{value:.1f} {unit}"
+        return f"{value:.2f}"
+
+    def _active_item_key(self):
+        """The key of the item the outer ring highlights, if any."""
+        page = _DIAL_PAGES[self._page]
+        if page == "Material":
+            return self._spec["family"]
+        if page == "Style":
+            return self._spec["style"]
+        if page == "Layout":
+            return self._spec["layout"]
+        if page in ("Detail", "Form", "Surface", "Colour", "Depth"):
+            return self._active_knob
+        return None
+
+    # -- picking ----------------------------------------------------
+    def _pick_item(self, item: dict) -> None:
+        kind, key = item["kind"], item["key"]
+        if kind == "knob":
+            self._active_knob = key
+            self.update()
+            return
+        if kind == "family" and key != self._spec["family"]:
+            self.set_spec({"family": key})
+            return
+        if kind == "style" and key != self._spec["style"]:
+            spec = self.spec()
+            spec["style"] = key
+            self.set_spec(spec)
+            return
+        if kind == "layout" and key != self._spec["layout"]:
+            spec = self.spec()
+            spec["layout"] = key
+            self.set_spec(spec)
+            return
+        if kind == "preset":
+            self.set_spec(self._presets[key])
+            return
+        self.update()
+
+    def _knob_step(self, name: str) -> float:
+        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
+        _label, low, high, _default, _unit, _simple, _page = table[name]
+        if name == "seed":
+            return 1.0
+        return (high - low) / 50.0
+
+    def _set_knob(self, name: str, value: float) -> None:
+        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
+        _label, low, high, _default, _unit, _simple, _page = table[name]
+        value = max(low, min(high, value))
+        if name == "seed":
+            value = int(round(value))
+        if self._spec["params"][name] == value:
+            return
+        self._spec["params"][name] = value
+        self.update()
+        self.specChanged.emit(self.spec())
+
+    def _nudge_knob(self, direction: int) -> None:
+        if self._active_knob is None:
+            return
+        step = self._knob_step(self._active_knob)
+        current = self._spec["params"][self._active_knob]
+        self._set_knob(self._active_knob, current + direction * step)
+        self.specSettled.emit(self.spec())
+
+    # -- geometry ---------------------------------------------------
+    @staticmethod
+    def _angle_at(x: int, y: int) -> float:
+        """Clockwise degrees from the top (0-360)."""
+        import math
+
+        angle = math.degrees(math.atan2(-(y - _DIAL_CY), x - _DIAL_CX))
+        return (90.0 - angle) % 360.0
+
+    @staticmethod
+    def _radius_at(x: int, y: int) -> float:
+        import math
+
+        return math.hypot(x - _DIAL_CX, y - _DIAL_CY)
+
+    # -- events -----------------------------------------------------
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        pos = event.position().toPoint()
+        radius = self._radius_at(pos.x(), pos.y())
+        if radius < _DIAL_R_CENTER and self._active_knob is not None:
+            self._dragging = True
+            self._drag_start_y = pos.y()
+            self._drag_start_value = self._spec["params"][self._active_knob]
+            return
+        angle = self._angle_at(pos.x(), pos.y())
+        if _DIAL_R_PAGE_IN <= radius < _DIAL_R_PAGE_OUT:
+            self.set_page(int(angle // (360.0 / len(_DIAL_PAGES))))
+            return
+        if _DIAL_R_ITEM_IN <= radius < _DIAL_R_ITEM_OUT:
+            items = self._items()
+            if items:
+                index = int(angle // (360.0 / len(items)))
+                self._pick_item(items[min(index, len(items) - 1)])
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if not self._dragging or self._active_knob is None:
+            super().mouseMoveEvent(event)
+            return
+        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
+        _label, low, high, _default, _unit, _simple, _page = \
+            table[self._active_knob]
+        # Dragging up increases the value; 200 px spans the range.
+        moved = self._drag_start_y - event.position().toPoint().y()
+        value = self._drag_start_value + moved / 200.0 * (high - low)
+        self._set_knob(self._active_knob, value)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._dragging:
+            self._dragging = False
+            self.specSettled.emit(self.spec())
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+        pos = event.position().toPoint()
+        if (self._active_knob is not None
+                and self._radius_at(pos.x(), pos.y()) < _DIAL_R_CENTER):
+            steps = event.angleDelta().y() / 120.0
+            if steps:
+                self._nudge_knob(1 if steps > 0 else -1)
+            return
+        super().wheelEvent(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        key = event.key()
+        if QtCore.Qt.Key_1 <= key <= QtCore.Qt.Key_9:
+            self.set_page(key - QtCore.Qt.Key_1)
+            return
+        if key == QtCore.Qt.Key_Up:
+            self._nudge_knob(1)
+            return
+        if key == QtCore.Qt.Key_Down:
+            self._nudge_knob(-1)
+            return
+        super().keyPressEvent(event)
+
+    # -- painting ---------------------------------------------------
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        painter = QtGui.QPainter(self)
+        try:
+            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+            painter.fillRect(self.rect(), QtGui.QColor(CANVAS))
+            self._paint_disc(painter)
+            self._paint_pages(painter)
+            self._paint_items(painter)
+            self._paint_center(painter)
+        finally:
+            # An exception mid-paint must not leave the painter
+            # active: the backing store segfaults on the next paint.
+            painter.end()
+
+    def _paint_disc(self, painter: QtGui.QPainter) -> None:
+        painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 1))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(CANVAS_SOFT)))
+        painter.drawEllipse(QtCore.QPointF(_DIAL_CX, _DIAL_CY),
+                            _DIAL_R_ITEM_OUT, _DIAL_R_ITEM_OUT)
+
+    def _wedge(self, r_in: float, r_out: float, start: float,
+               span: float) -> QtGui.QPainterPath:
+        """A donut segment: start/span in clockwise degrees from top."""
+        outer = QtCore.QRectF(_DIAL_CX - r_out, _DIAL_CY - r_out,
+                              2 * r_out, 2 * r_out)
+        inner = QtCore.QRectF(_DIAL_CX - r_in, _DIAL_CY - r_in,
+                              2 * r_in, 2 * r_in)
+        # Qt angles: 0 is east, positive is counterclockwise.
+        # arcMoveTo takes only the start angle (no span).
+        qt_start = 90.0 - start
+        path = QtGui.QPainterPath()
+        path.arcMoveTo(outer, qt_start)
+        path.arcTo(outer, qt_start, -span)
+        path.arcTo(inner, qt_start - span, span)
+        path.closeSubpath()
+        return path
+
+    def _paint_pages(self, painter: QtGui.QPainter) -> None:
+        import math
+
+        span = 360.0 / len(_DIAL_PAGES)
+        font = self.font()
+        font.setPointSize(9)
+        painter.setFont(font)
+        amber = QtGui.QColor(AMBER())
+        for index, name in enumerate(_DIAL_PAGES):
+            start = index * span
+            path = self._wedge(_DIAL_R_PAGE_IN, _DIAL_R_PAGE_OUT,
+                               start, span)
+            if index == self._page:
+                fill = QtGui.QColor(amber)
+                fill.setAlpha(60)
+                painter.setBrush(QtGui.QBrush(fill))
+                painter.setPen(QtGui.QPen(amber, 1))
+            else:
+                painter.setBrush(QtCore.Qt.NoBrush)
+                painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 1))
+            painter.drawPath(path)
+            mid = math.radians(90.0 - (start + span / 2.0))
+            radius = (_DIAL_R_PAGE_IN + _DIAL_R_PAGE_OUT) / 2.0
+            x = _DIAL_CX + radius * math.cos(mid)
+            y = _DIAL_CY - radius * math.sin(mid)
+            painter.setPen(QtGui.QColor(
+                BONE if index == self._page else MUTED))
+            painter.drawText(QtCore.QRectF(x - 45, y - 10, 90, 20),
+                             QtCore.Qt.AlignCenter, name)
+
+    def _paint_items(self, painter: QtGui.QPainter) -> None:
+        import math
+
+        items = self._items()
+        if not items:
+            return
+        span = 360.0 / len(items)
+        active = self._active_item_key()
+        font = self.font()
+        font.setPointSize(10)
+        painter.setFont(font)
+        amber = QtGui.QColor(AMBER())
+        for index, item in enumerate(items):
+            start = index * span
+            path = self._wedge(_DIAL_R_ITEM_IN, _DIAL_R_ITEM_OUT,
+                               start, span)
+            if item["key"] == active:
+                fill = QtGui.QColor(amber)
+                fill.setAlpha(60)
+                painter.setBrush(QtGui.QBrush(fill))
+                painter.setPen(QtGui.QPen(amber, 1))
+            else:
+                painter.setBrush(QtCore.Qt.NoBrush)
+                painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 1))
+            painter.drawPath(path)
+            mid = math.radians(90.0 - (start + span / 2.0))
+            mid_r = (_DIAL_R_ITEM_IN + _DIAL_R_ITEM_OUT) / 2.0
+            x = _DIAL_CX + mid_r * math.cos(mid)
+            y = _DIAL_CY - mid_r * math.sin(mid)
+            color = item.get("color")
+            if color:
+                painter.setPen(QtCore.Qt.NoPen)
+                painter.setBrush(QtGui.QBrush(QtGui.QColor(color)))
+                painter.drawEllipse(QtCore.QPointF(x, y - 12), 8, 8)
+                painter.setPen(QtGui.QColor(BONE))
+                painter.drawText(QtCore.QRectF(x - 55, y, 110, 20),
+                                 QtCore.Qt.AlignCenter, item["label"])
+            elif item["kind"] == "knob":
+                painter.setPen(QtGui.QColor(BONE))
+                painter.drawText(QtCore.QRectF(x - 55, y - 10, 110, 20),
+                                 QtCore.Qt.AlignCenter, item["label"])
+                painter.setPen(QtGui.QColor(MUTED))
+                painter.drawText(QtCore.QRectF(x - 55, y + 8, 110, 20),
+                                 QtCore.Qt.AlignCenter,
+                                 item.get("value", ""))
+            else:
+                painter.setPen(QtGui.QColor(BONE))
+                painter.drawText(QtCore.QRectF(x - 55, y - 10, 110, 20),
+                                 QtCore.Qt.AlignCenter, item["label"])
+
+    def _paint_center(self, painter: QtGui.QPainter) -> None:
+        painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 1))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(CANVAS)))
+        painter.drawEllipse(QtCore.QPointF(_DIAL_CX, _DIAL_CY),
+                            _DIAL_R_CENTER, _DIAL_R_CENTER)
+        page = _DIAL_PAGES[self._page]
+        if self._active_knob is not None:
+            self._paint_knob_center(painter)
+            return
+        if page in ("Surface", "Colour", "Depth") and not self._items():
+            self._paint_center_text(
+                painter, "Advanced only",
+                "Switch to Advanced to see these knobs.")
+            return
+        if page == "Saved" and not self._items():
+            self._paint_center_text(
+                painter, "No presets yet",
+                "Save one with the Save button.")
+            return
+        if page == "Style":
+            style = materials_mod.FAMILIES[self._spec["family"]][
+                "styles"][self._spec["style"]]
+            self._paint_swatch_center(painter, style["label"],
+                                      style["base"])
+            return
+        if page == "Layout":
+            self._paint_center_text(
+                painter, materials_mod.LAYOUT_LABELS[self._spec["layout"]],
+                materials_mod.breadcrumb(self._spec))
+            return
+        self._paint_center_text(painter, "Pick a knob or a style",
+                                materials_mod.breadcrumb(self._spec))
+
+    def _paint_knob_center(self, painter: QtGui.QPainter) -> None:
+        table = materials_mod.PARAMS_BY_FAMILY[self._spec["family"]]
+        name = self._active_knob
+        label, low, high, _default, unit, _simple, _page = table[name]
+        value = self._spec["params"][name]
+        fraction = 0.0 if high <= low else (value - low) / (high - low)
+        rect = QtCore.QRectF(_DIAL_CX - _DIAL_R_CENTER + 6,
+                             _DIAL_CY - _DIAL_R_CENTER + 6,
+                             2 * (_DIAL_R_CENTER - 6),
+                             2 * (_DIAL_R_CENTER - 6))
+        painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 3))
+        painter.drawArc(rect, 0, 360 * 16)
+        painter.setPen(QtGui.QPen(QtGui.QColor(AMBER()), 3))
+        painter.drawArc(rect, 90 * 16, -int(fraction * 360 * 16))
+        font = self.font()
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor(MUTED))
+        painter.drawText(QtCore.QRectF(_DIAL_CX - 55, _DIAL_CY - 28, 110, 20),
+                         QtCore.Qt.AlignCenter, label)
+        font.setPointSize(16)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor(BONE))
+        painter.drawText(QtCore.QRectF(_DIAL_CX - 55, _DIAL_CY - 8, 110, 24),
+                         QtCore.Qt.AlignCenter, self._format_value(name))
+        font.setPointSize(9)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor(MUTED))
+        painter.drawText(QtCore.QRectF(_DIAL_CX - 55, _DIAL_CY + 18, 110, 20),
+                         QtCore.Qt.AlignCenter,
+                         "Drag or scroll")
+
+    def _paint_swatch_center(self, painter: QtGui.QPainter, label: str,
+                             color: str) -> None:
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(color)))
+        painter.drawEllipse(QtCore.QPointF(_DIAL_CX, _DIAL_CY - 14), 12, 12)
+        font = self.font()
+        font.setPointSize(11)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor(BONE))
+        painter.drawText(QtCore.QRectF(_DIAL_CX - 55, _DIAL_CY + 4, 110, 20),
+                         QtCore.Qt.AlignCenter, label)
+
+    def _paint_center_text(self, painter: QtGui.QPainter, title: str,
+                           sub: str) -> None:
+        font = self.font()
+        font.setPointSize(11)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor(BONE))
+        # The title wraps like the breadcrumb below it: "Pick a knob
+        # or a style" is wider than the 110 px centre rect at 11 pt
+        # bold, and without wrapping it clipped at both edges on
+        # every knob page. The taller rect keeps the single-line
+        # vertical centre (CY - 12) unchanged.
+        painter.drawText(QtCore.QRectF(_DIAL_CX - 55, _DIAL_CY - 30, 110, 36),
+                         QtCore.Qt.AlignCenter | QtCore.Qt.TextWordWrap,
+                         title)
+        font.setPointSize(9)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor(MUTED))
+        painter.drawText(QtCore.QRectF(_DIAL_CX - 55, _DIAL_CY + 8, 110, 36),
+                         QtCore.Qt.AlignCenter | QtCore.Qt.TextWordWrap,
+                         sub)
+
+
+class MaterialDial(QtWidgets.QWidget):
+    """The Material Dial popup (v1.11, M3): the painted face, a
+    search box, and Surprise / Save / Close. Draggable by its
+    header, minimises to a bar, closes on Close, Escape, or a
+    click outside. Close applies the working spec - but only when
+    it actually changed (the Render window decides that)."""
+
+    specChanged = QtCore.Signal(dict)
+    specSettled = QtCore.Signal(dict)
+    closed = QtCore.Signal()
+
+    def __init__(self, workspace, part_id: str, spec: dict, parent=None):
+        super().__init__(parent, QtCore.Qt.Popup
+                         | QtCore.Qt.FramelessWindowHint)
+        self._workspace = Path(workspace)
+        self._part_id = part_id
+        self._changed = False
+        self._drag_offset: QtCore.QPoint | None = None
+        self.setFixedWidth(_DIAL_FACE_W)
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        # Scoped to the dial itself: a bare "background: ..." rule
+        # is a universal selector that reaches every child and
+        # overrides the app stylesheet's amber #primary button
+        # background while its near-black text still applies, which
+        # made the Close button's label invisible.
+        self.setStyleSheet(f"MaterialDial {{ background: {CANVAS}; }}")
+
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._header = QtWidgets.QWidget()
+        header_row = QtWidgets.QHBoxLayout(self._header)
+        header_row.setContentsMargins(8, 6, 8, 6)
+        self._crumb = QtWidgets.QLabel(
+            materials_mod.breadcrumb(spec))
+        self._crumb.setObjectName("heading")
+        header_row.addWidget(self._crumb, 1)
+        self._minimise_btn = QtWidgets.QPushButton("Minimise")
+        self._minimise_btn.clicked.connect(self._toggle_minimised)
+        header_row.addWidget(self._minimise_btn)
+        close_btn = QtWidgets.QPushButton("X")
+        close_btn.clicked.connect(self.close)
+        header_row.addWidget(close_btn)
+        outer.addWidget(self._header)
+
+        self._body = QtWidgets.QWidget()
+        body = QtWidgets.QVBoxLayout(self._body)
+        body.setContentsMargins(8, 0, 8, 8)
+        body.setSpacing(6)
+
+        self._search = QtWidgets.QLineEdit()
+        self._search.setPlaceholderText("Search styles...")
+        self._search.textChanged.connect(self._on_search)
+        self._search.returnPressed.connect(self._on_search_enter)
+        body.addWidget(self._search)
+        self._results = QtWidgets.QListWidget()
+        self._results.setMaximumHeight(66)
+        self._results.itemClicked.connect(self._on_search_pick)
+        self._results.setVisible(False)
+        body.addWidget(self._results)
+
+        self._face = DialFace(spec)
+        self._face.specChanged.connect(self._on_face_changed)
+        self._face.specSettled.connect(self.specSettled.emit)
+        self._face.set_presets(materials_mod.load_presets(workspace))
+        body.addWidget(self._face)
+
+        self._preset_row = QtWidgets.QWidget()
+        preset_layout = QtWidgets.QHBoxLayout(self._preset_row)
+        preset_layout.setContentsMargins(0, 0, 0, 0)
+        self._preset_name = QtWidgets.QLineEdit()
+        self._preset_name.setPlaceholderText("Preset name")
+        preset_layout.addWidget(self._preset_name, 1)
+        save_preset_btn = QtWidgets.QPushButton("Save preset")
+        save_preset_btn.clicked.connect(self._save_preset)
+        preset_layout.addWidget(save_preset_btn)
+        self._preset_row.setVisible(False)
+        body.addWidget(self._preset_row)
+
+        buttons = QtWidgets.QHBoxLayout()
+        self._advanced_btn = QtWidgets.QPushButton("Advanced")
+        self._advanced_btn.setCheckable(True)
+        self._advanced_btn.setChecked(
+            settings_mod.dial_advanced(workspace))
+        self._advanced_btn.toggled.connect(self._on_advanced_toggled)
+        buttons.addWidget(self._advanced_btn)
+        surprise_btn = QtWidgets.QPushButton("Surprise")
+        surprise_btn.clicked.connect(self._surprise)
+        buttons.addWidget(surprise_btn)
+        save_btn = QtWidgets.QPushButton("Save")
+        save_btn.clicked.connect(self._show_preset_row)
+        buttons.addWidget(save_btn)
+        close2_btn = QtWidgets.QPushButton("Close")
+        close2_btn.setObjectName("primary")
+        close2_btn.clicked.connect(self.close)
+        buttons.addWidget(close2_btn)
+        body.addLayout(buttons)
+        self._face.set_advanced(self._advanced_btn.isChecked())
+
+        outer.addWidget(self._body)
+        self.setWindowTitle(f"Material Dial - {part_id}")
+
+    # -- state ------------------------------------------------------
+    def spec(self) -> dict:
+        return self._face.spec()
+
+    @property
+    def changed(self) -> bool:
+        """True once the user has changed the working spec."""
+        return self._changed
+
+    @property
+    def face(self) -> DialFace:
+        return self._face
+
+    def _on_face_changed(self, spec: dict) -> None:
+        self._changed = True
+        self._crumb.setText(materials_mod.breadcrumb(spec))
+        self.specChanged.emit(spec)
+
+    # -- header: drag + minimise ------------------------------------
+    def _toggle_minimised(self) -> None:
+        minimised = self._body.isVisible()
+        self._body.setVisible(not minimised)
+        self._minimise_btn.setText("Expand" if minimised else "Minimise")
+        self.adjustSize()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton:
+            child = self.childAt(event.position().toPoint())
+            if child in (self._crumb, self._header):
+                self._drag_offset = (event.globalPosition().toPoint()
+                                     - self.pos())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._drag_offset is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self.closed.emit()
+        super().closeEvent(event)
+
+    # -- search -----------------------------------------------------
+    def _on_search(self, text: str) -> None:
+        query = text.strip().lower()
+        self._results.clear()
+        if not query:
+            self._results.setVisible(False)
+            return
+        for family, fam in materials_mod.FAMILIES.items():
+            for style, meta in fam["styles"].items():
+                label = f"{fam['label']} - {meta['label']}"
+                if query in label.lower() or query in style:
+                    item = QtWidgets.QListWidgetItem(label)
+                    item.setData(QtCore.Qt.UserRole, (family, style))
+                    self._results.addItem(item)
+        self._results.setVisible(self._results.count() > 0)
+
+    def _on_search_enter(self) -> None:
+        if self._results.count():
+            self._on_search_pick(self._results.item(0))
+
+    def _on_search_pick(self, item: QtWidgets.QListWidgetItem) -> None:
+        family, style = item.data(QtCore.Qt.UserRole)
+        spec = self.spec()
+        if family != spec["family"]:
+            spec = {"family": family, "style": style}
+        else:
+            spec["style"] = style
+        self._face.set_spec(spec)
+        self._face.set_page(_DIAL_PAGES.index("Style"))
+        self._search.clear()
+        self._results.setVisible(False)
+
+    # -- buttons ----------------------------------------------------
+    def _on_advanced_toggled(self, checked: bool) -> None:
+        settings_mod.set_dial_advanced(self._workspace, checked)
+        self._face.set_advanced(checked)
+
+    def _surprise(self) -> None:
+        self._face.set_spec(materials_mod.surprise_spec())
+
+    def _show_preset_row(self) -> None:
+        self._preset_row.setVisible(True)
+        self._preset_name.setFocus()
+
+    def _save_preset(self) -> None:
+        name = self._preset_name.text().strip()
+        if not name:
+            self._preset_name.setPlaceholderText("Type a name first")
+            return
+        materials_mod.save_preset(self._workspace, name, self.spec())
+        self._face.set_presets(
+            materials_mod.load_presets(self._workspace))
+        self._preset_name.clear()
+        self._preset_row.setVisible(False)
+        Toast.show_toast(self, f"Preset {name} saved.")
+
+
 class RenderWindow(_GeometryWindow):
     """The viewport, full size: the selected job's parts as true-scale
     3D shapes, click a part to edit it, with a legend, a triangle
@@ -359,6 +1057,14 @@ class RenderWindow(_GeometryWindow):
         self._job_name: str | None = None
         self._desc: dict | None = None
         self._selected_part: str | None = None
+        # The Material Dial (v1.11, M3): one open at a time, editing
+        # one part of one job. _dial_original is the part's material
+        # as it was when the dial opened (Close only applies a change).
+        self._dial: MaterialDial | None = None
+        self._dial_part: str | None = None
+        self._dial_original = None
+        self._preview_token = 0
+        self._preview_call: _BackgroundCall | None = None
         self.setWindowTitle("SKULLPT - Render")
         self.setMinimumSize(720, 480)
 
@@ -371,6 +1077,9 @@ class RenderWindow(_GeometryWindow):
         self._viewport = LiveRenderWidget()
         self._viewport.partSelected.connect(self._on_part_selected)
         self._viewport.partHovered.connect(self._on_part_hovered)
+        self._viewport.partDoubleClicked.connect(
+            self._on_part_double_clicked)
+        self._viewport.partEyedropper.connect(self._on_part_eyedropper)
         left.addWidget(self._viewport, 1)
 
         self._legend = QtWidgets.QLabel()
@@ -426,9 +1135,20 @@ class RenderWindow(_GeometryWindow):
                 spins.append(spin)
                 row.addWidget(spin)
             form.addRow(label, row)
+        material_row = QtWidgets.QHBoxLayout()
         self._material_combo = QtWidgets.QComboBox()
         self._material_combo.addItems(sorted(MATERIALS))
-        form.addRow("Material", self._material_combo)
+        material_row.addWidget(self._material_combo, 1)
+        self._dial_btn = QtWidgets.QPushButton("Dial")
+        self._dial_btn.setEnabled(False)
+        self._dial_btn.clicked.connect(self._open_dial)
+        material_row.addWidget(self._dial_btn)
+        form.addRow("Material", material_row)
+        self._material_crumb = QtWidgets.QLabel()
+        self._material_crumb.setObjectName("small")
+        self._material_crumb.setWordWrap(True)
+        self._material_crumb.setVisible(False)
+        form.addRow("", self._material_crumb)
         self._bevel_spin = QtWidgets.QDoubleSpinBox()
         self._bevel_spin.setRange(0.0, 100.0)
         self._bevel_spin.setDecimals(1)
@@ -445,6 +1165,11 @@ class RenderWindow(_GeometryWindow):
         right.addWidget(self._save_part_btn)
         right.addWidget(QtWidgets.QLabel(
             "Saving sends the job back for approval."))
+        self._preview_label = QtWidgets.QLabel()
+        self._preview_label.setAlignment(QtCore.Qt.AlignCenter)
+        self._preview_label.setWordWrap(True)
+        self._preview_label.setVisible(False)
+        right.addWidget(self._preview_label)
         renders_title = QtWidgets.QLabel("Renders")
         renders_title.setObjectName("heading")
         right.addWidget(renders_title)
@@ -496,6 +1221,14 @@ class RenderWindow(_GeometryWindow):
 
     def set_job(self, job_name: str | None) -> None:
         """Show a job in the viewport, or clear it with None."""
+        # A job change closes the dial (it edits one job's part);
+        # _dial is cleared first, so the dial's `closed` signal
+        # applies nothing. Stale previews are discarded by token.
+        if self._dial is not None:
+            dial, self._dial = self._dial, None
+            dial.close()
+        self._preview_token += 1
+        self._preview_label.setVisible(False)
         self._job_name = job_name
         self._desc = None
         self._selected_part = None
@@ -557,7 +1290,9 @@ class RenderWindow(_GeometryWindow):
         self._legend.setText(
             f"Grid: {step:.1f} cm squares. X red, Y green, Z blue. "
             "Drag to orbit, right-drag to pan, scroll to zoom. "
-            "Click a part to select it.")
+            "Click a part to select it. Double-click it for the "
+            "Material Dial. Ctrl+click a part to copy its material "
+            "onto the selected part.")
 
     def _update_tri_count(self) -> None:
         if self._job_name is None:
@@ -657,6 +1392,9 @@ class RenderWindow(_GeometryWindow):
             # part: the human is edited in the Character Studio
             # window, not here.
             self._save_part_btn.setEnabled(False)
+            self._dial_btn.setEnabled(False)
+            self._material_crumb.setVisible(False)
+            self._preview_label.setVisible(False)
             self._editor_note.setText(
                 "This is the human. Edit it in the Character Studio window.")
             return
@@ -665,6 +1403,9 @@ class RenderWindow(_GeometryWindow):
                      if p.get("id") == base_id), None)
         if part is None:
             self._save_part_btn.setEnabled(False)
+            self._dial_btn.setEnabled(False)
+            self._material_crumb.setVisible(False)
+            self._preview_label.setVisible(False)
             self._editor_note.setText("Could not find this part to edit.")
             return
         if base_id != part_id:
@@ -680,18 +1421,40 @@ class RenderWindow(_GeometryWindow):
         for spin, value in zip(self._size_spins, size):
             spin.setValue(float(value))
         material = part.get("material")
-        index = self._material_combo.findText(material) if material else -1
-        if index >= 0:
-            self._material_combo.setCurrentIndex(index)
-        else:
-            # A hex or unknown material is not a named preset: leave
-            # the combo blank rather than forcing the first preset
-            # (v1.9, N4) - saving keeps the material as it is.
+        if isinstance(material, dict):
+            # An object material (v1.11, M1): the combo holds preset
+            # names only, so it stays blank (N4) and the breadcrumb
+            # label carries the material instead.
             self._material_combo.setCurrentIndex(-1)
-            self._editor_note.setText(
-                self._editor_note.text()
-                + f" Material {material} is custom and stays as it is"
-                " unless you pick a preset.")
+            self._material_crumb.setText(
+                materials_mod.breadcrumb(material))
+            self._material_crumb.setVisible(True)
+            self._dial_btn.setEnabled(True)
+            self._start_preview(material)
+        elif isinstance(material, str):
+            index = self._material_combo.findText(material)
+            if index >= 0:
+                self._material_combo.setCurrentIndex(index)
+            else:
+                # A hex or unknown material is not a named preset: leave
+                # the combo blank rather than forcing the first preset
+                # (v1.9, N4) - saving keeps the material as it is.
+                self._material_combo.setCurrentIndex(-1)
+                self._editor_note.setText(
+                    self._editor_note.text()
+                    + f" Material {material} is custom and stays as it is"
+                    " unless you pick a preset.")
+            self._material_crumb.setVisible(False)
+            self._dial_btn.setEnabled(True)
+            self._preview_label.setVisible(False)
+        else:
+            # No material at all (v1.11, M5): the empty state.
+            self._material_combo.setCurrentIndex(-1)
+            self._material_crumb.setText(
+                "No material here - open the dial to start.")
+            self._material_crumb.setVisible(True)
+            self._dial_btn.setEnabled(True)
+            self._preview_label.setVisible(False)
         self._bevel_spin.setValue(float(part.get("bevel_cm") or 0.0))
         self._radius_spin.setValue(float(part.get("radius_cm") or 0.0))
         self._save_part_btn.setEnabled(True)
@@ -729,6 +1492,153 @@ class RenderWindow(_GeometryWindow):
             return
         Toast.show_toast(self, f"Part {base_id} saved. The job needs approval again.")
         self.refresh()
+
+    # -- the Material Dial (v1.11, M3/M5/M6) -------------------------
+    def _open_dial(self) -> None:
+        """Open the Material Dial for the selected part."""
+        if self._job_name is None or self._selected_part is None \
+                or self._desc is None:
+            return
+        if self._dial is not None:
+            self._dial.raise_()
+            self._dial.activateWindow()
+            return
+        base_id = _base_part_id(self._selected_part, self._desc)
+        part = next((p for p in self._desc.get("parts", [])
+                     if p.get("id") == base_id), None)
+        if part is None:
+            return
+        material = part.get("material")
+        if isinstance(material, dict):
+            spec = materials_mod.normalize_material_spec(material)
+        else:
+            # A string material or none: start from the default wood
+            # spec. Close only applies when the user changed it.
+            spec = materials_mod.normalize_material_spec(
+                {"family": "wood"})
+        self._dial_part = base_id
+        self._dial_original = material
+        dial = MaterialDial(self._workspace, base_id, spec, parent=self)
+        dial.specChanged.connect(self._on_dial_changed)
+        dial.specSettled.connect(self._on_dial_settled)
+        dial.closed.connect(self._on_dial_closed)
+        self._dial = dial
+        dial.adjustSize()
+        geo = self.geometry()
+        dial.move(geo.center().x() - dial.width() // 2,
+                  geo.center().y() - dial.height() // 2)
+        dial.show()
+
+    def _on_dial_changed(self, spec: dict) -> None:
+        """Live feedback (v1.11, M3): recolour the part at once, on
+        every copy of it (repeats and mirrors share the material)."""
+        if self._dial_part is None or self._desc is None:
+            return
+        hex_color = materials_mod.spec_base_color(spec)
+        rgb = (int(hex_color[1:3], 16) / 255.0,
+               int(hex_color[3:5], 16) / 255.0,
+               int(hex_color[5:7], 16) / 255.0)
+        for row in range(self._parts_list.count()):
+            expanded = self._parts_list.item(row).text()
+            if _base_part_id(expanded, self._desc) == self._dial_part:
+                self._viewport.set_color_override(expanded, rgb)
+
+    def _on_dial_settled(self, spec: dict) -> None:
+        """Knob release (v1.11, M3): a preview render, cached by
+        spec hash, never blocking the UI thread."""
+        self._start_preview(spec)
+
+    def _on_dial_closed(self) -> None:
+        """Close applies the working spec - but only when the user
+        actually changed it (v1.11, M3)."""
+        dial = self._dial
+        self._dial = None
+        if dial is None or self._job_name is None or self._desc is None:
+            return
+        # Clear the live colour override (all copies of the part).
+        for row in range(self._parts_list.count()):
+            expanded = self._parts_list.item(row).text()
+            if _base_part_id(expanded, self._desc) == self._dial_part:
+                self._viewport.set_color_override(expanded, None)
+        if not dial.changed:
+            return
+        spec = dial.spec()
+        original = self._dial_original
+        if isinstance(original, dict):
+            # Changed and changed back: the spec is the same, so
+            # there is nothing to apply (and no approval round trip).
+            if materials_mod.normalize_material_spec(original) == spec:
+                return
+        result = self._bench.do_action("edit-part", {
+            "job": self._job_name, "part": self._dial_part,
+            "fields": {"material": spec}})
+        if result is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save",
+                "The material did not save. The chat panel on the Jobs "
+                "window says why.")
+            return
+        Toast.show_toast(
+            self, f"Material set to {materials_mod.breadcrumb(spec)}.")
+        self.refresh()
+
+    def _on_part_double_clicked(self, part_id: str) -> None:
+        """Double-click opens the Material Dial (v1.11, M3)."""
+        self._select_part(part_id)
+        self._open_dial()
+
+    def _on_part_eyedropper(self, source_id: str) -> None:
+        """Ctrl+click: copy the source part's material onto the
+        selected part (v1.11, M6). With nothing selected, select
+        the source part instead."""
+        if self._job_name is None or self._desc is None:
+            return
+        source = _base_part_id(source_id, self._desc)
+        if self._selected_part is None or _base_part_id(
+                self._selected_part, self._desc) == source:
+            self._select_part(source_id)
+            return
+        target = _base_part_id(self._selected_part, self._desc)
+        result = self._bench.do_action("copy-material", {
+            "job": self._job_name, "from_part": source,
+            "to_part": target})
+        if result is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not copy",
+                "The material did not copy. The chat panel on the Jobs "
+                "window says why.")
+            return
+        Toast.show_toast(self, result.get("detail", "Material copied."))
+        self.refresh()
+
+    def _start_preview(self, spec: dict) -> None:
+        """Render a material preview off the UI thread (v1.11, M3).
+        A newer preview supersedes an older one by token."""
+        from . import blender_export as blender_mod
+
+        self._preview_token += 1
+        token = self._preview_token
+        self._preview_label.setText("Rendering a preview...")
+        self._preview_label.setVisible(True)
+        call = _BackgroundCall(
+            lambda: blender_mod.render_material_preview(
+                spec, self._workspace))
+        call.finished.connect(
+            lambda result: self._on_preview_ready(token, result))
+        self._preview_call = call
+        call.start()
+
+    def _on_preview_ready(self, token: int, result) -> None:
+        if token != self._preview_token:
+            return  # a newer preview superseded this one
+        if isinstance(result, Exception):
+            self._preview_label.setText(str(result))
+            return
+        pixmap = QtGui.QPixmap(str(result))
+        if pixmap.isNull():
+            self._preview_label.setText("The preview did not render.")
+            return
+        self._preview_label.setPixmap(pixmap)
 
     def _load_render_settings(self) -> None:
         """Fill the render controls with this job's effective settings
@@ -2294,6 +3204,20 @@ falls back to Cycles when EEVEE cannot run on this machine),
 resolution, Cycles samples, and denoise. A job can set its own in the
 Render window. Changing render settings never sends a job back for
 approval.</p>
+<h3>Materials and the dial</h3>
+<p>A part's material can be a flat preset (wood, metal, glass) or a
+real procedural material: pick a part in the Render window, press
+Dial (or double-click the part), and the Material Dial opens. The
+inner ring is the pages (Material, Style, Layout, Detail, Form,
+Surface, Colour, Depth, Saved); the outer ring holds the page's
+swatches or knobs; the centre shows the active knob with its gauge.
+Drag up or down on the centre to turn a knob, or scroll over it.
+Number keys 1 to 9 pick pages. Surprise rolls a random material and
+records its seed, so it can be made again exactly. Save stores the
+material as a preset for later. Close applies the material to the
+part. A part with no material shows "No material here - open the
+dial to start." Ctrl+click a part to copy its material onto the
+selected part.</p>
 <h3>Builds in a queue</h3>
 <p>Only one heavy job runs at a time. If you start a build while
 another is running, yours waits in the queue and starts when its turn
@@ -2437,6 +3361,24 @@ def _format_build_report(workspace: Path, job_name: str) -> str:
         lines.append(f"Triangles: {report['total_tris']:,} (measured)")
         for name, part in (report.get("tris_by_part") or {}).items():
             lines.append(f"  {name}: {part.get('tris', '-')} tris")
+    materials = report.get("materials") or {}
+    measured = report.get("measured_materials") or {}
+    if materials or measured:
+        lines.append("Materials:")
+        for name in sorted(set(materials) | set(measured)):
+            pred = materials.get(name, {})
+            meas = measured.get(name, {})
+            crumb = pred.get("breadcrumb") or meas.get("breadcrumb") or name
+            pred_nodes = pred.get("nodes")
+            meas_nodes = meas.get("nodes")
+            if (meas_nodes is not None and pred_nodes is not None
+                    and meas_nodes != pred_nodes):
+                lines.append(
+                    f"  {name}: {crumb} ({meas_nodes} nodes, "
+                    f"predicted {pred_nodes})")
+            else:
+                nodes = meas_nodes if meas_nodes is not None else pred_nodes
+                lines.append(f"  {name}: {crumb} ({nodes} nodes)")
     render = report.get("render") or {}
     if render:
         lines.append("Render:")

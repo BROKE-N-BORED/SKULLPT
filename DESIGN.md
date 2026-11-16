@@ -52,16 +52,16 @@ radii:
 
 # SKULLPT Design System
 
-Single source of truth for how the Bench looks (v1.10; the v1.5
+Single source of truth for how the Bench looks (v1.11; the v1.5
 system, carried forward through v1.9 unchanged in its tokens - the
 newer windows reuse these components: the render settings use the
 Settings window's form rows and the Render window's groups, the
 Vary button is a plain secondary button, the workspace/backup/update
-actions are plain menu items and dialogs). The code follows this
-file: `skullpt/qtdesign.py` holds the tokens, including the fixed
-amber `#f5a623`, and builds the one stylesheet `main()` applies. If
-this file and the code disagree, this file wins and the code is
-wrong.
+actions are plain menu items and dialogs; v1.11 adds the Material
+Dial below). The code follows this file: `skullpt/qtdesign.py`
+holds the tokens, including the fixed amber `#f5a623`, and builds
+the one stylesheet `main()` applies. If this file and the code
+disagree, this file wins and the code is wrong.
 
 ## Overview
 
@@ -254,6 +254,23 @@ Tooltips are canvas-soft with a hairline border.
 - **Tabs.** Selected tab gets a 2px amber bottom border.
 - **Checkboxes.** 16px indicator, hairline border, canvas-soft
   fill; checked is amber fill with amber border.
+- **Material Dial (v1.11).** A circular picker, drawn with
+  QPainter (no image assets), at most 560 px across: a canvas disc
+  on canvas-soft, hairline rings, bone labels, amber only for the
+  active page, the active item, and the centre gauge. Inner ring:
+  the nine pages (Material, Style, Layout, Detail, Form, Surface,
+  Colour, Depth, Saved). Outer ring: the active page's swatches
+  (style dots in the style's own base colour) or knobs (label plus
+  current value). Centre: the active knob with its circular gauge
+  and value, or the picked swatch. Below the disc: real buttons
+  (Advanced toggle, Surprise, Save, Close), not painted ones, so
+  keyboard users can reach them. Draggable by its header,
+  minimises to a bar. TENSION, recorded honestly: the BNB UI design
+  library's pie-menu entry (016) caps pie menus at eight slices,
+  and the dial has nine pages (the design names ten; Life arrives
+  with M9). Each page keeps a distinct direction, and number keys
+  1-9 select pages for people who cannot flick precisely - the
+  keyboard alternative is what keeps the ninth page usable.
 
 ### Icons (R2)
 

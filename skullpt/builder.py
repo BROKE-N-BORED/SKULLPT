@@ -110,6 +110,23 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     return critique, rounds
 
 
+def material_report(desc: dict) -> dict:
+    """The per-part material lines for a build report (v1.11, M2):
+    {part_id: {breadcrumb, nodes}} for every part with an object
+    material. Empty when the description has none."""
+    from . import materials as materials_mod
+
+    out = {}
+    for part in desc.get("parts", []):
+        material = part.get("material")
+        if isinstance(material, dict):
+            out[part["id"]] = {
+                "breadcrumb": materials_mod.breadcrumb(material),
+                "nodes": materials_mod.node_count(material),
+            }
+    return out
+
+
 def build_job(job: Job, workspace: Path, seats_path=None,
               cancel=None, progress=None) -> dict:
     """Run one approved job through the loop.
@@ -245,6 +262,9 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         "machine_checks": report_checks,
         "critique": critique,
     }
+    materials = material_report(desc)
+    if materials:
+        report["materials"] = materials
     if gate is not None:
         report["game_ready"] = gate
     if vision_rounds:

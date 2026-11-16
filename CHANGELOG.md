@@ -1,5 +1,38 @@
 # SKULLPT — Changelog
 
+## v1.11 - 2026-11-16 - The material system, phase 1 (M1-M6)
+
+The PolyOrganic-inspired material system, first phase: object-form
+materials, a parametric wood recipe, the Material Dial, presets,
+and the eyedropper. Nothing of PolyOrganic itself is used - it is
+a closed $29 add-on with no repo; the ideas are implemented from
+scratch here, and the wood recipe's structure follows the MIT
+video-to-blender NK Wood Grain group (attributed in the README).
+
+- M1: material-spec object form in descriptions {family, style,
+  layout, params, wear}, closed vocabularies in validation, the
+  string form untouched, breadcrumbs in the summary.
+- M2: parametric node-tree builder on Blender's standard nodes
+  (Principled BSDF + ring/fibre/blotch/bump chains); node counts
+  predicted host-side, measured in the build, listed in the build
+  report; under 25 nodes per material (17 base, 23 worst case).
+- M3: the Material Dial widget (Render window / part editor):
+  9 pages, draggable, minimise-to-bar, Simple vs Advanced, search,
+  Surprise (seed recorded), Save; live base-colour recolour plus
+  a Blender preview render on knob release, cached by spec hash,
+  never blocking the UI thread. The dial's idle centre hint now
+  wraps instead of clipping at both edges (verification catch,
+  pixel regression test in test_v21).
+- M4: wood family (oak, white oak, walnut, maple, cherry,
+  weathered) + Solid/Boards layouts; pattern sizes in centimetres
+  (a floor board is 12 cm wide); grain along the longest axis.
+- M5: saved presets in materials.json in the workspace (backed up
+  with it), Surprise, breadcrumb, the empty state.
+- M6: eyedropper copy between parts (Ctrl+click) - a snapshot,
+  not a link.
+- Wear values validate and save but do not render yet (M9, v1.12);
+  the dial has no Life page until they do.
+
 ## v1.10 - 2026-11-16 - The P2 audit fixes (N22-N50, N52-N54)
 
 The P2 findings from the 2026-11-15 audit, all closed. The

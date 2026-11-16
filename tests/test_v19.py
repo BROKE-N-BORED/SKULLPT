@@ -564,9 +564,9 @@ class N15VisionNoteTests(unittest.TestCase):
 class N16VersionTests(unittest.TestCase):
     """N16: version strings come from __version__."""
 
-    def test_version_is_1_10(self):
+    def test_version_is_1_11(self):
         from skullpt import __version__
-        self.assertEqual(__version__, "1.10")
+        self.assertEqual(__version__, "1.11")
 
     def test_about_and_help_read_version(self):
         qtbench_text = (ROOT / "skullpt" / "qtbench.py").read_text()

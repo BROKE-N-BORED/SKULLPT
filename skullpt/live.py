@@ -237,7 +237,11 @@ Each part: {"id": lowercase_snake, "type": str, "shape": one of
 box|cylinder|sphere|extrude|lathe|tube, "position_cm": [x, y, base_z],
 "size_cm": [width, depth, height], "material": one of wood|dark_wood|maple|
 mahogany|cream|plastic_black|metal|black_metal|chrome|gold|brass|glass|
-leather|stone|paper}.
+leather|stone|paper, or a material object {"family": "wood",
+"style": one of oak|white_oak|walnut|maple|cherry|weathered,
+"layout": solid|boards, "params": {"seed": int, "knots": 0-1,
+"figure": 0-1}, "wear": {}} - the object form gives a real
+procedural wood material instead of a flat colour}.
 All geometry is centimetres, z-up, ground plane at z=0. A part sitting on
 the floor has base_z equal to the floor's top. extrude parts also need
 "profile_cm": [[x, y], ...] outline points (>=3) inside the part's size.
@@ -431,7 +435,15 @@ def apply_patches(desc: dict, patches: list[dict]) -> list[str]:
                     and all(isinstance(v, (int, float)) for v in value)):
                 continue
         elif field == "material":
-            if not isinstance(value, str):
+            if isinstance(value, str):
+                pass
+            elif isinstance(value, dict):
+                # object-form material (v1.11, M1): only a valid
+                # spec patches through
+                from . import materials as materials_mod
+                if materials_mod.validate_material_spec(value):
+                    continue
+            else:
                 continue
         else:  # bevel_cm / radius_cm
             if not isinstance(value, (int, float)) or value < 0:

@@ -23,7 +23,8 @@ from .governor import stamp
 # Directories that hold the user's work, relative to the workspace.
 BACKED_UP_DIRS = ("jobs", "library", "images", "intake", "meshes")
 # Loose files at the workspace root that hold the user's work.
-BACKED_UP_FILES = ("settings.json", "chat.jsonl", "seats.json")
+BACKED_UP_FILES = ("settings.json", "chat.jsonl", "seats.json",
+                   "materials.json")
 # Never in a backup: the key files are secrets; the lock and caches
 # are machine state, not work.
 EXCLUDED_NAMES = {"hf_token.key", "gemini_key.key", "groq_key.key",

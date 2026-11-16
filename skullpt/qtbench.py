@@ -586,6 +586,8 @@ if QT_AVAILABLE:
 
         partSelected = QtCore.Signal(str)  # a click landed on a part
         partHovered = QtCore.Signal(str)  # "" when hovering empty space
+        partDoubleClicked = QtCore.Signal(str)  # a double-click on a part
+        partEyedropper = QtCore.Signal(str)  # a Ctrl+click on a part
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -602,6 +604,10 @@ if QT_AVAILABLE:
             self._gl: QOpenGLFunctions_2_1 | None = None
             self._selected_part: str | None = None
             self._hovered_part: str | None = None
+            # Live colour overrides (the dial's feedback, v1.11 M3):
+            # {part_id: (r, g, b)}; consulted at draw time, never
+            # written into the cached scene.
+            self._color_overrides: dict = {}
             self._press_pos: QtCore.QPoint | None = None
             self._last_pick_pos: QtCore.QPoint | None = None
             # Orbit camera: target + distance + azimuth/elevation (degrees).
@@ -625,6 +631,17 @@ if QT_AVAILABLE:
         @property
         def hovered_part(self) -> str | None:
             return self._hovered_part
+
+        def set_color_override(self, part_id: str,
+                               rgb: tuple[float, float, float] | None
+                               ) -> None:
+            """Temporarily recolour a part in the viewport (the
+            dial's live feedback, v1.11 M3). None clears it."""
+            if rgb is None:
+                self._color_overrides.pop(part_id, None)
+            else:
+                self._color_overrides[part_id] = rgb
+            self.update()
 
         def grid_step(self) -> float:
             """The grid spacing in cm - the legend's true step (span/10)."""
@@ -658,6 +675,7 @@ if QT_AVAILABLE:
             self._scene = (cached_scene_meshes(desc, mesh_dirs)
                            if desc else None)
             self._selected_part: str | None = None
+            self._color_overrides = {}
             self.frame()
             self.update()
 
@@ -823,7 +841,8 @@ if QT_AVAILABLE:
                 for mesh in meshes:
                     if mesh["glass"] != glass_pass:
                         continue
-                    r, g, b = mesh["color"]
+                    r, g, b = self._color_overrides.get(mesh["id"],
+                                                        mesh["color"])
                     if mesh["glow"]:
                         gl.glMaterialfv(0x0408, 0x1601, (r, g, b, 1.0))  # EMISSION
                     else:
@@ -907,13 +926,30 @@ if QT_AVAILABLE:
                 if moved < 4:  # a click, not a drag: pick the part
                     part = self.pick(int(event.position().x()),
                                      int(event.position().y()))
-                    self.set_selected_part(part)
-                    if part is not None:
-                        self.partSelected.emit(part)
+                    if (part is not None and event.modifiers()
+                            & QtCore.Qt.ControlModifier):
+                        # Ctrl+click: the eyedropper (v1.11, M6) -
+                        # copy this part's material, do not select it
+                        self.partEyedropper.emit(part)
+                    else:
+                        self.set_selected_part(part)
+                        if part is not None:
+                            self.partSelected.emit(part)
             self._drag_button = None
             self._drag_pos = None
             self._press_pos = None
             super().mouseReleaseEvent(event)
+
+        def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+            # Double-click: open the Material Dial for the part
+            # (v1.11, M3). A double-click also fires two press/release
+            # pairs, so the part is already selected by now.
+            if event.button() == QtCore.Qt.LeftButton:
+                part = self.pick(int(event.position().x()),
+                                 int(event.position().y()))
+                if part is not None:
+                    self.partDoubleClicked.emit(part)
+            super().mouseDoubleClickEvent(event)
 
         def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
             steps = event.angleDelta().y() / 120.0

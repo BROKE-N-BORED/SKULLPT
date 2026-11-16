@@ -1369,8 +1369,8 @@ class DesignDocTests(unittest.TestCase):
     def setUp(self):
         self.text = (ROOT / "DESIGN.md").read_text()
 
-    def test_header_names_v110(self):
-        self.assertIn("v1.10", self.text.splitlines()[0]
+    def test_header_names_v111(self):
+        self.assertIn("v1.11", self.text.splitlines()[0]
                       + "\n" + "\n".join(self.text.splitlines()[1:60]))
 
     def test_nine_windows(self):
@@ -1398,13 +1398,13 @@ class HelpTextTests(unittest.TestCase):
 
 
 class VersionTests(unittest.TestCase):
-    def test_version_is_110_everywhere(self):
+    def test_version_is_111_everywhere(self):
         from skullpt import __version__
 
-        self.assertEqual(__version__, "1.10")
-        self.assertIn("v1.10", (ROOT / "README.md").read_text())
-        self.assertIn("v1.10", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.10", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.11")
+        self.assertIn("v1.11", (ROOT / "README.md").read_text())
+        self.assertIn("v1.11", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.11", (ROOT / "DESIGN.md").read_text())
 
     def test_changelog_has_a_v110_section(self):
         text = (ROOT / "CHANGELOG.md").read_text()

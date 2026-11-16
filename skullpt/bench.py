@@ -553,6 +553,40 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
             detail += " - the description changed, so it needs approval again"
         return {"ok": True, "job": job.dir.name, "state": new_state,
                 "detail": detail}
+    if action == "copy-material":
+        # The eyedropper (v1.11, M6): copy one part's material onto
+        # another. A snapshot, not a link - editing the source later
+        # never changes the target. Goes through edit_part, so the
+        # snapshot + plan-gate rules apply.
+        job = _job(workspace, str(payload.get("job", "")))
+        desc = job.load_description()
+        by_id = {p["id"]: p for p in desc.get("parts", [])}
+        from_part = by_id.get(str(payload.get("from_part", "")))
+        to_part = by_id.get(str(payload.get("to_part", "")))
+        if from_part is None:
+            raise ValueError(f"no part {payload.get('from_part')!r}")
+        if to_part is None:
+            raise ValueError(f"no part {payload.get('to_part')!r}")
+        material = from_part.get("material")
+        if material is None:
+            raise ValueError(
+                f"part {from_part['id']} has no material to copy")
+        new_state = job.edit_part(
+            to_part["id"],
+            # A JSON round-trip deep-copies the material (a local
+            # named `copy` in this function shadows the copy module).
+            {"material": json.loads(json.dumps(material))})
+        if isinstance(material, dict):
+            from . import materials as materials_mod
+            label = materials_mod.breadcrumb(material)
+        else:
+            label = str(material)
+        detail = (f"copied {label} from {from_part['id']} "
+                  f"to {to_part['id']}")
+        if new_state == "awaiting_approval":
+            detail += " - the description changed, so it needs approval again"
+        return {"ok": True, "job": job.dir.name, "state": new_state,
+                "detail": detail}
     if action == "edit-character":
         job = _job(workspace, str(payload.get("job", "")))
         character = payload.get("character")
@@ -871,6 +905,7 @@ def build_report(workspace: Path, name: str) -> dict | None:
         return None
     total_tris = None
     per_part: dict = {}
+    measured_materials: dict = {}
     if job.output_dir.exists():
         for stats_path in sorted(job.output_dir.glob("*.stats.json")):
             try:
@@ -881,9 +916,13 @@ def build_report(workspace: Path, name: str) -> dict | None:
                 total_tris = stats["total_tris"]
             if isinstance(stats.get("parts"), dict):
                 per_part.update(stats["parts"])
+            if isinstance(stats.get("materials"), dict):
+                measured_materials.update(stats["materials"])
     report = dict(report)
     report["total_tris"] = total_tris
     report["tris_by_part"] = per_part
+    if measured_materials:
+        report["measured_materials"] = measured_materials
     return report
 
 

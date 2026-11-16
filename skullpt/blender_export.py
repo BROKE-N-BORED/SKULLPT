@@ -31,12 +31,15 @@ the mesh, the build uses the mesh itself.
 """
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
+
+from . import materials as materials_mod
 
 from .expand import expand_parts
 from .viewer import part_box, scene_data
@@ -92,6 +95,12 @@ MATERIALS = {
 def resolve_material(part: dict) -> tuple[str, float, float]:
     """(hex color, metallic, roughness) for a part."""
     name = part.get("material")
+    if isinstance(name, dict):
+        # object form (v1.11, M1/M2): the style's base colour and
+        # gloss-adjusted roughness; wood is never metallic
+        resolved = materials_mod.resolve_spec(name)
+        return (materials_mod.spec_base_color(name), 0.0,
+                resolved["roughness"])
     if isinstance(name, str) and name.startswith("#") and len(name) == 7:
         return name, 0.0, 0.8
     if isinstance(name, str) and name in MATERIALS:
@@ -112,7 +121,11 @@ TEXTURE_BY_MATERIAL = {
 
 
 def resolve_texture(part: dict) -> str | None:
-    """Procedural texture name for a part, or None for a flat material."""
+    """Procedural texture name for a part, or None for a flat material.
+    An object material owns its own recipe (v1.11, M2), so it never
+    takes the flat noise texture."""
+    if isinstance(part.get("material"), dict):
+        return None
     explicit = part.get("texture")
     if isinstance(explicit, str):
         return None if explicit == "none" else explicit
@@ -131,6 +144,32 @@ def find_blender() -> str | None:
         if Path(cand).exists():
             return cand
     return None
+
+
+def _grain_rotation(size_cm, flow: float) -> tuple[float, float, float]:
+    """The Mapping rotation that runs the wood grain along the part's
+    longest axis (v1.11, M2): the ring wave encircles texture Z, so
+    the coordinates are rotated to put the longest part axis on Z.
+    `flow` (0-1) blends the grain back toward the part's own Z axis.
+    Verified against real renders in the v1.11 test suite."""
+    x, y, z = (float(v) for v in size_cm)
+    blend = math.pi / 2.0 * (1.0 - flow)
+    if x >= y and x >= z:
+        return (0.0, blend, 0.0)
+    if y >= x and y >= z:
+        return (blend, 0.0, 0.0)
+    return (0.0, 0.0, 0.0)
+
+
+def _part_material_spec(src: dict, size_cm) -> dict | None:
+    """The resolved material spec for a part, or None for a string
+    material. Adds the grain rotation (which needs the part size)."""
+    material = src.get("material")
+    if not isinstance(material, dict):
+        return None
+    resolved = materials_mod.resolve_spec(material)
+    resolved["map_rot"] = _grain_rotation(size_cm, resolved["flow"])
+    return resolved
 
 
 def build_payload(desc: dict, out_dir: Path, slug: str) -> dict:
@@ -157,6 +196,7 @@ def build_payload(desc: dict, out_dir: Path, slug: str) -> dict:
             "color": color, "metallic": metallic, "roughness": roughness,
             "glass": src.get("material") == "glass",
             "glow": box["type"] in ("lamp", "light", "lantern"),
+            "material_spec": _part_material_spec(src, box["size"]),
         })
     cameras = [dict(c) for c in data["cameras"]]
     b = data["bounds"]
@@ -307,7 +347,73 @@ def probe_engine(exe: str, timeout: int = 60, cancel=None) -> str:
     return "CYCLES"
 
 
-_BUILD_TEMPLATE = r'''
+def preview_material_script(spec: dict, out_dir: Path, slug: str) -> str:
+    """A minimal Blender script: one sample slab with the material,
+    one camera, one sun, a 128x96 render. Pure function."""
+    desc = {
+        "name": "material preview", "kind": "scene",
+        "parts": [{"id": "preview_slab", "type": "prop", "shape": "box",
+                   "position_cm": [-30, -20, 0], "size_cm": [60, 40, 4],
+                   "material": spec}],
+        "cameras": [], "constraints": [], "rubric": [],
+        "budget": {"max_tris": 40000, "preview_px": 640},
+    }
+    payload = build_payload(desc, out_dir, slug)
+    return _PREVIEW_TEMPLATE.replace("__PAYLOAD__", repr(payload))
+
+
+def render_material_preview(spec: dict, workspace, exe=None,
+                            timeout: int = 180) -> Path:
+    """Render a 128x96 preview of a material spec, cached by spec
+    hash under the workspace (v1.11, M3). Returns the PNG path.
+    Raises RuntimeError with a plain message when Blender is
+    missing or the render does not land. The cache keeps the
+    newest 20 previews."""
+    from . import settings as settings_mod
+
+    ws = Path(workspace)
+    cache_dir = ws / materials_mod.PREVIEW_DIRNAME
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = materials_mod.spec_hash(spec)
+    png = cache_dir / f"{key}.png"
+    if png.exists():
+        return png
+    exe = exe or find_blender()
+    if not exe:
+        raise RuntimeError("Blender is not installed, so no preview "
+                           "can be rendered.")
+    existing = sorted(cache_dir.glob("*.png"),
+                      key=lambda p: p.stat().st_mtime)
+    while len(existing) >= materials_mod.PREVIEW_CACHE_LIMIT:
+        existing.pop(0).unlink(missing_ok=True)
+    # The remembered engine avoids a probe run per preview; a
+    # machine that has never built probes once, like a build does.
+    remembered = settings_mod.last_render_engine(ws).get("engine")
+    engine = (remembered if remembered in ("BLENDER_EEVEE_NEXT",
+                                           "CYCLES")
+              else probe_engine(exe))
+    with tempfile.TemporaryDirectory(prefix="skullpt-preview-") as tmp:
+        tmp_path = Path(tmp)
+        script_path = tmp_path / "preview.py"
+        script_path.write_text(preview_material_script(spec, tmp_path,
+                                                       key))
+        env = dict(os.environ, DS_ENGINE=engine)
+        try:
+            subprocess.run(
+                [exe, "--background", "--factory-startup", "--python",
+                 str(script_path)], env=env, capture_output=True,
+                text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("the preview render timed out")
+        rendered = tmp_path / f"{key}.png"
+        if not rendered.exists():
+            raise RuntimeError("Blender ran but the preview did not "
+                               "render")
+        shutil.copyfile(rendered, png)
+    return png
+
+
+_BUILD_TEMPLATE_HEAD = r'''
 import bpy, math, os, json
 from mathutils import Vector
 
@@ -326,7 +432,11 @@ bg = world.node_tree.nodes["Background"]
 sr, sg, sb = (max(0.0, min(1.0, float(c))) for c in __SURFACE__)
 bg.inputs[0].default_value = (sr, sg, sb, 1.0)
 bg.inputs[1].default_value = 0.6
+'''
 
+# The material section, shared by the build script and the preview
+# script (v1.11, M2/M3): one source of truth for make_material.
+_MATERIAL_TEMPLATE = r'''
 def _shade(hex_color, k):
     r = int(hex_color[1:3], 16) / 255.0 * k
     g = int(hex_color[3:5], 16) / 255.0 * k
@@ -345,6 +455,144 @@ def make_material(part):
     bsdf.inputs["Base Color"].default_value = (r, g, b, 1.0)
     bsdf.inputs["Roughness"].default_value = part["roughness"]
     bsdf.inputs["Metallic"].default_value = part["metallic"]
+    mspec = part.get("material_spec")
+    if mspec:
+        # Parametric wood recipe (v1.11, M2): saw-profile ring wave,
+        # stretched noise fibres, a soft blotch, bump from fibre +
+        # ring. The structure follows the NK Wood Grain group in
+        # video-to-blender (MIT); the nodes are wired here in plain
+        # bpy. Node counts are predicted host-side (materials.py)
+        # and the measured count is recorded in the stats.
+        links = nt.links
+        coord = nt.nodes.new("ShaderNodeTexCoord")
+        mapping = nt.nodes.new("ShaderNodeMapping")
+        mapping.inputs["Location"].default_value = tuple(mspec["seed_loc"])
+        mapping.inputs["Rotation"].default_value = tuple(mspec["map_rot"])
+        cs = mspec["coord_scale"]
+        mapping.inputs["Scale"].default_value = (cs, cs, cs)
+        links.new(coord.outputs["Object"], mapping.inputs["Vector"])
+        # Rings: a saw-profile wave around Z (the grain axis after
+        # the mapping rotation), cubed for a sharp latewood edge.
+        wave = nt.nodes.new("ShaderNodeTexWave")
+        wave.wave_type = "RINGS"
+        wave.rings_direction = "Z"
+        wave.wave_profile = "SAW"
+        wave.inputs["Scale"].default_value = mspec["ring_scale"]
+        wave.inputs["Distortion"].default_value = mspec["distort"]
+        links.new(mapping.outputs["Vector"], wave.inputs["Vector"])
+        ring_pow = nt.nodes.new("ShaderNodeMath")
+        ring_pow.operation = "POWER"
+        ring_pow.inputs[1].default_value = 3.0
+        links.new(wave.outputs["Fac"], ring_pow.inputs[0])
+        # Fibres: noise stretched along the grain axis.
+        stretch = nt.nodes.new("ShaderNodeVectorMath")
+        stretch.operation = "MULTIPLY"
+        stretch.inputs[1].default_value = (40.0, 40.0, 1.5)
+        links.new(mapping.outputs["Vector"], stretch.inputs[0])
+        fibre = nt.nodes.new("ShaderNodeTexNoise")
+        fibre.inputs["Scale"].default_value = 1.0
+        fibre.inputs["Detail"].default_value = 4.0
+        links.new(stretch.outputs["Vector"], fibre.inputs["Vector"])
+        # Blotch: large soft tone variation.
+        blotch = nt.nodes.new("ShaderNodeTexNoise")
+        blotch.inputs["Scale"].default_value = 2.0
+        blotch.inputs["Detail"].default_value = 3.0
+        links.new(mapping.outputs["Vector"], blotch.inputs["Vector"])
+        blotch_range = nt.nodes.new("ShaderNodeMapRange")
+        blotch_range.inputs["From Min"].default_value = 0.3
+        blotch_range.inputs["From Max"].default_value = 0.7
+        blotch_range.inputs["To Min"].default_value = 0.9
+        blotch_range.inputs["To Max"].default_value = 1.08
+        links.new(blotch.outputs["Fac"], blotch_range.inputs["Value"])
+        # Colour: mix light/dark by ring + fibre, toned by blotch.
+        ring_term = nt.nodes.new("ShaderNodeMath")
+        ring_term.operation = "MULTIPLY"
+        ring_term.inputs[1].default_value = 0.85
+        links.new(ring_pow.outputs["Value"], ring_term.inputs[0])
+        fibre_term = nt.nodes.new("ShaderNodeMath")
+        fibre_term.operation = "MULTIPLY"
+        fibre_term.inputs[1].default_value = mspec["fibre_k"]
+        links.new(fibre.outputs["Fac"], fibre_term.inputs[0])
+        tone_t = nt.nodes.new("ShaderNodeMath")
+        tone_t.operation = "ADD"
+        tone_t.use_clamp = True
+        links.new(ring_term.outputs["Value"], tone_t.inputs[0])
+        links.new(fibre_term.outputs["Value"], tone_t.inputs[1])
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        # The Mix node carries sockets for every data type, but
+        # Blender's name lookup returns the enabled (RGBA) sockets
+        # for the current data type - verified on Blender 4.5.9.
+        mix.inputs["A"].default_value = tuple(mspec["light"]) + (1.0,)
+        mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+        links.new(tone_t.outputs["Value"], mix.inputs["Factor"])
+        color_out = mix.outputs["Result"]
+        if mspec["knots"] > 0:
+            # Knots: a hard mask over high-frequency noise, mixed
+            # toward the dark colour. The knots value moves the
+            # ramp thresholds host-side (materials.resolve_spec).
+            knot_noise = nt.nodes.new("ShaderNodeTexNoise")
+            knot_noise.inputs["Scale"].default_value = mspec["knot_scale"]
+            knot_noise.inputs["Detail"].default_value = 3.0
+            links.new(mapping.outputs["Vector"], knot_noise.inputs["Vector"])
+            knot_ramp = nt.nodes.new("ShaderNodeValToRGB")
+            knot_ramp.color_ramp.interpolation = "CONSTANT"
+            knot_ramp.color_ramp.elements[0].position = mspec["knot_low"]
+            knot_ramp.color_ramp.elements[0].color = (0.0, 0.0, 0.0, 1.0)
+            knot_ramp.color_ramp.elements[1].position = mspec["knot_high"]
+            knot_ramp.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+            links.new(knot_noise.outputs["Fac"], knot_ramp.inputs["Fac"])
+            knot_mix = nt.nodes.new("ShaderNodeMix")
+            knot_mix.data_type = "RGBA"
+            knot_mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
+            links.new(color_out, knot_mix.inputs["A"])
+            links.new(knot_ramp.outputs["Color"], knot_mix.inputs["Factor"])
+            color_out = knot_mix.outputs["Result"]
+        tone = nt.nodes.new("ShaderNodeVectorMath")
+        tone.operation = "SCALE"
+        links.new(color_out, tone.inputs["Vector"])
+        links.new(blotch_range.outputs["Result"], tone.inputs["Scale"])
+        color_out = tone.outputs["Vector"]
+        if mspec["boards"]:
+            # Boards: the Brick node on board-scaled coordinates,
+            # staggered joints, tone variation per board plus
+            # darker mortar grooves in one multiply.
+            prescale = nt.nodes.new("ShaderNodeVectorMath")
+            prescale.operation = "MULTIPLY"
+            prescale.inputs[1].default_value = tuple(mspec["board_prescale"])
+            links.new(mapping.outputs["Vector"], prescale.inputs[0])
+            brick = nt.nodes.new("ShaderNodeTexBrick")
+            # The 4.0+ Brick node has no Offset/Frequency inputs
+            # (probed on Blender 4.5.9): Brick Width and Row Height
+            # size the cells directly, and rows stagger by half a
+            # brick on their own. In board units, one cell is one
+            # board: 120 cm long, 12 cm wide.
+            brick.inputs["Scale"].default_value = 1.0
+            brick.inputs["Brick Width"].default_value = 1.0
+            brick.inputs["Row Height"].default_value = 1.0
+            brick.inputs["Mortar Size"].default_value = 0.02
+            brick.inputs["Mortar Smooth"].default_value = 0.0
+            brick.inputs["Color1"].default_value = (1.0, 1.0, 1.0, 1.0)
+            brick.inputs["Color2"].default_value = (0.82, 0.82, 0.82, 1.0)
+            brick.inputs["Mortar"].default_value = (0.45, 0.45, 0.45, 1.0)
+            links.new(prescale.outputs["Vector"], brick.inputs["Vector"])
+            board_tone = nt.nodes.new("ShaderNodeVectorMath")
+            board_tone.operation = "MULTIPLY"
+            links.new(color_out, board_tone.inputs[0])
+            links.new(brick.outputs["Color"], board_tone.inputs[1])
+            color_out = board_tone.outputs["Vector"]
+        links.new(color_out, bsdf.inputs["Base Color"])
+        # Bump: fibre + ring as the height.
+        bump_add = nt.nodes.new("ShaderNodeMath")
+        bump_add.operation = "ADD"
+        links.new(fibre.outputs["Fac"], bump_add.inputs[0])
+        links.new(ring_pow.outputs["Value"], bump_add.inputs[1])
+        bump = nt.nodes.new("ShaderNodeBump")
+        bump.inputs["Strength"].default_value = mspec["bump"]
+        bump.inputs["Distance"].default_value = 0.005
+        links.new(bump_add.outputs["Value"], bump.inputs["Height"])
+        links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+        return mat
     texture = part.get("texture")
     if texture:
         # Procedural surface from noise, in object coordinates - no image
@@ -385,7 +633,9 @@ def make_material(part):
         bsdf.inputs["Emission Color"].default_value = (r, g, b, 1.0)
         bsdf.inputs["Emission Strength"].default_value = 2.0
     return mat
+'''
 
+_BUILD_TEMPLATE_TAIL = r'''
 def look_at(obj, point):
     direction = Vector(point) - obj.location
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
@@ -478,6 +728,8 @@ def build_tube(part):
             faces.append((a, b, c, d2))
     return _finish_mesh(part, verts, faces, uvs)
 
+MAT_STATS = {}
+
 for part in D["parts"]:
     # A job that carries a real mesh does not rebuild the mesh's
     # stand-in boxes (T21/T30): the mesh itself is imported below and
@@ -525,7 +777,15 @@ for part in D["parts"]:
             bevel.width = float(part["bevel"]) / 100.0
             bevel.segments = 3
     obj.name = part["id"]
-    obj.data.materials.append(make_material(part))
+    mat = make_material(part)
+    obj.data.materials.append(mat)
+    if part.get("material_spec"):
+        # Measured node counts (v1.11, M2): predicted host-side,
+        # recorded here so the build report can prove they match.
+        MAT_STATS[part["id"]] = {
+            "breadcrumb": part["material_spec"]["breadcrumb"],
+            "nodes": len(mat.node_tree.nodes),
+        }
     if part["glow"]:
         bpy.ops.object.light_add(type="POINT", location=(mn[0] + sz[0] / 2, mn[1] + sz[1] / 2, mn[2] + sz[2] + 0.15))
         lamp = bpy.context.active_object
@@ -581,7 +841,7 @@ sun.rotation_euler = (math.radians(50), math.radians(10), math.radians(-35))
 # the saved .blend and renders them, so an engine fallback re-runs
 # renders only (P3).
 dg = bpy.context.evaluated_depsgraph_get()
-stats = {"parts": {}, "total_tris": 0}
+stats = {"parts": {}, "total_tris": 0, "materials": MAT_STATS}
 for o in scene.objects:
     if o.type != "MESH":
         continue
@@ -680,6 +940,70 @@ bpy.ops.wm.save_as_mainfile(filepath=blend_path)
 print("DS_BLEND", blend_path)
 print("DS_DONE")
 '''
+
+_BUILD_TEMPLATE = (_BUILD_TEMPLATE_HEAD + _MATERIAL_TEMPLATE
+                   + _BUILD_TEMPLATE_TAIL)
+
+
+# The material preview (v1.11, M3): one cube with the material, one
+# camera, one sun, a 128x96 render. Shares _MATERIAL_TEMPLATE with
+# the build script, so the preview is the same recipe the build
+# uses - not a second implementation that can drift.
+_PREVIEW_TEMPLATE_HEAD = r'''
+import bpy, math, os
+from mathutils import Vector
+
+D = __PAYLOAD__
+OUT = D["out"]
+os.makedirs(OUT, exist_ok=True)
+
+bpy.ops.wm.read_factory_settings(use_empty=True)
+scene = bpy.context.scene
+
+world = bpy.data.worlds.new("DSPreviewWorld")
+scene.world = world
+world.use_nodes = True
+bg = world.node_tree.nodes["Background"]
+bg.inputs[0].default_value = (0.09, 0.09, 0.1, 1.0)
+bg.inputs[1].default_value = 0.8
+'''
+
+_PREVIEW_TEMPLATE_TAIL = r'''
+part = D["parts"][0]
+# A flat sample slab, not a cube: 60 x 40 cm shows several 12 cm
+# board rows on the top face, where a 20 cm cube shows none.
+bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0.02))
+obj = bpy.context.active_object
+obj.dimensions = (0.6, 0.4, 0.04)
+bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+obj.data.materials.append(make_material(part))
+
+sun_data = bpy.data.lights.new("Sun", "SUN")
+sun_data.energy = 3.0
+sun = bpy.data.objects.new("Sun", sun_data)
+scene.collection.objects.link(sun)
+sun.rotation_euler = (math.radians(50), math.radians(10), math.radians(-35))
+
+cam_data = bpy.data.cameras.new("Preview")
+cam_obj = bpy.data.objects.new("Preview", cam_data)
+scene.collection.objects.link(cam_obj)
+cam_obj.location = (0.35, -0.45, 0.42)
+scene.camera = cam_obj
+direction = Vector((0, 0, 0.02)) - cam_obj.location
+cam_obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+
+scene.render.engine = os.environ.get("DS_ENGINE", "BLENDER_EEVEE_NEXT")
+if scene.render.engine == "CYCLES":
+    scene.cycles.samples = 16
+scene.render.resolution_x = 128
+scene.render.resolution_y = 96
+scene.render.filepath = os.path.join(OUT, D["slug"] + ".png")
+bpy.ops.render.render(write_still=True)
+print("DS_PREVIEW_OK", scene.render.filepath)
+'''
+
+_PREVIEW_TEMPLATE = (_PREVIEW_TEMPLATE_HEAD + _MATERIAL_TEMPLATE
+                     + _PREVIEW_TEMPLATE_TAIL)
 
 
 # The render phase (P3): opens the .blend the build script saved and
