@@ -267,16 +267,23 @@ def _tube_tris(path, radius: float, segments: int = 10) -> list:
     return tris
 
 
-def mesh_for_box(box: dict, src: dict) -> dict:
+def mesh_for_box(box: dict, src: dict, node_tris=None) -> dict:
     """Triangles + color for one normalized scene box.
 
     Normals are precomputed here, once, and stored with the triangles
     (v1.5, P1) - the viewport used to recompute every normal on every
     frame, so every orbit drag re-did all of them.
+
+    `node_tris` (v1.10, N52) is the part's real mesh geometry from
+    its GLB: when given, the part draws its true shape instead of
+    the box the shape field describes. Bounds still come from the
+    drawn triangles, so picking and framing follow the real shape.
     """
     mn, sz = box["min"], box["size"]
     shape = box.get("shape", "box")
-    if shape == "cylinder":
+    if node_tris:
+        tris = [tuple(tuple(v) for v in tri) for tri in node_tris]
+    elif shape == "cylinder":
         tris = _cylinder_tris(mn, sz)
     elif shape == "sphere":
         tris = _sphere_tris(mn, sz)
@@ -370,12 +377,72 @@ def _union_bounds(a: dict, b: dict) -> dict:
     return {"min": lo, "max": hi, "center": center, "span": float(span)}
 
 
-def scene_meshes(desc: dict) -> dict:
-    """Everything the viewport needs: meshes, bounds, cameras."""
+def _resolve_mesh_file(desc: dict, mesh_dirs) -> Path | None:
+    """The description's mesh file, resolved against the given
+    folders in order (v1.10, N52) - the job folder first, then the
+    workspace. Only a GLB is drawable, so anything else returns
+    None. An absolute mesh path just works (pathlib: an absolute
+    right operand wins)."""
+    if not mesh_dirs:
+        return None
+    mesh = desc.get("mesh") or {}
+    rel = mesh.get("file")
+    if not rel or not str(rel).lower().endswith(".glb"):
+        return None
+    for base in mesh_dirs:
+        candidate = Path(base) / rel
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_node_tris(desc: dict, mesh_dirs):
+    """The GLB node triangles for a description, or None when there
+    is no GLB to read (no mesh block, not a .glb, file not found,
+    unreadable). Never raises: the viewport falls back to boxes."""
+    path = _resolve_mesh_file(desc, mesh_dirs)
+    if path is None:
+        return None
+    try:
+        from .ingest import glb_node_triangles
+
+        return glb_node_triangles(path)
+    except Exception:
+        return None
+
+
+def _mesh_stamp(desc: dict, mesh_dirs) -> str | None:
+    """The mesh file's mtime + size, so the scene cache (below)
+    notices a re-exported GLB the description never mentions."""
+    path = _resolve_mesh_file(desc, mesh_dirs)
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def scene_meshes(desc: dict, mesh_dirs=None) -> dict:
+    """Everything the viewport needs: meshes, bounds, cameras.
+    mesh_dirs (v1.10, N52) are folders searched, in order, for the
+    description's mesh file: when the file is a GLB, an imported
+    part draws its real node geometry instead of its box. A part
+    whose node is missing, or a mesh that cannot be read, still
+    draws its box."""
     data = scene_data(desc)
     src_by_id = {p["id"]: p for p in expand_parts(desc)}
-    meshes = [mesh_for_box(box, src_by_id.get(box["id"], {}))
-              for box in data["boxes"]]
+    node_tris = _load_node_tris(desc, mesh_dirs)
+    meshes = []
+    for box in data["boxes"]:
+        src = src_by_id.get(box["id"], {})
+        tris = None
+        if node_tris is not None:
+            node = (src.get("mesh") or {}).get("node")
+            if isinstance(node, int):
+                tris = node_tris.get(node)
+        meshes.append(mesh_for_box(box, src, tris))
     bounds = data["bounds"]
     character = desc.get("character")
     if desc.get("kind") == "character" and isinstance(character, dict):
@@ -417,12 +484,17 @@ def _desc_key(desc: dict) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-def cached_scene_meshes(desc: dict) -> dict:
-    """scene_meshes, cached by description content."""
+def cached_scene_meshes(desc: dict, mesh_dirs=None) -> dict:
+    """scene_meshes, cached by description content. The key also
+    carries the mesh file's stamp (v1.10, N52), so a re-exported
+    GLB rebuilds the scene even when the description is unchanged."""
     key = _desc_key(desc)
+    stamp = _mesh_stamp(desc, mesh_dirs)
+    if stamp is not None:
+        key += ":" + stamp
     scene = _MESH_CACHE.get(key)
     if scene is None:
-        scene = scene_meshes(desc)
+        scene = scene_meshes(desc, mesh_dirs)
         if len(_MESH_CACHE) >= _MESH_CACHE_MAX:
             _MESH_CACHE.pop(next(iter(_MESH_CACHE)))
         _MESH_CACHE[key] = scene
@@ -582,8 +654,9 @@ if QT_AVAILABLE:
                              self.camera_position(), direction)
 
         # -- scene ------------------------------------------------------
-        def set_scene(self, desc: dict | None) -> None:
-            self._scene = cached_scene_meshes(desc) if desc else None
+        def set_scene(self, desc: dict | None, mesh_dirs=None) -> None:
+            self._scene = (cached_scene_meshes(desc, mesh_dirs)
+                           if desc else None)
             self._selected_part: str | None = None
             self.frame()
             self.update()
@@ -1570,21 +1643,25 @@ if QT_AVAILABLE:
             self._log("Bench", f"Workspace: {new_ws}")
 
         def _backup_workspace(self) -> None:
-            from .qtwindows import Toast
-
             default = str(self.workspace.parent
                           / f"{self.workspace.name}-backup.zip")
             dest, _ = QtWidgets.QFileDialog.getSaveFileName(
                 self, "Back up workspace", default, "Zip files (*.zip)")
             if not dest:
                 return
-            try:
-                result = bench_mod.act(self.workspace, "backup",
-                                       {"dest": dest})
-            except Exception as exc:
-                QtWidgets.QMessageBox.warning(self, "Backup failed", str(exc))
-                return
-            Toast.show_toast(self, result["detail"])
+            # The zip runs in the background (v1.10, N33): a big
+            # workspace takes a while, and the window must not freeze.
+            # The run poller reports it when it lands, like any run.
+            def do_backup(cancel, report):
+                report(None, "Backing up the workspace")
+                return bench_mod.act(self.workspace, "backup",
+                                     {"dest": dest})
+
+            run_id = bench_mod._start_run("backup", "workspace backup",
+                                          do_backup)
+            self._pending_runs[run_id] = "backup"
+            self._log("Bench", "Backing up the workspace - running in the "
+                               "background.")
 
         def _check_for_updates(self) -> None:
             """Ask GitHub whether a newer SKULLPT is out. The check is
@@ -1711,7 +1788,8 @@ if QT_AVAILABLE:
             def do_plan(cancel, report):
                 report(None, "Drafting - asking the planner seat")
                 return bench_mod.act(self.workspace, "plan",
-                                     {"words": words, "kind": "scene"})
+                                     {"words": words, "kind": "scene"},
+                                     cancel=cancel)
 
             run_id = bench_mod._start_run("plan", words[:40], do_plan)
             self._pending_runs[run_id] = f"draft {words[:40]}"
@@ -1755,7 +1833,8 @@ if QT_AVAILABLE:
                 with self._chat_lock:
                     history = bench_mod.chat_history(self.workspace)
                     result = bench_mod.chat_reply(self.workspace, text,
-                                                  selected=selected)
+                                                  selected=selected,
+                                                  cancel=cancel)
                     history.append({"role": "bot", "text": result["reply"],
                                     "actions": result.get("actions", [])})
                     del history[:-60]
@@ -1766,9 +1845,12 @@ if QT_AVAILABLE:
             self._pending_runs[run_id] = f"chat {text[:40]}"
 
         def _mesh_from_photo(self) -> None:
+            # Only what validate_photo accepts (v1.10, N38): offering
+            # .webp or .bmp here would pick a file the mesh step then
+            # refuses.
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self, "Pick a photo to mesh", "",
-                "Photos (*.png *.jpg *.jpeg *.webp *.bmp)")
+                "Photos (*.png *.jpg *.jpeg *.gif)")
             if not path:
                 return
             self._do_action("cloud-mesh", {"photo": path})
@@ -1860,6 +1942,9 @@ if QT_AVAILABLE:
         if workspace is None:
             workspace = default_workspace()
         workspace = Path(workspace)
+        from . import applog
+
+        applog.setup(workspace)
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
         app = QtWidgets.QApplication([])
         app.setApplicationName("SKULLPT Bench")

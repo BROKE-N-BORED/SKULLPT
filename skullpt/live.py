@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 
@@ -34,20 +35,52 @@ class SeatCallFailed(RuntimeError):
     pass
 
 
-def _post(url: str, payload: dict, headers: dict | None = None, timeout: int = 180) -> dict:
+class SeatCancelled(RuntimeError):
+    """A seat call stopped because the user cancelled it.
+
+    Deliberately NOT a SeatCallFailed subclass: the fallback logic
+    catches SeatCallFailed, and a cancellation must never be treated
+    as a failure to fall back from (v1.10, N50)."""
+
+
+def _post(url: str, payload: dict, headers: dict | None = None, timeout: int = 180,
+          cancel=None) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        body = exc.read()[:400] if hasattr(exc, "read") else b""
-        raise SeatCallFailed(f"provider returned HTTP {exc.code}: {body!r}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise SeatCallFailed(f"provider unreachable: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise SeatCallFailed(f"provider returned non-JSON: {exc}") from exc
+    # urlopen cannot be cancelled from another thread, so the call
+    # runs in a daemon thread and the caller polls the cancel event
+    # in short slices; a set event abandons the thread (it dies on
+    # its own when the socket times out) and raises SeatCancelled.
+    # The error mapping is unchanged - it just happens in the thread.
+    box: dict = {}
+
+    def _call() -> None:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                box["data"] = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            body = exc.read()[:400] if hasattr(exc, "read") else b""
+            box["error"] = SeatCallFailed(
+                f"provider returned HTTP {exc.code}: {body!r}")
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            box["error"] = SeatCallFailed(f"provider unreachable: {exc}")
+        except json.JSONDecodeError as exc:
+            box["error"] = SeatCallFailed(f"provider returned non-JSON: {exc}")
+        except Exception as exc:  # noqa: BLE001 - re-raised on the caller thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=_call, daemon=True)
+    worker.start()
+    while worker.is_alive():
+        worker.join(0.1)
+        if cancel is not None and cancel.is_set():
+            raise SeatCancelled("the seat call was cancelled")
+    if "error" in box:
+        raise box["error"]
+    if "data" not in box:
+        raise SeatCallFailed("provider call ended without a result")
+    return box["data"]
 
 
 def _key_for(seat: dict, workspace=None) -> str:
@@ -81,7 +114,7 @@ def key_available(seat: dict, workspace=None) -> bool:
 
 def gemini_text(seat: dict, prompt: str, image_png: bytes | None = None,
                 extra_images: list[bytes] | None = None,
-                workspace=None) -> str:
+                workspace=None, cancel=None) -> str:
     key = _key_for(seat, workspace)
     override = os.environ.get("DESIGNSHELL_GEMINI_URL")
     if override:
@@ -93,7 +126,7 @@ def gemini_text(seat: dict, prompt: str, image_png: bytes | None = None,
     for image in ([image_png] if image_png is not None else []) + list(extra_images or []):
         parts.append({"inline_data": {"mime_type": "image/png",
                                       "data": base64.b64encode(image).decode()}})
-    data = _post(url, {"contents": [{"parts": parts}]})
+    data = _post(url, {"contents": [{"parts": parts}]}, cancel=cancel)
     try:
         out = []
         for cand in data.get("candidates", []):
@@ -108,14 +141,14 @@ def gemini_text(seat: dict, prompt: str, image_png: bytes | None = None,
     return text
 
 
-def groq_text(seat: dict, prompt: str, workspace=None) -> str:
+def groq_text(seat: dict, prompt: str, workspace=None, cancel=None) -> str:
     key = _key_for(seat, workspace)
     url = os.environ.get("DESIGNSHELL_GROQ_URL") or "https://api.groq.com/openai/v1/chat/completions"
     data = _post(url, {
         "model": seat.get("model", "gpt-oss-20b"),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
-    }, headers={"Authorization": f"Bearer {key}"})
+    }, headers={"Authorization": f"Bearer {key}"}, cancel=cancel)
     try:
         text = data["choices"][0]["message"]["content"].strip()
     except Exception as exc:
@@ -125,9 +158,10 @@ def groq_text(seat: dict, prompt: str, workspace=None) -> str:
     return text
 
 
-def ollama_text(seat: dict, prompt: str) -> str:
+def ollama_text(seat: dict, prompt: str, cancel=None) -> str:
     url = os.environ.get("DESIGNSHELL_OLLAMA_URL") or "http://127.0.0.1:11434/api/generate"
-    data = _post(url, {"model": seat.get("model", "qwen3:4b"), "prompt": prompt, "stream": False})
+    data = _post(url, {"model": seat.get("model", "qwen3:4b"), "prompt": prompt, "stream": False},
+                 cancel=cancel)
     text = str(data.get("response", "")).strip()
     if not text:
         raise SeatCallFailed("Ollama returned no text")
@@ -135,19 +169,19 @@ def ollama_text(seat: dict, prompt: str) -> str:
 
 
 def seat_text(seat: dict, prompt: str, image_png: bytes | None = None,
-              workspace=None) -> str:
+              workspace=None, cancel=None) -> str:
     provider = seat.get("provider")
     if provider == "gemini":
         return gemini_text(seat, prompt, image_png=image_png,
-                           workspace=workspace)
+                           workspace=workspace, cancel=cancel)
     if provider == "groq":
         if image_png is not None:
             raise SeatNotConfigured("the Groq seat is text-only here; vision belongs to the Gemini seat")
-        return groq_text(seat, prompt, workspace=workspace)
+        return groq_text(seat, prompt, workspace=workspace, cancel=cancel)
     if provider == "ollama":
         if image_png is not None:
             raise SeatNotConfigured("the Ollama fallback seat is text-only in this wiring")
-        return ollama_text(seat, prompt)
+        return ollama_text(seat, prompt, cancel=cancel)
     raise SeatNotConfigured(f"provider {provider!r} has no live wiring in the shell yet")
 
 
@@ -170,23 +204,24 @@ def last_plan_seat() -> dict:
 
 
 def text_with_fallback(seats: dict, prompt: str,
-                       workspace=None) -> tuple[str, str, str | None]:
+                       workspace=None, cancel=None) -> tuple[str, str, str | None]:
     """Ask the planner seat; if it cannot answer (no key, provider
     error, unreachable), ask the local fallback seat instead.
 
     Returns (text, role-used, primary-error-or-None). When both fail,
     the PRIMARY seat's error is raised - the user hears the real
-    reason, not the fallback's connection-refused noise."""
+    reason, not the fallback's connection-refused noise. A cancel
+    (SeatCancelled) is never a fallback trigger - it propagates."""
     primary_error: Exception | None = None
     try:
         return seat_text(seats.get("planner", {}), prompt,
-                         workspace=workspace), "planner", None
+                         workspace=workspace, cancel=cancel), "planner", None
     except (SeatNotConfigured, SeatCallFailed) as exc:
         primary_error = exc
     fallback_seat = seats.get("fallback", {})
     try:
         return seat_text(fallback_seat, prompt,
-                         workspace=workspace), "fallback", str(primary_error)
+                         workspace=workspace, cancel=cancel), "fallback", str(primary_error)
     except (SeatNotConfigured, SeatCallFailed):
         assert primary_error is not None
         raise primary_error
@@ -248,7 +283,7 @@ def _json_from_text(text: str) -> dict:
 
 
 def _repair_text(seats: dict, prompt: str,
-                 workspace=None) -> tuple[str, str, str | None]:
+                 workspace=None, cancel=None) -> tuple[str, str, str | None]:
     """Ask the repairer seat to fix a draft; if it cannot answer (no
     key, provider error), the planner repairs its own draft instead
     (via text_with_fallback, which itself falls back to Ollama).
@@ -256,15 +291,16 @@ def _repair_text(seats: dict, prompt: str,
     repairer_error: Exception | None = None
     try:
         return seat_text(seats.get("repairer", {}), prompt,
-                         workspace=workspace), "repairer", None
+                         workspace=workspace, cancel=cancel), "repairer", None
     except (SeatNotConfigured, SeatCallFailed) as exc:
         repairer_error = exc
-    text, role, _ = text_with_fallback(seats, prompt, workspace=workspace)
+    text, role, _ = text_with_fallback(seats, prompt, workspace=workspace,
+                                       cancel=cancel)
     return text, role, str(repairer_error)
 
 
 def plan_from_words(words: str, seats: dict, kind: str = "scene",
-                    workspace=None) -> dict:
+                    workspace=None, cancel=None) -> dict:
     """Draft a Description File from plain words via the planner seat.
 
     The draft still goes through the plan gate - this fills in the form,
@@ -284,6 +320,9 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene",
     A kind with no exporter (project - no studio yet) is refused
     before the seat is even asked (v1.9, N14): drafting something
     that cannot build wastes the call and files a dead job.
+
+    `cancel`, when given, is a threading.Event: a set event stops a
+    seat call in progress and raises SeatCancelled (v1.10, N50).
     """
     from . import exporters as exporters_mod
 
@@ -301,7 +340,7 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene",
         "into ONE Description File. Reply with ONLY the JSON object, no "
         "commentary.\n\n" + FORMAT_SPEC +
         f"\nKind: {kind}\nRequest: {words}\n")
-    raw, role = _plan_text(seats, prompt, workspace=workspace)
+    raw, role = _plan_text(seats, prompt, workspace=workspace, cancel=cancel)
     desc = _json_from_text(raw)
     desc.setdefault("kind", kind)
     problems = desc_mod.validate(desc)
@@ -316,7 +355,7 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene",
             "\n\nDraft:\n" + json.dumps(desc) + "\n")
         try:
             repaired_raw, repair_role, _ = _repair_text(
-                seats, repair_prompt, workspace=workspace)
+                seats, repair_prompt, workspace=workspace, cancel=cancel)
             repaired = _json_from_text(repaired_raw)
             repaired.setdefault("kind", kind)
             still = desc_mod.validate(repaired)
@@ -339,14 +378,14 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene",
 
 
 def _plan_text(seats: dict, prompt: str,
-               workspace=None) -> tuple[str, str]:
+               workspace=None, cancel=None) -> tuple[str, str]:
     """The planner call with fallback, recording which seat answered.
     The fallback only covers a seat that could not answer at all; a
     draft that parses to JSON but fails validation is repaired by
     plan_from_words (T22), not here."""
     try:
         text, role, primary_error = text_with_fallback(
-            seats, prompt, workspace=workspace)
+            seats, prompt, workspace=workspace, cancel=cancel)
     except (SeatNotConfigured, SeatCallFailed) as exc:
         _LAST_PLAN.update(seat=None, primary_error=str(exc))
         raise

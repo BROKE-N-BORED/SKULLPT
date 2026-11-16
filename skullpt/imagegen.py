@@ -202,8 +202,16 @@ def save_batch(batch_dir: str | Path, batch: dict) -> None:
 
 def new_batch(workspace: str | Path, prompt: str, job: str | None = None,
               count: int = DEFAULT_COUNT, size: int = DEFAULT_SIZE,
-              negative: str = DEFAULT_NEGATIVE) -> tuple[dict, Path]:
-    """Create the batch record; generation is a separate step."""
+              negative: str = DEFAULT_NEGATIVE,
+              width: int | None = None, height: int | None = None) -> tuple[dict, Path]:
+    """Create the batch record; generation is a separate step.
+
+    `width`/`height` (v1.10, N48) are the candidate dimensions; each
+    defaults to `size`, so old callers still get square batches."""
+    for label, value in (("width", width), ("height", height)):
+        if value is not None and (not isinstance(value, int)
+                                  or isinstance(value, bool) or value <= 0):
+            raise ImageGenError(f"image {label} must be a positive number of pixels, got {value!r}")
     slug = slugify(prompt) + "-" + time.strftime("%H%M%S")
     bdir = batch_path(workspace, slug)
     suffix = 1
@@ -218,6 +226,8 @@ def new_batch(workspace: str | Path, prompt: str, job: str | None = None,
         "job": job,
         "count_per_round": count,
         "size": size,
+        "width": width if width is not None else size,
+        "height": height if height is not None else size,
         "steps": LCM_STEPS,
         "created": governor.stamp(),
         "engine": None,
@@ -327,7 +337,11 @@ def generate(workspace: str | Path, batch_dir: str | Path,
     batch["engine"] = str(engine)
     batch["model"] = model.name
     n = count if count is not None else int(batch.get("count_per_round", DEFAULT_COUNT))
+    # Batches made before v1.10 carry only "size" - width/height fall
+    # back to it, so old batches still generate square.
     size = int(batch.get("size", DEFAULT_SIZE))
+    width = int(batch.get("width") or size)
+    height = int(batch.get("height") or size)
     rng = random.Random()
     lock = governor.HeavyJobLock(Path(workspace) / ".heavy.lock")
     if progress is not None:
@@ -345,7 +359,7 @@ def generate(workspace: str | Path, batch_dir: str | Path,
                    "-p", batch["prompt"], "-n", batch.get("negative", ""),
                    "--steps", str(LCM_STEPS), "--cfg-scale", str(LCM_CFG),
                    "--sampling-method", "lcm",
-                   "-W", str(size), "-H", str(size),
+                   "-W", str(width), "-H", str(height),
                    "-s", str(seed), "-o", str(out)] + flags
             record = {"file": fname, "seed": seed, "status": "pending"}
             try:
@@ -403,6 +417,8 @@ def vary(workspace: str | Path, batch_dir: str | Path, filename: str,
     new, new_dir = new_batch(workspace, prompt or batch["prompt"],
                              job=batch.get("job"), count=count,
                              size=int(batch.get("size", DEFAULT_SIZE)),
+                             width=batch.get("width"),
+                             height=batch.get("height"),
                              negative=batch.get("negative", DEFAULT_NEGATIVE))
     new["guidance"] = {"init_img": str(src), "strength": float(strength)}
     new["variation_of"] = {"batch": batch["slug"], "file": filename}

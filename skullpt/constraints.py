@@ -34,6 +34,28 @@ def _top_z(part: dict) -> float | None:
     return base + float(size[2])
 
 
+def _footprint(part: dict) -> tuple[float, float, float, float] | None:
+    """A part's ground footprint (min_x, min_y, max_x, max_y), or None
+    when the part has no position/size to measure."""
+    pos, size = part.get("position_cm"), part.get("size_cm")
+    if not pos or len(pos) != 3 or not size or len(size) != 3:
+        return None
+    return (float(pos[0]), float(pos[1]),
+            float(pos[0]) + float(size[0]), float(pos[1]) + float(size[1]))
+
+
+def _footprints_overlap(a: dict, b: dict) -> bool:
+    """True when two parts' footprints share real area (v1.10, N27):
+    more than TOL_CM of overlap on both axes, so merely touching at
+    an edge does not count as sitting on. A part with no footprint
+    to measure passes - the height check already ran."""
+    fa, fb = _footprint(a), _footprint(b)
+    if fa is None or fb is None:
+        return True
+    return (min(fa[2], fb[2]) - max(fa[0], fb[0]) > TOL_CM
+            and min(fa[3], fb[3]) - max(fa[1], fb[1]) > TOL_CM)
+
+
 def check_constraints(desc: dict) -> list[dict]:
     """Evaluate every constraint; return [{constraint, ok, detail}, ...]."""
     parts = _part_map(desc)
@@ -56,6 +78,9 @@ def check_constraints(desc: dict) -> list[dict]:
                 ok, detail = False, "missing position_cm/size_cm on part or support"
             elif abs(z - top) > TOL_CM:
                 ok, detail = False, f"base at {z} cm but support top is {top} cm"
+            elif not _footprints_overlap(part, support):
+                ok, detail = False, ("sits beside its support, not on it - "
+                                     "the footprints do not overlap")
         elif ctype == "text_fits":
             part = parts.get(con.get("part"), {})
             text = str(part.get("text", ""))

@@ -33,7 +33,15 @@ def load_seats(path: str | Path | None = None) -> dict:
     """Default seats, optionally overridden by a seats.json file."""
     seats = {role: dict(cfg) for role, cfg in DEFAULT_SEATS.items()}
     if path and Path(path).exists():
-        user = json.loads(Path(path).read_text(encoding="utf-8"))
+        try:
+            user = json.loads(Path(path).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            # A damaged seats file is a plain error, not a traceback
+            # (v1.10, N22): the user hears which file and what is
+            # wrong with it.
+            raise ValueError(
+                f"seats file {path} is damaged - it is not valid JSON "
+                f"({exc.msg}, line {exc.lineno})") from exc
         for role, cfg in user.items():
             if role in seats and isinstance(cfg, dict):
                 seats[role].update(cfg)

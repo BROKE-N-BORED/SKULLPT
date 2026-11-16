@@ -22,6 +22,13 @@ class CriticNotConfigured(RuntimeError):
     pass
 
 
+# Images judged per critique call (v1.10, N42): a many-camera build
+# can carry a dozen renders, and every one goes to the vision call as
+# base64 - past 8 the call is mostly token cost, not new information.
+# The judged/skipped lists in the report say which were looked at.
+MAX_IMAGES_PER_CRITIQUE = 8
+
+
 def _lum(hex_color: str) -> float | None:
     h = hex_color.lstrip("#")
     if len(h) != 6:
@@ -37,7 +44,10 @@ class OfflineCritic:
     name = "offline"
 
     def critique(self, desc: dict, previews: list[str],
-                 reference_png: bytes | None = None) -> dict:
+                 reference_png: bytes | None = None,
+                 cancel=None) -> dict:
+        # Instant (no provider call), so `cancel` is accepted and
+        # ignored - the builder calls both critics the same way.
         fixes: list[dict] = []
         style = desc.get("style") or {}
         text_lum, surf_lum = _lum(str(style.get("text", ""))), _lum(str(style.get("surface", "")))
@@ -65,7 +75,8 @@ class GeminiCritic:
         self.workspace = workspace
 
     def critique(self, desc: dict, previews: list[str],
-                 reference_png: bytes | None = None) -> dict:
+                 reference_png: bytes | None = None,
+                 cancel=None) -> dict:
         from pathlib import Path
 
         from . import live
@@ -85,6 +96,9 @@ class GeminiCritic:
         if not image_paths:
             raise CriticNotConfigured(
                 "Gemini critic needs a render PNG to look at - none was produced")
+        judged = [p.name for p in image_paths[:MAX_IMAGES_PER_CRITIQUE]]
+        skipped = [p.name for p in image_paths[MAX_IMAGES_PER_CRITIQUE:]]
+        image_paths = image_paths[:MAX_IMAGES_PER_CRITIQUE]
         count = len(image_paths)
         views = (f"{count} renders of the same build, from different "
                  "camera angles") if count > 1 else "one render"
@@ -113,7 +127,7 @@ class GeminiCritic:
                 + reply_spec)
             text = live.gemini_text(self.seat, prompt, image_png=reference_png,
                                     extra_images=render_bytes,
-                                    workspace=self.workspace)
+                                    workspace=self.workspace, cancel=cancel)
         else:
             prompt = (
                 "You are the vision critic of a design workshop. "
@@ -123,7 +137,7 @@ class GeminiCritic:
                 + reply_spec)
             text = live.gemini_text(self.seat, prompt, image_png=render_bytes[0],
                                     extra_images=render_bytes[1:],
-                                    workspace=self.workspace)
+                                    workspace=self.workspace, cancel=cancel)
         try:
             data = live._json_from_text(text)
         except live.SeatCallFailed as exc:
@@ -131,14 +145,18 @@ class GeminiCritic:
         fixes = data.get("fixes")
         if not isinstance(fixes, list):
             raise CriticNotConfigured("Gemini critique carried no fixes list")
-        judged = [p.name for p in image_paths]
+        note = ("live Gemini vision critique of "
+                + (f"{count} renders" if count > 1 else "the render")
+                + (" against the chosen reference"
+                   if reference_png is not None else ""))
+        if skipped:
+            note += (f" ({len(skipped)} more render(s) not judged - the "
+                     f"critic looks at {MAX_IMAGES_PER_CRITIQUE} at most)")
         return {"critic": self.name, "vision": True, "fixes": fixes,
                 "image": judged[0], "images": judged,
+                "skipped_images": skipped,
                 "reference_compared": reference_png is not None,
-                "note": ("live Gemini vision critique of "
-                         + (f"{count} renders" if count > 1 else "the render")
-                         + (" against the chosen reference"
-                            if reference_png is not None else ""))}
+                "note": note}
 
 
 def get_critic(seats: dict, prefer: str = "offline", workspace=None):

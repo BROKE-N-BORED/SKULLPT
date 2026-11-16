@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from . import bench as bench_mod
@@ -28,6 +29,7 @@ from .qtdesign import (AMBER, BODY, BONE, CANVAS, CANVAS_SOFT, HAIRLINE,
 
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
+    from shiboken6 import isValid as _qt_is_valid
 
     QT_AVAILABLE = True
 except Exception:  # PySide6 missing - the CLI reports it plainly
@@ -132,6 +134,13 @@ class _BackgroundCall(QtCore.QObject):
         except Exception as exc:  # noqa: BLE001 - the callback reports it
             result = exc
         self.finished.emit(result)
+
+
+class _ProgressEmitter(QtCore.QObject):
+    """A thread-safe progress line (v1.10, N35): emit from any thread,
+    the connected slot runs on the UI thread."""
+
+    line = QtCore.Signal(str)
 
 
 # ------------------------------------------------------------- stage pill (R6)
@@ -513,7 +522,10 @@ class RenderWindow(_GeometryWindow):
             self._legend.setText(f"Could not read this job: {exc}")
             self._tri_label.setText("Triangles: -")
             return
-        self._viewport.set_scene(self._desc)
+        # The viewport searches the job folder first, then the
+        # workspace, for the description's mesh file (v1.10, N52):
+        # an imported part draws its real geometry, not its box.
+        self._viewport.set_scene(self._desc, [job.dir, self._workspace])
         for part in expand_parts(self._desc):
             self._parts_list.addItem(part["id"])
         self._update_legend()
@@ -609,7 +621,9 @@ class RenderWindow(_GeometryWindow):
         from . import description as desc_mod
 
         desc_mod.dump(desc, job.desc_path)
-        self.set_job(self._job_name)
+        # Refresh the view without re-framing (v1.10, N37): set_job
+        # re-frames the camera, which would undo the saved view.
+        self.refresh()
         Toast.show_toast(self, f"Camera {name.strip()} saved.")
 
     def _on_part_hovered(self, part_id: str) -> None:
@@ -803,6 +817,7 @@ class CharacterWindow(_GeometryWindow):
         self._job_state: str | None = None
         self._mpfb_dir: str | None = None
         self._studio_ready = False
+        self._skins_available = False
         self._gate_action_name: str | None = None
         self.setWindowTitle("SKULLPT - Character Studio")
         self.setMinimumSize(560, 520)
@@ -919,19 +934,22 @@ class CharacterWindow(_GeometryWindow):
                 "Character Studio is missing its skins: MPFB2 is "
                 "installed, but the MakeHuman system assets pack was "
                 "not found with it. Use the Setup check to install "
-                "it, or re-run the SKULLPT installer.")
+                "it, or re-run the SKULLPT installer. You can still "
+                "shape and save the character; only the skin picker "
+                "is disabled until the skins arrive.")
         elif not status["installed"]:
             self._status_note.setText(
                 "Character Studio is not installed. Use the Setup "
                 "check to install MPFB2 and its skins (about 311 MB "
                 "to download), or re-run the SKULLPT installer. "
-                "You can still create a character job; it builds once "
-                "the studio is installed.")
+                "You can still create a character job and shape it; "
+                "it builds once the studio is installed.")
         else:
             self._status_note.setText(
                 "Shape the human, save, then approve and build the job. "
                 "The Render window shows a mannequin at the right "
                 "height and build until the real renders land.")
+        self._skins_available = bool(status["skins"])
         self._skin_combo.blockSignals(True)
         self._skin_combo.clear()
         for skin in status["skins"]:
@@ -998,16 +1016,25 @@ class CharacterWindow(_GeometryWindow):
         rig = character.get("rig", "game_engine")
         index = self._rig_combo.findData(rig)
         self._rig_combo.setCurrentIndex(max(0, index))
-        self._form_holder.setEnabled(self._studio_ready)
-        self._save_btn.setEnabled(self._studio_ready)
+        # The form and save are usable as soon as a job is loaded
+        # (v1.10, N36): shaping a character does not need the studio
+        # installed - only building does. Only the skin picker needs
+        # the installed skins.
+        self._form_holder.setEnabled(True)
+        self._save_btn.setEnabled(True)
+        self._skin_combo.setEnabled(self._skins_available)
         self._on_skin_changed()
 
     def _update_gate(self) -> None:
         text, action = _GATE_BUTTONS.get(self._job_state or "", ("Build", None))
         self._gate_btn.setText(text)
         self._gate_action_name = action
+        # Only the Build step needs the studio installed (v1.10, N36):
+        # approve, file, retry, and open all work before it.
+        needs_studio = action == "build"
         self._gate_btn.setEnabled(
-            bool(self._job_name and action and self._studio_ready))
+            bool(self._job_name and action)
+            and (self._studio_ready or not needs_studio))
 
     # -- events -----------------------------------------------------
     def _on_job_changed(self, _index: int) -> None:
@@ -1058,7 +1085,15 @@ class CharacterWindow(_GeometryWindow):
             return
         character = {key: slider.value() / 100.0
                      for key, slider in self._sliders.items()}
-        character["skin"] = self._skin_combo.currentData()
+        skin = self._skin_combo.currentData()
+        if not skin:
+            # No skins installed: keep the job's existing skin (or
+            # the default) instead of saving nothing (v1.10, N36).
+            from .blender_character import DEFAULT_SKIN
+
+            skin = (((self._desc or {}).get("character") or {}).get("skin")
+                    or DEFAULT_SKIN)
+        character["skin"] = skin
         character["rig"] = self._rig_combo.currentData()
         result = self._bench.do_action("edit-character", {
             "job": self._job_name, "character": character})
@@ -1258,7 +1293,7 @@ class ImagesWindow(_GeometryWindow):
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, "Could not decide", str(exc))
             return
-        Toast.show_toast(self, f"{filename} {decision}ed." if decision == "keep"
+        Toast.show_toast(self, f"{filename} kept." if decision == "keep"
                    else f"{filename} rejected and deleted.")
         self.refresh()
         self._bench.refresh()
@@ -1383,7 +1418,15 @@ class LibraryWindow(_GeometryWindow):
             QtWidgets.QMessageBox.warning(
                 self, "Could not open", f"No readable description: {exc}")
             return
-        job = Job.create(self._workspace / "jobs", desc)
+        try:
+            job = Job.create(self._workspace / "jobs", desc)
+        except Exception as exc:
+            # A description that no longer validates (or a job folder
+            # that cannot be made) is a plain message, not a crash
+            # (v1.10, N31).
+            QtWidgets.QMessageBox.warning(
+                self, "Could not open", f"Could not start a job from it: {exc}")
+            return
         self._bench.refresh()
         self._bench.select_job(job.dir.name)
         Toast.show_toast(self, f"Started {job.dir.name} from the library entry.")
@@ -1577,6 +1620,8 @@ class SettingsWindow(_GeometryWindow):
         self._key_statuses: dict[str, QtWidgets.QLabel] = {}
         self._key_save_buttons: dict[str, QtWidgets.QPushButton] = {}
         self._key_calls: dict[str, _BackgroundCall] = {}
+        self._token_call: _BackgroundCall | None = None
+        self._backup_call: _BackgroundCall | None = None
         self.setWindowTitle("SKULLPT - Settings")
         self.setMinimumSize(520, 420)
 
@@ -1671,7 +1716,8 @@ class SettingsWindow(_GeometryWindow):
         token_note = QtWidgets.QLabel(
             "The token turns photos into 3D meshes on Hugging Face's free "
             "GPU. It is saved in your workspace only, in a file the repo "
-            "never sees. SKULLPT never shows it back.")
+            "never sees. SKULLPT checks the token works before saving "
+            "it, and never shows it back.")
         token_note.setWordWrap(True)
         token_note.setObjectName("muted")
         main.addWidget(token_note)
@@ -1680,10 +1726,10 @@ class SettingsWindow(_GeometryWindow):
         self._token_field.setEchoMode(QtWidgets.QLineEdit.Password)
         self._token_field.setPlaceholderText("Paste your Hugging Face token")
         token_row.addWidget(self._token_field, 1)
-        save_btn = QtWidgets.QPushButton("Save token")
-        save_btn.setObjectName("primary")
-        save_btn.clicked.connect(self._save_token)
-        token_row.addWidget(save_btn)
+        self._token_save_btn = QtWidgets.QPushButton("Save token")
+        self._token_save_btn.setObjectName("primary")
+        self._token_save_btn.clicked.connect(self._save_token)
+        token_row.addWidget(self._token_save_btn)
         clear_btn = QtWidgets.QPushButton("Clear token")
         clear_btn.clicked.connect(self._clear_token)
         token_row.addWidget(clear_btn)
@@ -1704,7 +1750,7 @@ class SettingsWindow(_GeometryWindow):
             main, "groq", "Groq key",
             "The Groq key runs the repair seat, which fixes drafts "
             "that fail validation. Paste the key you already have. "
-            "it is saved in your workspace only, in a file the repo "
+            "It is saved in your workspace only, in a file the repo "
             "never sees. SKULLPT checks the key works before saving "
             "it, and never shows it back.",
             "Paste your Groq key",
@@ -1730,6 +1776,7 @@ class SettingsWindow(_GeometryWindow):
         backup_btn = QtWidgets.QPushButton("Back up workspace")
         backup_btn.clicked.connect(self._backup_workspace)
         main.addWidget(backup_btn)
+        self._backup_btn = backup_btn
         main.addStretch(1)
 
         restore_geometry(self, self.GEOMETRY_KEY)
@@ -1776,10 +1823,20 @@ class SettingsWindow(_GeometryWindow):
             self, "Back up workspace", default, "Zip files (*.zip)")
         if not dest:
             return
-        try:
-            result = backup_workspace(self._workspace, dest)
-        except Exception as exc:
-            QtWidgets.QMessageBox.warning(self, "Backup failed", str(exc))
+        # The zip runs off the UI thread (v1.10, N33): a big workspace
+        # takes a while, and the window must not freeze.
+        self._backup_btn.setEnabled(False)
+        call = _BackgroundCall(
+            lambda: backup_workspace(self._workspace, dest))
+        call.finished.connect(self._on_backup_done)
+        self._backup_call = call
+        call.start()
+
+    def _on_backup_done(self, result) -> None:
+        self._backup_call = None
+        self._backup_btn.setEnabled(True)
+        if isinstance(result, Exception):
+            QtWidgets.QMessageBox.warning(self, "Backup failed", str(result))
             return
         Toast.show_toast(self, result["note"])
 
@@ -1923,10 +1980,33 @@ class SettingsWindow(_GeometryWindow):
         settings_mod.save_settings(self._workspace, current)
 
     def _save_token(self) -> None:
+        """Validate the pasted token against Hugging Face, then save
+        it (v1.10, N32). The check runs off the UI thread (U30), the
+        same pattern as _save_key; a token that does not validate is
+        never saved."""
         token = self._token_field.text().strip()
         if not token:
             QtWidgets.QMessageBox.warning(
                 self, "No token", "Paste a token first.")
+            return
+        self._token_status.setText("Checking the token...")
+        self._token_save_btn.setEnabled(False)
+        call = _BackgroundCall(lambda: keycheck.validate_hf_token(token))
+        call.finished.connect(
+            lambda result: self._on_token_validated(token, result))
+        self._token_call = call
+        call.start()
+
+    def _on_token_validated(self, token: str, result) -> None:
+        self._token_save_btn.setEnabled(True)
+        self._token_call = None
+        if isinstance(result, Exception):
+            self._token_status.setText(
+                f"The check failed ({result}). The token was not saved.")
+            return
+        ok, message = result
+        if not ok:
+            self._token_status.setText(message)
             return
         tokenfile.save_token(self._workspace, token)
         self._token_field.clear()
@@ -1963,6 +2043,8 @@ class SetupWindow(_GeometryWindow):
         self._bench = bench
         self._workspace = Path(workspace)
         self._pull_call: _BackgroundCall | None = None
+        self._pull_progress: _ProgressEmitter | None = None
+        self._installer_call: _BackgroundCall | None = None
         self.setWindowTitle("SKULLPT - Setup check")
         self.setMinimumSize(560, 420)
 
@@ -2053,27 +2135,50 @@ class SetupWindow(_GeometryWindow):
         return frame
 
     def _run_installer(self, key: str) -> None:
-        """Launch the SKULLPT installer GUI. The installer only
-        downloads what is missing, so the full run is the fix for
-        any single engine."""
+        """Launch the SKULLPT installer GUI and report how it ended
+        (v1.10, N34): the wait runs off the UI thread, and a failed
+        installer is reported instead of claimed as running. Exit 3
+        is the installer's own "cancelled" code."""
         install_sh = Path(__file__).resolve().parent.parent / "install.sh"
         if not install_sh.exists():
             QtWidgets.QMessageBox.warning(
                 self, "Installer not found",
                 "The SKULLPT installer was not found next to this app.")
             return
-        try:
-            subprocess.Popen([str(install_sh), "--gui"],
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL,
-                             start_new_session=True)
-        except OSError as exc:
-            QtWidgets.QMessageBox.warning(
-                self, "Could not start the installer", str(exc))
-            return
+
+        def _run() -> int:
+            proc = subprocess.Popen([str(install_sh), "--gui"],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                    start_new_session=True)
+            return proc.wait()
+
+        call = _BackgroundCall(_run)
+        call.finished.connect(self._on_installer_done)
+        self._installer_call = call
+        call.start()
         Toast.show_toast(
             self, "Installer is running. It only downloads what is "
                   "missing.")
+
+    def _on_installer_done(self, result) -> None:
+        self._installer_call = None
+        if isinstance(result, Exception):
+            QtWidgets.QMessageBox.warning(
+                self, "Could not start the installer", str(result))
+            return
+        if result == 3:
+            Toast.show_toast(
+                self, "Install cancelled. Run the installer again to finish.")
+            return
+        if result != 0:
+            QtWidgets.QMessageBox.warning(
+                self, "Installer stopped",
+                f"The installer stopped before finishing (exit {result}). "
+                "Run it again from the Setup check.")
+            return
+        self.refresh()
+        Toast.show_toast(self, "Installer finished.")
 
     def _pull_model(self, button: QtWidgets.QPushButton) -> None:
         """Pull the local model with the Ollama CLI, off the UI
@@ -2082,16 +2187,35 @@ class SetupWindow(_GeometryWindow):
 
         button.setEnabled(False)
         button.setText("Pulling...")
-        call = _BackgroundCall(ollama_mod.pull_model)
+        # The pull's own progress lines drive the button (v1.10, N35):
+        # the emitter carries each line to the UI thread, throttled
+        # to one update per half second so the button does not flicker.
+        progress = _ProgressEmitter()
+        last = [0.0]
+
+        def _show(line: str) -> None:
+            if not _qt_is_valid(button):
+                return
+            now = time.monotonic()
+            if now - last[0] < 0.5:
+                return
+            last[0] = now
+            button.setText(line[:60] or "Pulling...")
+
+        progress.line.connect(_show)
+        call = _BackgroundCall(
+            lambda: ollama_mod.pull_model(on_progress=progress.line.emit))
         call.finished.connect(
             lambda result: self._on_pull_done(button, result))
         self._pull_call = call
+        self._pull_progress = progress
         call.start()
 
     def _on_pull_done(self, button: QtWidgets.QPushButton, result) -> None:
         from . import ollama as ollama_mod
 
         self._pull_call = None
+        self._pull_progress = None
         button.setEnabled(True)
         button.setText("Pull the model")
         if isinstance(result, Exception):
@@ -2176,8 +2300,8 @@ another is running, yours waits in the queue and starts when its turn
 comes. Queued builds can be cancelled from the status bar.</p>
 <h3>Unreal</h3>
 <p>A built job can be packaged for Unreal: open the job, press
-Unreal package, and pick a folder. The package has the .fbx, the
-textures, and an import script.</p>
+Unreal package, and pick a folder. The package has the .glb, the
+.blend, the description, an import script, and a README.</p>
 <h3>Blender</h3>
 <p>Building needs Blender 4.5.9 or newer installed. The renders
 and the game-ready model come from Blender; without it, SKULLPT can
@@ -2250,9 +2374,17 @@ class DebugReportDialog(QtWidgets.QDialog):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save debug report", "skullpt-debug-report.txt",
             "Text files (*.txt)")
-        if path:
+        if not path:
+            return
+        try:
             Path(path).write_text(self._text.toPlainText())
-            Toast.show_toast(self, "Debug report saved.")
+        except OSError as exc:
+            # A file that cannot be written (read-only folder, full
+            # disk) is a plain message, not a crash (v1.10, N31).
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save", f"The report could not be saved: {exc}")
+            return
+        Toast.show_toast(self, "Debug report saved.")
 
     def _copy(self) -> None:
         QtWidgets.QApplication.clipboard().setText(
@@ -2320,6 +2452,12 @@ def _format_build_report(workspace: Path, job_name: str) -> str:
         images = critique.get("images") or []
         if images:
             lines.append(f"  renders judged: {', '.join(images)}")
+        # The critic caps at 8 images (v1.10, N42): say which renders
+        # were left out, so the report never implies they were judged.
+        skipped = critique.get("skipped_images") or []
+        if skipped:
+            lines.append(f"  renders not judged ({len(skipped)}): "
+                         f"{', '.join(skipped)}")
         fixes = critique.get("fixes") or []
         if fixes:
             lines.append(f"  fixes ({len(fixes)}):")

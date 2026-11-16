@@ -9,8 +9,9 @@ planner (or Joshua) builds FROM the photo with the reference on record.
 Since v1.1 the first route is built in: `cloudmesh` sends the photo to
 the free TRELLIS.2 ZeroGPU space (a few production meshes a day on
 free quota) and files the textured GLB + its ingested description in
-a job. The local draft route (SF3D / TripoSR) still ends at a GLB that
-comes back in through `ingest`.
+a job. The other route builds from the photo as a reference: plan a
+description with the photo on record and let the Blender exporter
+build it.
 """
 from __future__ import annotations
 
@@ -29,21 +30,39 @@ def image_size(path: str | Path) -> tuple[int | None, int | None, str]:
         width, height = struct.unpack("<HH", data[6:10])
         return width, height, "gif"
     if data.startswith(b"\xff\xd8"):
-        i = 2
-        while i + 9 < len(data):
-            if data[i] != 0xFF:
-                i += 1
-                continue
-            marker = data[i + 1]
-            if marker in (0xC0, 0xC1, 0xC2):
-                height, width = struct.unpack(">HH", data[i + 5:i + 9])
-                return width, height, "jpeg"
-            if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
-                i += 2
-                continue
-            length = struct.unpack(">H", data[i + 2:i + 4])[0]
-            i += 2 + length
-        return None, None, "jpeg"
+        # JPEG: walk the marker segments, seeking past each one, until
+        # the SOF marker - a big EXIF block can push it past 64 KB
+        # (v1.10, N49), so the header slice above is not enough.
+        with Path(path).open("rb") as fh:
+            fh.seek(2)
+            while True:
+                prefix = fh.read(1)
+                if not prefix:
+                    return None, None, "jpeg"
+                if prefix != b"\xff":
+                    continue
+                marker = fh.read(1)
+                if not marker:
+                    return None, None, "jpeg"
+                m = marker[0]
+                if m in (0xC0, 0xC1, 0xC2):
+                    seg = fh.read(7)
+                    if len(seg) < 7:
+                        return None, None, "jpeg"
+                    height, width = struct.unpack(">HH", seg[3:7])
+                    return width, height, "jpeg"
+                if m == 0xDA:
+                    # Start of scan: no SOF before the image data.
+                    return None, None, "jpeg"
+                if m in (0xD8, 0xD9) or 0xD0 <= m <= 0xD7:
+                    continue
+                len_bytes = fh.read(2)
+                if len(len_bytes) < 2:
+                    return None, None, "jpeg"
+                length = struct.unpack(">H", len_bytes)[0]
+                if length < 2:
+                    return None, None, "jpeg"
+                fh.seek(length - 2, 1)
     return None, None, Path(path).suffix.lstrip(".").lower() or "unknown"
 
 
@@ -54,9 +73,7 @@ ROUTES = (
     "(free quota, a few textured GLBs a day; save your Hugging Face "
     "token in Settings first) and files the mesh + its description "
     "in a job.\n"
-    "  2. Local draft: SF3D or TripoSR on the PC (draft grade, offline) "
-    "-> GLB -> ingest <file.glb> <out.description.json>.\n"
-    "  3. Build from the photo as a reference: plan a description with "
+    "  2. Build from the photo as a reference: plan a description with "
     "the photo on record and let the Blender exporter build it."
 )
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import subprocess
 import time
@@ -82,24 +83,59 @@ def ollama_binary() -> str | None:
 
 
 def pull_model(model: str | None = None,
-               timeout: int = 3600) -> tuple[bool, str]:
+               timeout: int = 3600, on_progress=None) -> tuple[bool, str]:
     """Pull the model with the Ollama CLI (the server must be up).
     Long - run it in a background thread, never on the UI thread.
     Returns (ok, plain-language message). A failed pull is safe to
-    retry: the Ollama CLI resumes a partial download."""
+    retry: the Ollama CLI resumes a partial download. `on_progress`,
+    when given, is called with each output line as it arrives, so
+    the Setup window can show the pull moving (v1.10, N35)."""
     name = model or MODEL_NAME
     binary = ollama_binary()
     if binary is None:
         return False, "Ollama is not installed on this machine."
     try:
-        proc = subprocess.run([binary, "pull", name], capture_output=True,
-                              text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return False, f"Pulling {name} timed out - try again, it resumes."
+        proc = subprocess.Popen(
+            [binary, "pull", name],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except OSError as exc:
         return False, f"Could not run Ollama: {exc}"
+    # Stream the output instead of waiting for the process to end:
+    # Ollama prints progress lines as the download runs. The read
+    # loop is bounded by the deadline (select with a 1 s slice), so
+    # a silent stall still times out like the old subprocess.run.
+    deadline = time.monotonic() + timeout
+    buf = b""
+    tail = ""
+    assert proc.stdout is not None
+    while True:
+        if time.monotonic() > deadline:
+            proc.kill()
+            proc.wait()
+            return False, f"Pulling {name} timed out - try again, it resumes."
+        ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+        if not ready:
+            continue
+        chunk = os.read(proc.stdout.fileno(), 4096)
+        if not chunk:
+            break  # EOF: the process closed its stdout
+        # Ollama updates progress in place with carriage returns;
+        # treat them as line breaks so each update is a line.
+        buf += chunk.replace(b"\r", b"\n")
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            text = line.decode("utf-8", "replace").strip()
+            if text:
+                tail = text
+                if on_progress is not None:
+                    on_progress(text)
+    if buf.strip():
+        text = buf.decode("utf-8", "replace").strip()
+        tail = text
+        if on_progress is not None:
+            on_progress(text)
+    proc.wait()
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        detail = tail[-1] if tail else "no reason given"
+        detail = tail or "no reason given"
         return False, f"Pulling {name} failed: {detail}"
     return True, f"{name} is ready."

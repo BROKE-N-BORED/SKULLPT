@@ -407,7 +407,8 @@ class SnapshotTests(unittest.TestCase):
                 def __init__(self):
                     self.calls = 0
 
-                def critique(self, desc, previews, reference_png=None):
+                def critique(self, desc, previews, reference_png=None,
+                             cancel=None):
                     self.calls += 1
                     if self.calls == 1:
                         return {"vision": True, "note": "first look",

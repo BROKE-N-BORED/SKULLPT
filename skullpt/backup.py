@@ -6,10 +6,11 @@ manifest saying what is inside, when it was made, and which workspace
 it came from. Restoring is an unzip - the backup IS a workspace, so
 an unzipped backup opens as one.
 
-The HF token file is NEVER in a backup: it is a secret, and a backup
-is a file that gets copied around. The backup says so plainly in its
-manifest and in the result. The heavy-job lock and caches are
-excluded too (they are machine state, not work).
+The key files are NEVER in a backup: hf_token.key, gemini_key.key and
+groq_key.key are secrets, and a backup is a file that gets copied
+around. The backup says so plainly in its manifest and in the result,
+and the keys are re-saved in Settings after restoring. The heavy-job
+lock and caches are excluded too (they are machine state, not work).
 """
 from __future__ import annotations
 

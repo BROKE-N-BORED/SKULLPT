@@ -744,7 +744,10 @@ class QtCharacterWindowTests(_QtCase):
             opened = window._child_windows["character"]
         self._windows.append(opened)
         self.assertIn("not installed", opened._status_note.text())
-        self.assertFalse(opened._save_btn.isEnabled())
+        # v1.10, N36: the form and save work before the studio is
+        # installed - only the skin picker waits for the skins.
+        self.assertTrue(opened._save_btn.isEnabled())
+        self.assertFalse(opened._skin_combo.isEnabled())
 
     def test_set_job_ignores_a_scene_job(self):
         window = self._bench()

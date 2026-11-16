@@ -548,7 +548,7 @@ class N15VisionNoteTests(unittest.TestCase):
                               "rig": "game_engine"},
                 "summary": "a hero", "budget": {"meshes": 1},
                 "rubric": ["the character reads as a hero"],
-                "style": "realistic",
+                "style": {"surface": "#8a7a5a"},
                 "version": 1}
             job = Job.create(ws / "jobs", desc)
             with mock.patch.object(builder_mod, "get_critic",
@@ -564,9 +564,9 @@ class N15VisionNoteTests(unittest.TestCase):
 class N16VersionTests(unittest.TestCase):
     """N16: version strings come from __version__."""
 
-    def test_version_is_1_9(self):
+    def test_version_is_1_10(self):
         from skullpt import __version__
-        self.assertEqual(__version__, "1.9")
+        self.assertEqual(__version__, "1.10")
 
     def test_about_and_help_read_version(self):
         qtbench_text = (ROOT / "skullpt" / "qtbench.py").read_text()
@@ -837,7 +837,10 @@ class N11N12N55InstallerStaticTests(unittest.TestCase):
         calls = [line for line in INSTALL_SH.splitlines()
                  if "gui_fail " in line
                  and not line.lstrip().startswith("#")]
-        self.assertEqual(len(calls), 5, calls)
+        # 5 in v1.9; v1.10 (F48) adds 2 Blender ones - the new tree
+        # failing to run, and the swap failing after the old tree
+        # was moved aside.
+        self.assertEqual(len(calls), 7, calls)
         for line in calls:
             self.assertTrue("Python" in line or "Blender" in line, line)
 

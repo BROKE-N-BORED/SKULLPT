@@ -901,7 +901,7 @@ class QtSettingsTokenTests(_QtCase):
     """T9: the token field saves to the gitignored file and clears."""
 
     def test_token_save_and_clear(self):
-        from skullpt import qtwindows, tokenfile
+        from skullpt import keycheck, qtwindows, tokenfile
 
         class _BenchStub:
             def refresh(self):
@@ -913,11 +913,21 @@ class QtSettingsTokenTests(_QtCase):
         self._pump()
         self.assertIn("No token saved", window._token_status.text())
         window._token_field.setText("hf_faketoken123")
-        for button in window.findChildren(QtWidgets.QPushButton):
-            if button.text() == "Save token":
-                QtTest.QTest.mouseClick(button, QtCore.Qt.LeftButton)
-                break
-        self._pump()
+        # v1.10, N32: saving validates the token first, off the UI
+        # thread. The validation itself is covered by test_v20's
+        # mock-server tests; here it is stubbed valid so the test
+        # covers the save/clear flow.
+        with mock.patch.object(keycheck, "validate_hf_token",
+                               return_value=(True, "")):
+            for button in window.findChildren(QtWidgets.QPushButton):
+                if button.text() == "Save token":
+                    QtTest.QTest.mouseClick(button, QtCore.Qt.LeftButton)
+                    break
+            deadline = QtCore.QDeadlineTimer(5000)
+            while not tokenfile.has_token(self.ws):
+                if deadline.hasExpired():
+                    break
+                self._pump(50)
         self.assertTrue(tokenfile.has_token(self.ws))
         self.assertEqual(tokenfile.load_token(self.ws), "hf_faketoken123")
         self.assertIn("Token saved", window._token_status.text())

@@ -6,8 +6,9 @@ free Hugging Face Space instead of locally:
 
   Space: microsoft/TRELLIS.2 - Microsoft's official TRELLIS.2 demo,
   MIT licensed, running on Hugging Face ZeroGPU. Free quota is about
-  5 minutes of GPU a day on a free account (2 minutes with no
-  account); a mesh takes 3-8 minutes of wall time, most of it queue.
+  5 minutes of GPU a day on a free account; a mesh takes 3-8 minutes
+  of wall time, most of it queue. A token is required: the step
+  refuses plainly without one.
   The Space was verified live and its API shape read from its own
   /gradio_api/info on 2026-11-12 (see the endpoint table below).
 
@@ -55,12 +56,14 @@ Hardening (v1.6, T28): the upload is retried once on a transient
 failure, the GLB extract is retried twice, the queue position from
 the Space's SSE estimation events is reported as progress, and a
 photo PNG wider than 1024 px is shrunk before upload (the Space
-resizes to 512 server-side anyway). A fallback Space can be set with
-DESIGNSHELL_CLOUDMESH_FALLBACK_URL: when the primary Space cannot be
-reached at all (upload or background-removal stage), the whole flow
-runs once against the fallback instead. No fallback Space ships by
-default - every public TRELLIS.2 clone checked on 2026-11-14 was
-paused or in error, so a hardcoded clone would be a fake fallback.
+resizes to 512 server-side anyway). A fallback Space runs when the
+primary Space cannot be reached at all (upload or background-removal
+stage): the whole flow runs once against the fallback instead. The
+fallback is cpuai/TRELLIS-2, probed healthy on 2026-11-16 (RUNNING
+on ZeroGPU, all three endpoints present; 99 public clones probed,
+only two healthy - the other, zeptotenshi/TRELLIS.2, sleeps when
+idle, so it is the second choice, not the default). The fallback
+can be pointed elsewhere with DESIGNSHELL_CLOUDMESH_FALLBACK_URL.
 Quota errors never trigger the fallback: the ZeroGPU quota is
 per-account across all Spaces, so a second Space would not help.
 
@@ -95,11 +98,22 @@ from .jobs import Job
 SPACE_ID = "microsoft/TRELLIS.2"
 SPACE_URL = "https://microsoft-trellis-2.hf.space"
 
+# The fallback Space (v1.10, N54): cpuai/TRELLIS-2, probed healthy
+# on 2026-11-16 - RUNNING on ZeroGPU with all three endpoints the
+# shell calls, the same endpoint set as the primary. The 2026-11-14
+# probe found no healthy clone, so no fallback shipped then; the
+# 2026-11-16 re-probe (99 clones) found two, and this one was
+# already awake. Community clones pause or break without notice,
+# so the probe is worth repeating - zeptotenshi/TRELLIS.2 is the
+# documented second choice if this one fails.
+FALLBACK_SPACE_ID = "cpuai/TRELLIS-2"
+FALLBACK_SPACE_URL = "https://cpuai-trellis-2.hf.space"
+
 TOKEN_ENV = "HF_TOKEN"
 URL_ENV_OVERRIDE = "DESIGNSHELL_CLOUDMESH_URL"
 # A second Space to try when the primary cannot be reached at all
-# (T28). No default: every public TRELLIS.2 clone checked on
-# 2026-11-14 was paused or in error.
+# (T28). The default is FALLBACK_SPACE_URL above; the override
+# points the fallback elsewhere.
 FALLBACK_URL_ENV = "DESIGNSHELL_CLOUDMESH_FALLBACK_URL"
 
 # Generation defaults - the Space's own UI defaults, at the cheapest
@@ -118,6 +132,11 @@ DEFAULT_TIMEOUT = 900
 READ_TIMEOUT = 120
 # /extract_glb is the fragile step; two retries in the same session.
 EXTRACT_RETRIES = 2
+# A TRELLIS.2 GLB with 2048 px textures is tens of MB; anything past
+# 256 MB is not a mesh, it is a runaway download - refuse it rather
+# than filling the disk (or the RAM, since the bytes are held).
+# (v1.10, N43.)
+MAX_GLB_BYTES = 256 * 1024 * 1024
 # The photo upload is retried once on a transient failure.
 UPLOAD_RETRIES = 1
 # A PNG wider than this on its longest side is shrunk before upload
@@ -135,7 +154,9 @@ TOKEN_FIX = (
 DISCLOSURE = (
     "This uploads the photo to Hugging Face's free GPU "
     f"({SPACE_ID}) - the photo leaves this machine. The mesh comes back "
-    "as a textured GLB and is filed in the job."
+    "as a textured GLB and is filed in the job. If the primary Space "
+    "cannot be reached, the photo goes to the fallback Space "
+    f"({FALLBACK_SPACE_ID}) instead."
 )
 
 QUOTA_MESSAGE = (
@@ -161,9 +182,16 @@ def base_url() -> str:
 
 
 def fallback_url() -> str | None:
-    """The fallback Space's base URL, if one is configured - else None."""
+    """The fallback Space's base URL: the DESIGNSHELL_CLOUDMESH_
+    FALLBACK_URL override when set, else the probed default
+    (v1.10, N54). Set the override to \"none\" to disable the
+    fallback entirely."""
     value = os.environ.get(FALLBACK_URL_ENV, "").strip()
-    return value.rstrip("/") if value else None
+    if value.lower() == "none":
+        return None
+    if value:
+        return value.rstrip("/")
+    return FALLBACK_SPACE_URL
 
 
 def _is_connection_failure(exc: CloudMeshError) -> bool:
@@ -207,14 +235,30 @@ def _headers(token: str, content_type: str | None = None) -> dict[str, str]:
 
 def _request(url: str, token: str, data: bytes | None = None,
              content_type: str | None = None, timeout: int = READ_TIMEOUT,
-             method: str | None = None) -> bytes:
-    """One HTTP round trip; HTTP/URL failures become CloudMeshError."""
+             method: str | None = None, max_bytes: int | None = None) -> bytes:
+    """One HTTP round trip; HTTP/URL failures become CloudMeshError.
+    `max_bytes`, when given, caps the response body - a download past
+    it is refused instead of filling the disk (v1.10, N43)."""
     req = urllib.request.Request(url, data=data,
                                  headers=_headers(token, content_type),
                                  method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+            if max_bytes is None:
+                return resp.read()
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    return b"".join(chunks)
+                total += len(chunk)
+                if total > max_bytes:
+                    raise CloudMeshError(
+                        f"the download is larger than "
+                        f"{max_bytes // (1024 * 1024)} MB - refusing it "
+                        "rather than filling the disk")
+                chunks.append(chunk)
     except urllib.error.HTTPError as exc:
         body = ""
         try:
@@ -539,7 +583,8 @@ def download_file(base: str, token: str, file_data: dict,
         raise CloudMeshError("the Space's GLB answer had no download link")
     if not url.startswith("http"):
         url = urllib.parse.urljoin(base + "/", url.lstrip("/"))
-    return _request(url, token, timeout=max(1, int(deadline - time.monotonic())))
+    return _request(url, token, timeout=max(1, int(deadline - time.monotonic())),
+                    max_bytes=MAX_GLB_BYTES)
 
 
 def _image_data(server_path: str, photo: Path) -> dict:
@@ -562,7 +607,7 @@ def validate_photo(photo: str | Path) -> Path:
     if fmt not in ("png", "jpeg", "gif") or width is None:
         raise CloudMeshError(
             f"{path.name} does not look like a photo the mesh step can use - "
-            "send a PNG or JPEG photo")
+            "send a PNG, JPEG, or GIF photo")
     return path
 
 
@@ -578,13 +623,14 @@ def generate_mesh(photo: str | Path, token: str | None = None,
     `cancel`, when given, is a threading.Event checked between stages;
     a set event raises governor.Cancelled and nothing is written.
 
-    Fallback (T28): when the primary Space cannot be reached at all
+    Fallback (T28, N54): when the primary Space cannot be reached at all
     during the upload or background-removal stages - before any GPU
-    quota is spent - and DESIGNSHELL_CLOUDMESH_FALLBACK_URL names a
-    second Space, the whole flow runs once against the fallback. A
-    failure during generation or extraction does NOT fall back (the
-    quota may already be spent on the primary), and neither does a
-    quota error (the quota is per-account across all Spaces).
+    quota is spent - the whole flow runs once against the fallback
+    Space (cpuai/TRELLIS-2 by default, or DESIGNSHELL_CLOUDMESH_
+    FALLBACK_URL when set; "none" disables it). A failure during
+    generation or extraction does NOT fall back (the quota may already
+    be spent on the primary), and neither does a quota error (the
+    quota is per-account across all Spaces).
     """
     photo_path = validate_photo(photo)
     token = token_value(token, workspace=workspace)

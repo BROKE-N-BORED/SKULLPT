@@ -202,10 +202,14 @@ class MockGradioCase(unittest.TestCase):
         _MockGradio.events = {}
         _MockGradio.extract_calls = 0
         self._saved = {k: os.environ.get(k) for k in
-                       ("HF_TOKEN", "DESIGNSHELL_CLOUDMESH_URL")}
+                       ("HF_TOKEN", "DESIGNSHELL_CLOUDMESH_URL",
+                        "DESIGNSHELL_CLOUDMESH_FALLBACK_URL")}
         os.environ["HF_TOKEN"] = "test-token"
         os.environ["DESIGNSHELL_CLOUDMESH_URL"] = (
             f"http://127.0.0.1:{self.port}")
+        # The mock tests never touch the real fallback Space (v1.10,
+        # N54): a down-primary test would otherwise try cpuai live.
+        os.environ["DESIGNSHELL_CLOUDMESH_FALLBACK_URL"] = "none"
         self.tmp = tempfile.TemporaryDirectory()
         self.ws = Path(self.tmp.name) / "ws"
         self.ws.mkdir()
@@ -313,7 +317,7 @@ class FlowTests(MockGradioCase):
         bad.write_text("not an image at all")
         with self.assertRaises(cloudmesh.CloudMeshError) as cm:
             cloudmesh.cloud_mesh(self.ws, bad)
-        self.assertIn("PNG or JPEG", str(cm.exception))
+        self.assertIn("PNG, JPEG, or GIF", str(cm.exception))
         self.assertEqual(_MockGradio.requests, 0)
         with self.assertRaises(cloudmesh.CloudMeshError):
             cloudmesh.cloud_mesh(self.ws, Path(self.tmp.name) / "missing.png")

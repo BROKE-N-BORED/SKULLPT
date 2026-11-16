@@ -1,17 +1,19 @@
 """Workspace settings - the user's own switches, in one small file.
 
-Settings live at <workspace>/settings.json. Today there is one switch:
+Settings live at <workspace>/settings.json. The switches:
 
   critic_reference_check (default ON): when a job has a chosen
   reference image on record, the vision critic compares the build's
   renders against that reference, not just against the written rubric.
 
-A description may carry "critic_reference": true/false to override the
-workspace switch for that one job ("a toggle in settings, plus a
-per-job say-so as well" - Joshua, 2026-11-11).
+  Render defaults (v1.6, T25): engine (auto/eevee/cycles),
+  resolution, Cycles samples, denoise - how renders are made when a
+  job does not say otherwise.
 
-Render settings (v1.6, T25) follow the same pattern: workspace
-defaults here, per-job overrides in the description's "render" block.
+A description may carry "critic_reference": true/false to override the
+workspace switch for that one job (\"a toggle in settings, plus a
+per-job say-so as well\" - Joshua, 2026-11-11), and a "render" block
+to override the render defaults the same way.
 """
 from __future__ import annotations
 

@@ -1,16 +1,24 @@
 """Exporters - one Description File, many outputs.
 
-Skeleton v0.1 ships two reference exporters proving the pattern:
-- web_ui: a standalone preview page + component CSS + tokens CSS
-- svg_mock: a flat SVG mock of the component (doubles as its thumbnail)
+The registry (EXPORTERS) holds the four exporters, and
+DEFAULT_EXPORTERS says which run per description kind:
 
-Studios to come plug in the same way (blender_scene, unreal_level, ...):
-an exporter is a function (desc, out_dir) -> list of output file names.
-Every exporter also accepts optional `cancel` (a threading.Event) and
-`progress` (called with (stage, detail, fraction)) keyword arguments
-(v1.9, N8/N9): the Blender exporters kill their subprocess on cancel
-and stream its output; the instant exporters take the arguments and
-ignore them, so the builder calls every exporter the same way.
+- web_ui: a standalone preview page + component CSS + tokens CSS
+  (ui_component, website)
+- svg_mock: a flat SVG mock of the component, also its thumbnail
+  (ui_component, website, graphic)
+- blender_scene: the Blender build - .blend, GLB, renders, stats,
+  LODs and collision when game-ready (scene)
+- blender_character: the Character Studio build - an MPFB2 human
+  plus props (character)
+
+An exporter is a function (desc, out_dir) -> list of output file
+names. Every exporter also accepts optional `cancel` (a
+threading.Event) and `progress` (called with (stage, detail,
+fraction)) keyword arguments (v1.9, N8/N9): the Blender exporters
+kill their subprocess on cancel and stream its output; the instant
+exporters take the arguments and ignore them, so the builder calls
+every exporter the same way.
 """
 from __future__ import annotations
 

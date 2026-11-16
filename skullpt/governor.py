@@ -1,8 +1,8 @@
 """Resource Governor - keeps heavy jobs from thrashing a small PC.
 
 Two duties:
-1. Budget gate: a Description File's budget (triangles, texture size,
-   preview resolution) is checked against the summed estimates of its parts
+1. Budget gate: a Description File's budget (triangles, preview
+   resolution) is checked against the summed estimates of its parts
    BEFORE anything runs. Over budget = the job does not start.
 2. Machine gate: one heavy job at a time (lock file), and a free-RAM floor
    read from /proc/meminfo on Linux. If the machine is already loaded, the
@@ -59,13 +59,6 @@ def check_budget(desc: dict) -> list[str]:
             problems.append(
                 f"triangles: parts total ~{total} (estimated) > budget {max_tris}"
             )
-    if "max_texture_px" in budget:
-        for part in desc.get("parts", []):
-            tex = part.get("texture_px")
-            if tex and tex > budget["max_texture_px"]:
-                problems.append(
-                    f"texture: part {part.get('id')!r} wants {tex}px > budget {budget['max_texture_px']}px"
-                )
     if "max_preview_px" in budget:
         prev = (desc.get("preview") or {}).get("width_px")
         if prev and prev > budget["max_preview_px"]:

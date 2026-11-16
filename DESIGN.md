@@ -52,24 +52,27 @@ radii:
 
 # SKULLPT Design System
 
-Single source of truth for how the Bench looks (v1.5, carried into
-v1.6 unchanged — the v1.6 surfaces reuse these components: the
-render settings use the Settings window's form rows and the Render
-window's groups, the Vary button is a plain secondary button, the
-workspace/backup/update actions are plain menu items and dialogs).
-The code follows this file: `skullpt/qtdesign.py` holds the tokens, samples
-the amber from the icon at runtime, and builds the one stylesheet
-`main()` applies. If this file and the code disagree, this file wins
-and the code is wrong.
+Single source of truth for how the Bench looks (v1.10; the v1.5
+system, carried forward through v1.9 unchanged in its tokens - the
+newer windows reuse these components: the render settings use the
+Settings window's form rows and the Render window's groups, the
+Vary button is a plain secondary button, the workspace/backup/update
+actions are plain menu items and dialogs). The code follows this
+file: `skullpt/qtdesign.py` holds the tokens, including the fixed
+amber `#f5a623`, and builds the one stylesheet `main()` applies. If
+this file and the code disagree, this file wins and the code is
+wrong.
 
 ## Overview
 
-SKULLPT is a workshop, not a dashboard. The Bench is five windows,
+SKULLPT is a workshop, not a dashboard. The Bench is nine windows,
 one per job (U1): Jobs is home (bento job cards, chat, status bar);
 Render holds the 3D viewport full size; Images is the native picture
 picker; Library is the filed assets; Settings holds engines and the
-Hugging Face token. A left icon rail (24px bone icons) and the menu
-bar move between them.
+Hugging Face token; Character Studio shapes a rigged human; Recipes
+lists the templates; Help explains the windows; the Setup check
+runs at first launch. A left icon rail (24px bone icons) and the
+menu bar move between them.
 
 The voice is bone and amber on warm near-black: the skull in the
 icon, the amber crack in it. Amber is the ONLY chromatic accent,
@@ -305,5 +308,6 @@ drags it, no idle animation, no auto-rotate.
   not name third-party brands in documentation (U10), "Hugging
   Face" and "Blender" name real services the user must install or
   sign up for, and are the exceptions the product already uses.
-- Do keep the amber sampled from the icon. If the icon changes,
-  the accent changes with it, that is the point.
+- Do keep the amber the fixed token `#f5a623` (v1.8.1: the value
+  the old icon's amber crack carried). If the icon changes, the
+  accent stays put unless this file says otherwise.

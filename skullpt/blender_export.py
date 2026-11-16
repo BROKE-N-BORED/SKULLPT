@@ -139,7 +139,6 @@ def build_payload(desc: dict, out_dir: Path, slug: str) -> dict:
     the same scene payload and add its character block to it."""
     data = scene_data(desc)
     style = desc.get("style", {}) or {}
-    accent = str(style.get("accent", "#e0a458"))
     surface = str(style.get("surface", "#241d16"))
     src_by_id = {p["id"]: p for p in expand_parts(desc)}
     parts = []
@@ -170,7 +169,7 @@ def build_payload(desc: dict, out_dir: Path, slug: str) -> dict:
         cam["file"] = "render-" + _slug(str(cam["name"])) + ".png"
     payload = {
         "parts": parts, "cameras": cameras,
-        "accent": accent, "surface": surface,
+        "surface": surface,
         "out": str(out_dir), "slug": slug,
         "game_ready": bool(desc.get("game_ready")),
         "res": int((desc.get("budget", {}) or {}).get("preview_px", 640)),
@@ -608,15 +607,37 @@ for cam in D["cameras"]:
 if D["game_ready"]:
     mesh_objs = [o for o in scene.objects if o.type == "MESH"]
     for ratio, suffix in ((0.5, "lod1"), (0.25, "lod2")):
+        lod_path = os.path.join(OUT, D["slug"] + "_" + suffix + ".glb")
+        # LOD export (v1.10, N53): DECIMATE in the stack, evaluated
+        # by the exporter. The exporter special-cases armatures, so
+        # skinned meshes keep their skins through export_apply=True
+        # (verified against real Blender 4.5.9 on a shape-keyed MPFB
+        # human: lod1/lod2 carry skins and fewer triangles than the
+        # main GLB). Bevels are hidden for the LOD pass: baking the
+        # default "soften" bevel into a LOD inflates it past the
+        # main GLB (a 12-tri box became 54 tris at lod1). A hidden
+        # modifier is skipped by the exporter; both visibility
+        # flags are saved and restored, so the main export and the
+        # renders are unaffected.
         added = []
+        hidden = []
         for o in mesh_objs:
+            for mod in o.modifiers:
+                if mod.type == "BEVEL" and (
+                        mod.show_viewport or mod.show_render):
+                    hidden.append((mod, mod.show_viewport,
+                                   mod.show_render))
+                    mod.show_viewport = False
+                    mod.show_render = False
             mod = o.modifiers.new("lod", "DECIMATE")
             mod.ratio = ratio
             added.append((o, mod))
-        lod_path = os.path.join(OUT, D["slug"] + "_" + suffix + ".glb")
         bpy.ops.export_scene.gltf(filepath=lod_path, export_format="GLB", export_apply=True)
         for o, mod in added:
             o.modifiers.remove(mod)
+        for mod, viewport, render in hidden:
+            mod.show_viewport = viewport
+            mod.show_render = render
         print("DS_LOD", lod_path)
     ucx_objs = []
     for part in D["parts"]:

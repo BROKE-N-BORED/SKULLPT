@@ -4,7 +4,8 @@ Runs when a description sets "game_ready": true. The Blender exporter
 writes a stats file (real triangle counts + UV presence, measured on the
 evaluated meshes) plus LOD and collision exports; this gate judges them:
 
-  - total triangles within the description's budget.max_tris (if set)
+  - total triangles within the description's budget.max_tris (if set;
+    max_triangles is honored as a legacy alias, like the governor)
   - every part carries a UV map
   - LOD1 + LOD2 exports landed
   - a collision export landed (UCX_ boxes, Unreal's naming convention)
@@ -40,7 +41,8 @@ def run_gate(desc: dict, out_dir: str | Path, outputs: list[str]) -> dict:
     checks.append({"check": "stats_present", "ok": stats is not None,
                    "detail": f"{slug}.stats.json readable" if stats else "no stats file from the exporter"})
 
-    max_tris = (desc.get("budget") or {}).get("max_tris")
+    max_tris = (desc.get("budget") or {}).get("max_tris",
+                                              (desc.get("budget") or {}).get("max_triangles"))
     if max_tris is not None:
         total = (stats or {}).get("total_tris")
         ok = total is not None and total <= max_tris

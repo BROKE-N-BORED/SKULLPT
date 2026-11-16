@@ -522,7 +522,11 @@ class GuiAndPkexecTextTests(unittest.TestCase):
     def test_progress_dialog_flags(self):
         self.assertIn("--progress --title=\"Installing SKULLPT\"",
                       self.install)
-        self.assertIn("--auto-close --no-cancel", self.install)
+        # v1.10, F46: the dialog is cancellable now - no
+        # --no-cancel, and a cancel is reported plainly (exit 3).
+        self.assertIn("--auto-close --width=400", self.install)
+        self.assertNotIn("--no-cancel", self.install)
+        self.assertIn("Install cancelled", self.install)
 
     def test_success_and_failure_dialog_text(self):
         self.assertIn("--info --title=\"SKULLPT installed\"", self.install)

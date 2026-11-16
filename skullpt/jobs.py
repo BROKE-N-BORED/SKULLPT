@@ -37,7 +37,15 @@ class Job:
         self.log_path = self.dir / "session.jsonl"
         self.desc_path = self.dir / "description.json"
         self.output_dir = self.dir / "output"
-        self._state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        try:
+            self._state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            # A damaged job file is a plain error, not a traceback
+            # (v1.10, N22): the Bench lists the job as unreadable
+            # with this reason (U32) instead of crashing on it.
+            raise ValueError(
+                f"job file {self.dir.name}/job.json is damaged - it is not "
+                f"valid JSON ({exc.msg}, line {exc.lineno})") from exc
 
     # -- creation ---------------------------------------------------------
     @classmethod
@@ -97,12 +105,30 @@ class Job:
         self.log("transition", **{"from": old, "to": new_state}, **fields)
 
     # -- the gate ---------------------------------------------------------
+    # Snapshot generations kept (v1.10, N25): `description.approved.json`
+    # is always the newest snapshot; `.1` is the previous one, `.2` the
+    # one before that, up to `.5`. A snapshot used to overwrite the one
+    # fixed name, so an approve-then-edit-then-approve lost the first
+    # approval.
+    SNAPSHOT_KEEP = 5
+
     def snapshot_description(self, name: str) -> Path:
         """Copy the job's current description.json to `name` inside the
         job folder, so what was there before a change stays recoverable.
         Used at approve time (what the user approved) and before any
-        step that rewrites the description (vision patches, cloud mesh)."""
+        step that rewrites the description (vision patches, cloud mesh).
+        Older snapshots rotate to versioned generations (.1, .2, ...)
+        instead of being overwritten."""
         dest = self.dir / name
+        if dest.exists():
+            for n in range(self.SNAPSHOT_KEEP, 0, -1):
+                older = self.dir / f"{name}.{n}"
+                if older.exists():
+                    if n == self.SNAPSHOT_KEEP:
+                        older.unlink()
+                    else:
+                        older.rename(self.dir / f"{name}.{n + 1}")
+            dest.rename(self.dir / f"{name}.1")
         shutil.copy2(self.desc_path, dest)
         self.log("description_snapshot", file=name)
         return dest

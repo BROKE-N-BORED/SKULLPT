@@ -621,8 +621,14 @@ class InstallerTextTests(unittest.TestCase):
                       self.install)
 
     def test_ollama_section_shape(self):
-        self.assertIn('OLLAMA_INSTALL_URL="https://ollama.com/install.sh"',
+        # v1.10, F45: the script is pinned to the release tag and
+        # verified by hash (the URL and hash are env-overridable
+        # for the staged tests).
+        self.assertIn("ollama/v0.40.16/scripts/install.sh",
                       self.install)
+        self.assertIn(
+            "25f64b810b947145095956533e1bdf56eacea2673c55a7e586be4515fc882c9f",
+            self.install)
         self.assertIn('OLLAMA_MODEL="qwen3:4b"', self.install)
         self.assertIn("ollama_server_up()", self.install)
         self.assertIn("ollama_model_present()", self.install)
@@ -839,12 +845,18 @@ class StagedInstallerV18Tests(unittest.TestCase):
         # No ollama binary; the pkexec prompt is declined. The
         # install still completes (exit 0) and says the local model
         # is missing and the Setup check can fetch it.
+        # The stub curl serves "fake-download-bytes", so the pinned
+        # hash is overridden to that content's hash (v1.10, F45).
+        import hashlib
+
         with tempfile.TemporaryDirectory() as tmp:
             stage, home, env, tmp_path = self._stage(
                 tmp, {"blender": STUB_BLENDER_PINNED,
                       "sd-cli": STUB_SD_CLI,
                       "curl": STUB_CURL_OK})
             env["PKEXEC_EXIT"] = "1"
+            env["DESIGNSHELL_OLLAMA_INSTALL_SHA256"] = \
+                hashlib.sha256(b"fake-download-bytes\n").hexdigest()
             res = self._run_install(stage, env, "--terminal")
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertIn("Ollama", res.stdout)

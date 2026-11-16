@@ -99,11 +99,15 @@ ASSETS_URL_FALLBACK="https://files.makehumancommunity.org/asset_packs/makehuman_
 # Ollama (v1.8): the local model server. There is no .deb - the
 # official install script is the supported route; it installs the
 # binary to /usr, creates the ollama user, and sets up + starts the
-# systemd service. The script downloads the Linux bundle
-# (ollama-linux-amd64.tar.zst, 1,545,767,640 bytes at v0.40.16) and
-# verifies it against the release's sha256sum.txt itself, so the
-# installer does not re-verify it here.
-OLLAMA_INSTALL_URL="https://ollama.com/install.sh"
+# systemd service. The script is pinned to the v0.40.16 release tag
+# and verified by SHA-256 before it runs (v1.10: the script itself
+# does not verify anything, so the installer does). The bundle the
+# script then fetches (ollama-linux-amd64.tar.zst, 1,545,767,640 bytes
+# at v0.40.16) comes over HTTPS and is not hash-checked.
+OLLAMA_INSTALL_URL="${DESIGNSHELL_OLLAMA_INSTALL_URL:-https://raw.githubusercontent.com/ollama/ollama/v0.40.16/scripts/install.sh}"
+# The hash is overridable too (DESIGNSHELL_OLLAMA_INSTALL_SHA256) -
+# the staged installer tests serve a stub script and pin its hash.
+OLLAMA_INSTALL_SHA256="${DESIGNSHELL_OLLAMA_INSTALL_SHA256:-25f64b810b947145095956533e1bdf56eacea2673c55a7e586be4515fc882c9f}"
 # The local model the fallback seat uses (seats.py names the same
 # model); about 2.5 GB from the Ollama library.
 OLLAMA_MODEL="qwen3:4b"
@@ -291,6 +295,35 @@ download_verified() {
   return 1
 }
 
+# flatten_one_level <dir> <marker>
+# Some zips wrap their contents in one extra folder, so a check for
+# <marker> at the top of <dir> fails even though the files landed.
+# If <marker> is not already at the top and <dir> holds exactly one
+# subfolder that contains it, move that subfolder's contents up one
+# level. Never touches a directory that is already flat, or one with
+# more than one subfolder. Returns 0 always.
+flatten_one_level() {
+  local dir="$1" marker="$2"
+  if [ -e "$dir/$marker" ]; then
+    return 0
+  fi
+  local count=0 only=""
+  local d
+  for d in "$dir"/*/; do
+    [ -d "$d" ] || continue
+    count=$((count + 1)); only="$d"
+  done
+  if [ "$count" -eq 1 ] && [ -e "${only}${marker}" ]; then
+    local f
+    for f in "${only}"* "${only}".[!.]*; do
+      [ -e "$f" ] || continue
+      mv "$f" "$dir"/
+    done
+    rmdir "$only" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # build_image_engine: compile stable-diffusion.cpp from source into
 # /opt/sd.cpp and link sd-cli into /usr/local/bin. Returns 0 with a
 # working sd-cli, 1 otherwise - the caller warns and continues, since
@@ -392,6 +425,8 @@ install_character_studio() {
       return 1
     fi
   fi
+  # Some MPFB zips wrap the extension in one extra folder.
+  flatten_one_level "$MPFB_EXT_DIR" "__init__.py"
   if [ ! -f "$MPFB_EXT_DIR/__init__.py" ]; then
     echo "ERROR: MPFB did not land in Blender's extension folder." >&2
     add_warning "MPFB did not land in Blender's extension folder - re-run the installer."
@@ -405,6 +440,8 @@ install_character_studio() {
     add_warning "The assets pack did not land in MPFB's data folder - re-run the installer."
     return 1
   fi
+  # The assets pack can be wrapped in one extra folder too.
+  flatten_one_level "$MPFB_EXT_DIR/data" "skins"
   if [ ! -d "$MPFB_EXT_DIR/data/skins" ]; then
     echo "ERROR: the assets pack did not land in MPFB's data folder." >&2
     add_warning "The assets pack did not land in MPFB's data folder - re-run the installer."
@@ -519,12 +556,33 @@ do_install() {
         return 1
       fi
       EXTRACTED="$TMPD/blender-${BLENDER_VERSION}-linux-x64"
-      if ! pkexec sh -c 'rm -rf /opt/blender && mv "$1" /opt/blender && ln -sf /opt/blender/blender /usr/local/bin/blender' _ "$EXTRACTED"; then
+      # Land the new tree beside the old one and verify it runs
+      # before anything is swapped (v1.10, F48): a failed new
+      # Blender must never take the working one down with it.
+      if ! pkexec sh -c 'rm -rf /opt/blender.new && mv "$1" /opt/blender.new' _ "$EXTRACTED"; then
         rm -rf "$TMPD"
         echo "ERROR: Blender could not be installed - the install was declined or failed." >&2
         gui_fail "Blender could not be installed - the install was declined or failed. Re-run the installer and allow it when asked."
         return 1
       fi
+      if ! /opt/blender.new/blender --version >/dev/null 2>&1; then
+        pkexec sh -c 'rm -rf /opt/blender.new' || true
+        rm -rf "$TMPD"
+        echo "ERROR: the new Blender did not run - the old one is untouched." >&2
+        gui_fail "The new Blender did not run - your old Blender is untouched. Re-run the installer."
+        return 1
+      fi
+      if ! pkexec sh -c 'rm -rf /opt/blender.old; if [ -d /opt/blender ]; then mv /opt/blender /opt/blender.old || exit 1; fi; mv /opt/blender.new /opt/blender && ln -sf /opt/blender/blender /usr/local/bin/blender'; then
+        # Restore only if the new tree actually landed: if
+        # /opt/blender.new still exists, the old Blender was never
+        # moved and is still in place.
+        pkexec sh -c 'if [ ! -d /opt/blender.new ] && [ -d /opt/blender.old ]; then rm -rf /opt/blender; mv /opt/blender.old /opt/blender; fi; rm -rf /opt/blender.new' || true
+        rm -rf "$TMPD"
+        echo "ERROR: Blender could not be installed - the old one was restored." >&2
+        gui_fail "Blender could not be installed - your old Blender was restored. Re-run the installer."
+        return 1
+      fi
+      pkexec sh -c 'rm -rf /opt/blender.old' || true
       rm -rf "$TMPD"
       BLENDER_BIN="/opt/blender/blender"
       echo "Blender installed."
@@ -656,7 +714,8 @@ do_install() {
     step 62 "Installing Ollama"
     echo "Installing Ollama (about 1.5 GB - the installer downloads the official package; this needs admin permission - a password window will appear)..."
     mkdir -p "$DOWNLOAD_CACHE"
-    if curl -fSL -C - "$OLLAMA_INSTALL_URL" -o "$DOWNLOAD_CACHE/ollama-install.sh"; then
+    if download_verified "$OLLAMA_INSTALL_URL" "$DOWNLOAD_CACHE/ollama-install.sh" \
+        "$OLLAMA_INSTALL_SHA256" "Ollama install script"; then
       if pkexec sh "$DOWNLOAD_CACHE/ollama-install.sh"; then
         OLLAMA_BIN="$(command -v ollama || true)"
       else
@@ -963,10 +1022,19 @@ PASSTHROUGH=()
 if [ "$GUI_MODE" = "1" ]; then
   echo "== SKULLPT install =="
   set +e
-  SKULLPT_GUI_MODE=1 bash "$SCRIPT_PATH" --_run-worker "${PASSTHROUGH[@]}" 2>&1 | tee "$LOG" | "$DIALOG_CMD" --progress --title="Installing SKULLPT" --text="Installing everything SKULLPT needs - up to about 7.7 GB of downloads. Things already installed are skipped." --percentage=0 --auto-close --no-cancel --width=400
+  SKULLPT_GUI_MODE=1 bash "$SCRIPT_PATH" --_run-worker "${PASSTHROUGH[@]}" 2>&1 | tee "$LOG" | "$DIALOG_CMD" --progress --title="Installing SKULLPT" --text="Installing everything SKULLPT needs - up to about 7.7 GB of downloads. Things already installed are skipped." --percentage=0 --auto-close --width=400
   _statuses=("${PIPESTATUS[@]}")
   set -e
   worker_status=${_statuses[0]}
+  dialog_status=${_statuses[2]}
+  # Cancel first (v1.10, F46): the dialog exits non-zero when the
+  # user cancels, and the worker dies on the closed pipe. A cancel
+  # is not a failure - say so plainly and exit 3, the code the
+  # Bench's Setup window reads as "cancelled".
+  if [ "$dialog_status" -ne 0 ]; then
+    "$DIALOG_CMD" --info --title="Install cancelled" --text="The install was cancelled. Run the installer again when you are ready." --width=400 || true
+    exit 3
+  fi
   fail_line="$(grep -m1 '^INSTALL-FAILED: ' "$LOG" 2>/dev/null || true)"
   warn_line="$(grep -m1 '^INSTALL-WARNING: ' "$LOG" 2>/dev/null || true)"
   if [ "$worker_status" -ne 0 ]; then

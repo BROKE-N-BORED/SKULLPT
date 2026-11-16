@@ -84,7 +84,7 @@ def scene_bounds(boxes: list[dict]) -> dict:
 
 
 def scene_data(desc: dict) -> dict:
-    """Everything the viewer page needs, as one JSON-able dict."""
+    """Everything the Render window needs, as one JSON-able dict."""
     boxes = [part_box(p, i) for i, p in enumerate(expand_parts(desc))]
     cameras = []
     for cam in desc.get("cameras", []) or []:

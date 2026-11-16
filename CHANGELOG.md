@@ -1,5 +1,108 @@
 # SKULLPT — Changelog
 
+## v1.10 - 2026-11-16 - The P2 audit fixes (N22-N50, N52-N54)
+
+The P2 findings from the 2026-11-15 audit, all closed. The
+headline: the viewport draws real imported mesh geometry instead of
+boxes, character LODs keep their skins, and the cloud mesh has a
+fallback Space proven healthy by a fresh probe of 99 public clones.
+
+- N22: damaged seats, description, and job files fail in plain
+  words ("this file is damaged") instead of crashing on a
+  traceback; a damaged build report falls back to the output
+  listing.
+- N23: style colors are validated - `surface` must be a #RRGGBB
+  hex, `accent` and `text` a hex or a CSS color name.
+- N24: a damaged or missing library index rebuilds itself from
+  the per-folder manifests, and heals by saving.
+- N25: description snapshots rotate - the current name is newest,
+  `.1` through `.5` the previous five.
+- N26: dead code removed (`texture_px` check, the accent payload
+  in the Blender export) and stale module docstrings refreshed.
+- N27: `sits_on` checks real footprint overlap (both axes, more
+  than a touch); edge-touching does not count.
+- N28: the game-ready gate accepts the `max_triangles` budget
+  alias, like the governor.
+- N29: the run list shows all running, cancelling, and queued
+  runs plus the last 8 finished, in order.
+- N30: ingest guards against malformed GLBs (plain ValueError)
+  and slow Blender reads (a 10-minute timeout, plainly worded).
+- N31: Qt slots that can fail (opening a library entry as a job,
+  saving a debug report) warn instead of crashing.
+- N32: the Hugging Face token is checked against Hugging Face
+  before it is saved; an invalid token is never stored.
+- N33: workspace backup runs off the UI thread (a background run
+  in the Bench, a background call in Settings).
+- N34: the Setup window reads the installer's exit code - 0
+  refreshes, 3 is a plain "Install cancelled", anything else
+  warns with the code.
+- N35: the Ollama model pull streams progress (the button shows
+  the latest line) and the pull itself is deadline-bounded.
+- N36: Character Studio's form and save work before the studio
+  is installed; only the skin picker waits for the skins, and
+  only the Build button is gated.
+- N37: saving a camera refreshes the Render window without
+  re-framing, so the saved view survives.
+- N38: the Images toast says "kept.", the Groq note is a proper
+  sentence, and the photo picker only offers formats the mesh
+  step accepts.
+- N39: logging - `skullpt.log` in the workspace (rotated, 2 MB
+  x 2), a ring buffer whose tail the debug report carries, and
+  an exception hook that logs tracebacks.
+- N40: no hardcoded `/home/xprnc` paths left in the Bench or
+  the README.
+- N41: `_preserve_mesh` compares files by size, then streamed
+  SHA-256 - never whole-file bytes.
+- N42: the critic judges at most 8 renders per build and names
+  the skipped ones in the build report.
+- N43: the cloud mesh caps downloads at 256 MB (chunked, refuses
+  past the cap) and the photo error names all three formats.
+- N44: installer hardening - the Ollama script is pinned to the
+  v0.40.16 tag and verified by SHA-256 (the old comment claiming
+  the script verified itself was wrong); the progress dialog is
+  cancellable (exit 3, "Install cancelled"); nested MPFB/assets
+  zips are flattened one level; a new Blender lands beside the
+  old one and swaps in only after `--version` proves it runs,
+  with the old one restored on failure.
+- N45: README rewritten where it had gone stale - the Bench
+  section describes the nine windows, the image step covers vary
+  and guidance (v1.6) and batch size (v1.10), the dead photo
+  route lines are gone, the module list is current, and the
+  test count is current.
+- N46: DESIGN.md names v1.10, counts nine windows, and records
+  the amber as the fixed `#f5a623` token.
+- N47: the Help text names the Unreal package's real contents
+  (the .glb, the .blend, the description, the import script, the
+  README).
+- N48: image batches take a width and height; `vary` keeps the
+  source batch's size.
+- N49: the dead SF3D/TripoSR intake route is gone, and the JPEG
+  dimension probe reads past 64 KB of marker segments.
+- N50: plans and chat cancel - the live-seat call stops at once
+  (SeatCancelled, never mistaken for a failure), and a cancelled
+  vision call returns the job to approved.
+- N52: the viewport draws real mesh geometry - `glb_node_triangles`
+  reads a GLB's triangles per node (indexed and non-indexed,
+  strided attributes, node scale and translation, 250k-triangle
+  sampling cap) and the Render window draws them, cached per
+  file.
+- N53: character LODs keep their skins, and bevels are hidden for
+  the LOD pass. Honest note: the audit said the old LODs were
+  unskinned, but a check against real Blender 4.5.9 on a real
+  shape-keyed MPFB human (plus a posed-armature test) showed the
+  v1.9 LODs already kept their skins - the exporter special-cases
+  armatures. The real defect was bevel baking inflating LOD
+  triangle counts (a 12-tri box became 54 tris at lod1), fixed by
+  hiding bevels for the LOD export. A first v1.10 attempt
+  (duplicating meshes and applying DECIMATE directly) was
+  reverted: Blender refuses to apply any modifier to a mesh with
+  shape keys, so it broke every character build.
+- N54: the fallback Space is `cpuai/TRELLIS-2`, proven healthy
+  by a probe of 99 public clones on 2026-11-16 (3 running, 1
+  sleeping, the rest paused or in error; `zeptotenshi/TRELLIS.2`
+  is the healthy second choice, sleeping when idle).
+  `DESIGNSHELL_CLOUDMESH_FALLBACK_URL=none` disables it.
+
 ## v1.9 — 2026-11-16 — The audit fixes (N1–N21 + N51 + N55)
 
 The P0+P1 findings from the 2026-11-15 audit, all closed. The
@@ -204,8 +307,11 @@ builds are real builds now; only `project` still fails loudly.
   Every human gets low-poly eyes and the base teeth, so the
   renders show a finished face. The skin uses the plain PBR
   (GameEngine) material, the one that exports cleanly to GLB.
-  Character LODs are baked (decimated, unskinned) in this
-  version.
+  Character LODs keep their skins (the v1.7 line that called them
+  baked and unskinned was wrong - a check against real Blender
+  showed the v1.9 LODs already kept their skins); from v1.10
+  bevels are left out of the LOD pass so LODs stay smaller than
+  the main GLB.
 - GOVERNOR LOCK RACE (found in verification, fixed here): the
   heavy-job lock treated an empty lock file as stale and stole
   it — but an empty file is usually a contender that just created

@@ -30,8 +30,34 @@ class Library:
 
     def _index(self) -> list[dict]:
         if self.index_path.exists():
-            return json.loads(self.index_path.read_text(encoding="utf-8"))
-        return []
+            try:
+                data = json.loads(self.index_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None  # damaged - rebuilt from the manifests below
+            if isinstance(data, list):
+                return data
+        return self._rebuild_index()
+
+    def _rebuild_index(self) -> list[dict]:
+        """Rebuild the index from each folder's manifest.json (v1.10,
+        N24): the manifests are the source of truth, the index is a
+        cache. A damaged or missing index.json heals itself from them
+        instead of losing the whole library; a folder without a
+        readable manifest is skipped, not fatal."""
+        rows = []
+        for folder in sorted(p for p in self.root.iterdir() if p.is_dir()):
+            manifest = folder / "manifest.json"
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict):
+                rows.append(data)
+        try:
+            self._save_index(rows)
+        except OSError:
+            pass  # a read-only library still reads, it just cannot heal
+        return rows
 
     def _save_index(self, rows: list[dict]) -> None:
         self.index_path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
@@ -66,6 +92,10 @@ class Library:
         (dest / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         rows = self._index()
+        # The index may already carry this slug: on a fresh library
+        # _index rebuilds from the manifests, and this folder's
+        # manifest is already on disk. Replace, never duplicate.
+        rows = [r for r in rows if r.get("slug") != dest.name]
         rows.append(manifest)
         self._save_index(rows)
         job.transition("filed", library=str(dest))

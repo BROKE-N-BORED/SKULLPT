@@ -37,6 +37,7 @@ keep the box estimate, which is what the build actually produces.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -106,6 +107,22 @@ def _finish_desc(path: str | Path, parts: list[dict], notes: str,
     return desc
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    """True when two files have the same content: size first (cheap),
+    then a streamed SHA-256 (v1.10, N41) - a whole mesh is never
+    loaded into RAM just to compare it."""
+    if a.stat().st_size != b.stat().st_size:
+        return False
+    digests = []
+    for path in (a, b):
+        digest = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        digests.append(digest.digest())
+    return digests[0] == digests[1]
+
+
 def _preserve_mesh(path: str | Path, workspace: str | Path | None, fmt: str) -> dict:
     """The "mesh" block for an ingested asset: where the real mesh lives
     so the build can import it. Inside a workspace the source is copied
@@ -120,7 +137,7 @@ def _preserve_mesh(path: str | Path, workspace: str | Path | None, fmt: str) -> 
     dest_dir = Path(workspace) / "meshes"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / src.name
-    if dest.exists() and dest.read_bytes() != src.read_bytes():
+    if dest.exists() and not _same_file(dest, src):
         n = 2
         while (dest_dir / f"{src.stem}_{n}{src.suffix}").exists():
             n += 1
@@ -130,38 +147,61 @@ def _preserve_mesh(path: str | Path, workspace: str | Path | None, fmt: str) -> 
     return {"file": f"meshes/{dest.name}", "format": fmt, "import_scale": scale}
 
 
-def parse_glb(path: str | Path) -> dict:
-    """Read the JSON chunk of a binary glTF file."""
+def _read_glb_chunks(path: str | Path) -> tuple[dict, bytes]:
+    """The JSON chunk and the BIN chunk of a binary glTF file."""
     data = Path(path).read_bytes()
     if len(data) < 20 or data[:4] != b"glTF":
         raise ValueError(f"{path} is not a GLB file (bad magic)")
     chunk_len, chunk_type = struct.unpack_from("<I4s", data, 12)
     if chunk_type != b"JSON":
         raise ValueError("GLB's first chunk is not JSON")
-    return json.loads(data[20:20 + chunk_len])
+    gltf = json.loads(data[20:20 + chunk_len])
+    bin_data = b""
+    offset = 20 + chunk_len
+    if len(data) >= offset + 8:
+        bin_len, bin_type = struct.unpack_from("<I4s", data, offset)
+        if bin_type == b"BIN\x00":
+            bin_data = data[offset + 8:offset + 8 + bin_len]
+    return gltf, bin_data
 
 
-def ingest_glb(path: str | Path, workspace: str | Path | None = None) -> dict:
-    gltf = parse_glb(path)
-    nodes = gltf.get("nodes", [])
-    meshes = gltf.get("meshes", [])
-    accessors = gltf.get("accessors", [])
+def parse_glb(path: str | Path) -> dict:
+    """Read the JSON chunk of a binary glTF file."""
+    gltf, _bin = _read_glb_chunks(path)
+    return gltf
 
+
+def _gltf_parents(nodes: list) -> dict[int, int]:
+    """Child node index -> parent node index, for the node tree."""
     parents: dict[int, int] = {}
     for i, node in enumerate(nodes):
         for child in node.get("children", []) or []:
             parents[child] = i
+    return parents
 
-    def world_translation(idx: int) -> list[float]:
-        total = [0.0, 0.0, 0.0]
-        seen = set()
-        cur = idx
-        while cur is not None and cur not in seen:
-            seen.add(cur)
-            t = nodes[cur].get("translation", [0, 0, 0])
-            total = [total[i] + float(t[i]) for i in range(3)]
-            cur = parents.get(cur)
-        return total
+
+def _gltf_world_translation(nodes: list, parents: dict[int, int],
+                            idx: int) -> list[float]:
+    """A node's translation plus every ancestor's (glTF space).
+    Rotations and parent scales are NOT unfolded - the same
+    limitation as the ingest boxes (see _ingest_glb)."""
+    total = [0.0, 0.0, 0.0]
+    seen = set()
+    cur = idx
+    while cur is not None and cur not in seen:
+        seen.add(cur)
+        t = nodes[cur].get("translation", [0, 0, 0])
+        total = [total[i] + float(t[i]) for i in range(3)]
+        cur = parents.get(cur)
+    return total
+
+
+def _ingest_glb(path: str | Path, workspace: str | Path | None = None) -> dict:
+    gltf = parse_glb(path)
+    nodes = gltf.get("nodes", [])
+    meshes = gltf.get("meshes", [])
+    accessors = gltf.get("accessors", [])
+    parents = _gltf_parents(nodes)
 
     parts: list[dict] = []
     seen_ids: set[str] = set()
@@ -179,7 +219,7 @@ def ingest_glb(path: str | Path, workspace: str | Path | None = None) -> dict:
         scale = [float(v) for v in node.get("scale", [1, 1, 1])]
         if "rotation" in node:
             rotated = True
-        trans = world_translation(i)
+        trans = _gltf_world_translation(nodes, parents, i)
         lo_gltf = [trans[k] + mn[k] * scale[k] for k in range(3)]
         size_gltf = [(mx[k] - mn[k]) * scale[k] for k in range(3)]
         lo = _gltf_to_shell(lo_gltf)
@@ -215,6 +255,132 @@ def ingest_glb(path: str | Path, workspace: str | Path | None = None) -> dict:
     notes += " The source mesh is kept and the build imports it; the boxes are only the measurements."
     return _finish_desc(path, parts, notes,
                         mesh=_preserve_mesh(path, workspace, "glb"))
+
+
+def ingest_glb(path: str | Path, workspace: str | Path | None = None) -> dict:
+    """Ingest a .glb. A malformed file is a plain ValueError naming
+    the file (v1.10, N30) - the raw KeyError/IndexError/struct.error
+    a damaged GLB raises inside the parser never reaches the user."""
+    try:
+        return _ingest_glb(path, workspace)
+    except (KeyError, IndexError, struct.error, json.JSONDecodeError,
+            TypeError) as exc:
+        raise ValueError(
+            f"{Path(path).name} is not a readable GLB file - its structure "
+            f"is damaged ({exc})") from exc
+
+
+# --------------------------------------------------- viewport triangles (N52)
+# The viewport draws an imported part's real mesh geometry instead of
+# its box. A node with more triangles than this is sampled down with
+# an even stride: the viewport is a preview, and a 300k-triangle
+# TRELLIS mesh would freeze the frame. Sampling keeps the shape
+# readable at a bounded cost.
+MAX_VIEWPORT_TRIANGLES = 250_000
+
+_COMPONENT_SIZES = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
+_COMPONENT_FORMATS = {5120: "b", 5121: "B", 5122: "h",
+                      5123: "H", 5125: "I", 5126: "f"}
+_TYPE_COUNTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4,
+                "MAT2": 4, "MAT3": 9, "MAT4": 16}
+
+
+def _read_accessor(gltf: dict, bin_data: bytes, index: int) -> list:
+    """One accessor's values as a flat list of numbers. Honors the
+    bufferView's byteStride (interleaved attributes) and the
+    accessor's own byteOffset; a tightly packed accessor unpacks in
+    one call. Sparse accessors are not supported - a sparse POSITION
+    is rare in exported meshes, and the node is skipped instead."""
+    acc = gltf["accessors"][index]
+    if "bufferView" not in acc or acc.get("sparse"):
+        raise ValueError(f"accessor {index} has no readable data")
+    view = gltf["bufferViews"][acc["bufferView"]]
+    comp = acc["componentType"]
+    n_comp = _TYPE_COUNTS[acc["type"]]
+    size = _COMPONENT_SIZES[comp]
+    fmt = _COMPONENT_FORMATS[comp]
+    elem_size = size * n_comp
+    stride = view.get("byteStride") or elem_size
+    base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    if stride == elem_size:
+        count = acc["count"] * n_comp
+        return list(struct.unpack_from(f"<{count}{fmt}", bin_data, base))
+    values: list = []
+    for i in range(acc["count"]):
+        values.extend(struct.unpack_from(
+            f"<{n_comp}{fmt}", bin_data, base + i * stride))
+    return values
+
+
+def glb_node_triangles(path: str | Path) -> dict[int, list]:
+    """Per-node triangles of a GLB, in shell coordinates (cm, z-up)
+    (v1.10, N52): the viewport draws the real mesh shape instead of
+    a box. Node translation (plus ancestors') and the node's own
+    scale are applied; rotations are NOT unfolded, the same
+    limitation as _ingest_glb's boxes. Only the first primitive of
+    each mesh is read, and only triangle primitives (mode 4, the
+    default). Returns {node index: [(a, b, c), ...]} with vertices
+    as (x, y, z) tuples in centimetres. A node past
+    MAX_VIEWPORT_TRIANGLES is sampled down with an even stride.
+    Nodes that cannot be read (no POSITION, no index data, a
+    non-triangle mode) are left out - the viewport draws their box.
+    Raises ValueError on a file that is not a readable GLB at all."""
+    gltf, bin_data = _read_glb_chunks(path)
+    nodes = gltf.get("nodes", [])
+    meshes = gltf.get("meshes", [])
+    parents = _gltf_parents(nodes)
+    out: dict[int, list] = {}
+    for i, node in enumerate(nodes):
+        if "mesh" not in node:
+            continue
+        if node["mesh"] >= len(meshes):
+            continue
+        prims = meshes[node["mesh"]].get("primitives", [])
+        if not prims:
+            continue
+        prim = prims[0]
+        if prim.get("mode", 4) != 4:
+            continue
+        pos_ref = (prim.get("attributes") or {}).get("POSITION")
+        if not isinstance(pos_ref, int):
+            continue
+        try:
+            positions = _read_accessor(gltf, bin_data, pos_ref)
+        except (KeyError, IndexError, struct.error, ValueError):
+            continue
+        verts = [(positions[k], positions[k + 1], positions[k + 2])
+                 for k in range(0, len(positions) - 2, 3)]
+        idx_ref = prim.get("indices")
+        if isinstance(idx_ref, int):
+            try:
+                indices = _read_accessor(gltf, bin_data, idx_ref)
+            except (KeyError, IndexError, struct.error, ValueError):
+                continue
+            tri_count = len(indices) // 3
+            triples = [(indices[k], indices[k + 1], indices[k + 2])
+                       for k in range(0, tri_count * 3, 3)]
+        else:
+            tri_count = len(verts) // 3
+            triples = [(k, k + 1, k + 2)
+                       for k in range(0, tri_count * 3, 3)]
+        if tri_count > MAX_VIEWPORT_TRIANGLES:
+            stride = -(-tri_count // MAX_VIEWPORT_TRIANGLES)
+            triples = triples[::stride]
+        scale = [float(v) for v in node.get("scale", [1, 1, 1])]
+        trans = _gltf_world_translation(nodes, parents, i)
+        tris = []
+        for a, b, c in triples:
+            if max(a, b, c) >= len(verts):
+                continue
+            tri = []
+            for vi in (a, b, c):
+                v = verts[vi]
+                gltf_v = [trans[k] + v[k] * scale[k] for k in range(3)]
+                tri.append(tuple(_gltf_to_shell(gltf_v)))
+            tris.append(tuple(tri))
+        if tris:
+            out[i] = tris
+    return out
 
 
 def ingest_obj(path: str | Path, workspace: str | Path | None = None) -> dict:
@@ -409,9 +575,17 @@ def ingest_blend(path: str | Path, workspace: str | Path | None = None) -> dict:
         script = Path(tmp) / "ingest_dump.py"
         script.write_text(_BLEND_DUMP_SCRIPT, encoding="utf-8")
         out_json = Path(tmp) / "objects.json"
-        proc = subprocess.run(
-            [exe, "--background", str(path), "--python", str(script), "--", str(out_json)],
-            capture_output=True, text=True, timeout=600)
+        try:
+            proc = subprocess.run(
+                [exe, "--background", str(path), "--python", str(script), "--", str(out_json)],
+                capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            # A 10-minute Blender read is a plain refusal, not a
+            # traceback (v1.10, N30) - the file may be very large or
+            # damaged, and the user hears that instead of a stack.
+            raise RuntimeError(
+                f"Blender took too long reading {path} (over 10 minutes) - "
+                "the file may be very large or damaged") from None
         if not out_json.exists():
             tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-6:])
             raise RuntimeError(f"Blender could not read {path}. Last lines:\n{tail}")
@@ -473,10 +647,15 @@ def ingest_fbx(path: str | Path, workspace: str | Path | None = None) -> dict:
         script = Path(tmp) / "ingest_fbx.py"
         script.write_text(_FBX_DUMP_SCRIPT, encoding="utf-8")
         out_json = Path(tmp) / "objects.json"
-        proc = subprocess.run(
-            [exe, "--background", "--python", str(script), "--",
-             str(path), str(out_json)],
-            capture_output=True, text=True, timeout=600)
+        try:
+            proc = subprocess.run(
+                [exe, "--background", "--python", str(script), "--",
+                 str(path), str(out_json)],
+                capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"Blender took too long reading {path} (over 10 minutes) - "
+                "the file may be very large or damaged") from None
         if not out_json.exists():
             tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-6:])
             raise RuntimeError(f"Blender could not read {path}. Last lines:\n{tail}")

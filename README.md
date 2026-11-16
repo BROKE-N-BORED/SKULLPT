@@ -1,4 +1,4 @@
-# SKULLPT — v1.9
+# SKULLPT - v1.10
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -60,6 +60,15 @@ anything starts. Gemini and Groq keys are pasted and validated in
 Settings, like the Hugging Face token, and a first-run Setup check
 lists anything still missing with a Fix button for each. Windows
 open maximized, and no text is ever clipped off an edge.
+v1.9 is the audit fixes (N1-N21): real cancel with live progress, an
+installer that fails honestly, Recipes in the Bench, the cloud mesh
+using the Settings token, and the web UI removed.
+v1.10 is the P2 audit fixes (N22-N50, N52-N54): the viewport draws
+real imported mesh geometry, character LODs keep their skins, the
+cloud mesh has a verified fallback Space, plans and chat cancel,
+damaged files fail in plain words, and the installer is hardened
+(pinned and verified Ollama script, cancellable, a new Blender only
+swaps in after it proves it runs).
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11, and the Bench opened there
 on 2026-11-14 (Settings window, Blender Ready); the full install,
@@ -285,10 +294,8 @@ is never modified.
 Copies the photo into `<workspace>/intake/`, measures it (real pixel
 dimensions parsed from the file), and creates a draft job whose
 description records it as the reference. The command prints the routes
-from a photo to a mesh — since v1.1 the first route is built in (the
-cloud mesh step below); the local SF3D/TripoSR draft route still ends
-at a GLB that returns through `ingest`.
-The shell does not itself convert photos to meshes.
+from a photo to a mesh — since v1.1 the built-in route is the cloud
+mesh step below.
 
 **Recipe graduation.** Filing an approved job now also graduates its
 description into `<workspace>/recipes/<job>.recipe.json`:
@@ -368,9 +375,10 @@ Default is on. A single job can override it either way with
 and the critique result record `"reference_compared": true/false`, so
 what actually happened is never a guess.
 
-What the image step does **not** do in v0.7: variations of a keeper
-(img2img) and guided generation (IP-Adapter / ControlNet) — the local
-stack supports both, and they are later additions, not silent gaps.
+Variations of a keeper (img2img, `vary`) and guided generation
+(IP-Adapter / ControlNet) shipped in v1.6. Batch size is a setting:
+`images ... --width 768 --height 512` generates at that size instead
+of the default square (v1.10).
 
 ## The Bench — the shell's window (v1.0: a native Linux desktop window)
 
@@ -379,52 +387,64 @@ menu (or the `skullpt` command). The terminal way, for reference:
 
     python3 -m skullpt bench ~/design-shell-workspace
 
-One window where the workshop lives — a real Linux desktop app
-(Qt/PySide6), not a web page, no browser involved. (The old web Bench
-was removed in v1.9.) Needs PySide6; `install.sh` installs it into
-the shell's private `.venv`, and the Bench says plainly if it is
-missing (re-run the installer).
+The Bench is nine windows where the workshop lives: a real Linux
+desktop app (Qt/PySide6), not a web page, no browser involved. (The
+old web Bench was removed in v1.9.) Needs PySide6; `install.sh`
+installs it into the shell's private `.venv`, and the Bench says
+plainly if it is missing (re-run the installer).
 
-The window is laid out in three panes:
-
-- **Left — project folders.** Jobs, Library, image batches, intake.
-  Clicking a job selects it everywhere. Engine status (Blender,
-  image engine, image model, Gemini key) sits under the folders,
-  and the new-job box: type what you want and the planner drafts the
-  description (needs the Gemini key), or start from a bundled
-  example.
-- **Center — the Live Render Window** for the selected job: a real
+- **Jobs** - home. Bento job cards, the selected-job strip, and the
+  chat panel. Type what you want in the new-job box and the planner
+  drafts the description (needs the Gemini key), or start from a
+  bundled example. The plan-gate buttons (**Approve** → **Build** →
+  **File into Library**) live here, with the last build verdict.
+- **Render** - the Live Render Window for the selected job: a real
   OpenGL viewport drawing the description's parts as true-scale 3D
-  shapes — boxes, cylinders, spheres, extrusions, lathe and tube
-  profiles, in their materials' colors. Drag to orbit, right-drag
+  shapes: boxes, cylinders, spheres, extrusions, lathe and tube
+  profiles, in their materials' colors. Imported mesh parts draw
+  their real geometry, not boxes (v1.10). Drag to orbit, right-drag
   to pan, scroll to zoom. **Frame** fits the whole scene; the camera
   dropdown jumps to a named scene camera; **Save camera** stores the
   current view into the job's description, so it travels with the
-  asset. The selected job's state, plan-gate buttons (**Approve** →
-  **Build** → **File into Library**), last build verdict, renders
-  (double-click one to open it), and a preview of the latest render
-  sit directly under the viewport.
-- **Right — chat.** Talk to the workshop: "make a market stall"
-  drafts a job and offers the Approve button inline; "picture of a
-  brass lamp" generates candidates; "mesh /home/xprnc/Pictures/stool.jpg"
-  turns a photo into a textured 3D mesh on Hugging Face's free GPU
-  ("mesh this photo" uses the selected job's reference photo);
-  "approve" / "build" / "file" act on the selected job; "retry" sends a
-  failed job back to approved so it can build again; "status"
-  reports. Commands work with no key at all, except the mesh step,
-  which needs HF_TOKEN. Open conversation goes to the planner seat
-  (Gemini) when its key is set — without it, the chat says so plainly
-  instead of faking a brain. The transcript is saved in the workspace
-  (`chat.jsonl`), so it survives a restart.
+  asset. Renders sit under the viewport (double-click one to open
+  it).
+- **Character Studio** - shapes a rigged human with MPFB2 inside
+  Blender (v1.7). The form works before the studio is installed;
+  only the skin picker waits for the skins to arrive (v1.10).
+- **Images** - image batches: generate candidates from a prompt,
+  keep or reject each one, vary a keeper.
+- **Library** - filed jobs, searchable, openable as new jobs.
+- **Recipes** - recipe manifests: apply one to draft a job, or
+  graduate an approved job into a recipe.
+- **Settings** - keys and the Hugging Face token (checked against
+  Hugging Face before it is saved, v1.10), render defaults,
+  workspace backup, update check.
+- **Help** - what each window does, in plain words.
+- **Setup check** - runs at first launch: Blender, the image engine,
+  Character Studio, Ollama, and what is missing, with an installer
+  button per gap.
+
+The chat (in Jobs) talks to the workshop: "make a market stall"
+drafts a job and offers the Approve button inline; "picture of a
+brass lamp" generates candidates; "mesh ~/Pictures/stool.jpg"
+turns a photo into a textured 3D mesh on Hugging Face's free GPU
+("mesh this photo" uses the selected job's reference photo);
+"approve" / "build" / "file" act on the selected job; "retry" sends a
+failed job back to approved so it can build again; "status"
+reports. Commands work with no key at all, except the mesh step,
+which needs HF_TOKEN. Open conversation goes to the planner seat
+(Gemini) when its key is set. Without it, the chat says so plainly
+instead of faking a brain. The transcript is saved in the workspace
+(`chat.jsonl`), so it survives a restart.
 
 Builds and generations run in the background; the chat reports back
 when one finishes, and a failure (say, the governor refusing
 because RAM is low) prints its plain reason instead of hanging or
 pretending.
 
-The bench is a face on the same functions the CLI calls — same jobs,
-same gate, same files. The CLI, the render window, and the picker
-all keep working exactly as before.
+The bench is a face on the same functions the CLI calls: same jobs,
+same gate, same files. The CLI and the picker keep working exactly
+as before.
 
 ## v1.1 — the cloud mesh step (photo → textured 3D mesh)
 
@@ -436,7 +456,7 @@ account; a mesh takes 3–8 minutes of wall time, most of it queue.
 
     python3 -m skullpt cloud-mesh <workspace> photo.jpg
     python3 -m skullpt cloud-mesh <workspace> photo.jpg --job my-chair
-    # or in the Bench chat:  mesh /home/xprnc/Pictures/stool.jpg
+    # or in the Bench chat:  mesh ~/Pictures/stool.jpg
     #                        mesh this photo   (selected job's reference)
 
 The photo is uploaded to the Space (background removed there, then
@@ -530,6 +550,47 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.10 - The P2 audit fixes (N22-N50, N52-N54)
+
+- **The viewport draws real meshes (N52).** Imported mesh parts used
+  to draw as boxes; the Render window now reads the GLB and draws
+  the real triangles (indexed and non-indexed, strided attributes,
+  node scale and translation), cached per file so a re-exported
+  mesh redraws. A part whose mesh is missing still draws its box.
+- **Character LODs keep their skins (N53).** The audit said the old
+  LODs were unskinned; a check against real Blender 4.5.9 on a real
+  MPFB human showed they already kept their skins. The real defect
+  was bevel baking: the default "soften" bevel inflated LODs past
+  the main GLB (a 12-tri box became 54 tris at lod1). Bevels are
+  now hidden for the LOD pass, so LODs are smaller than the main
+  GLB as they should be.
+- **A verified cloud-mesh fallback (N54).** 99 public TRELLIS.2
+  clones were probed; `cpuai/TRELLIS-2` is healthy (running, same
+  endpoints as the primary) and is now the fallback Space when the
+  primary is down. Set `DESIGNSHELL_CLOUDMESH_FALLBACK_URL=none`
+  to turn it off.
+- **Plans and chat cancel (N50).** Cancelling a plan or a chat reply
+  now stops the live-seat call at once instead of waiting for the
+  provider to answer; a cancelled vision call returns the job to
+  approved instead of stranding it.
+- **Plain words for damaged files (N22-N24).** A damaged seats,
+  description, or job file says so plainly instead of crashing on a
+  traceback; a damaged library index rebuilds itself from the
+  per-folder manifests.
+- **Smaller fixes.** Style colors are validated (a hex surface, a
+  hex or named accent/text); description snapshots rotate (5 kept);
+  `sits_on` checks real footprint overlap; the game-ready gate
+  accepts the `max_triangles` alias; the run list shows running and
+  queued runs plus the last finished ones; ingest guards against
+  malformed GLBs and slow Blender reads; the critic judges at most
+  8 renders and names the ones it skipped; image batches take a
+  width and height; the HF token is checked against Hugging Face
+  before it is saved; backups and model pulls run off the UI thread
+  with progress; the installer reports its exit code; Character
+  Studio's form works before the studio is installed; saving a
+  camera no longer re-frames the view; the log lives in
+  `<workspace>/skullpt.log` and the debug report carries its tail.
 
 ## v1.9 — The audit fixes (N1–N21 + N51 + N55)
 
@@ -664,8 +725,9 @@ there). The first real mesh happens on a machine with a token.
   props. The renders are judged by the critic like any scene's.
   The viewport shows a mannequin at the human's height and build
   until the real renders land — it is a stand-in, and the Render
-  window says so when it is clicked. Character LODs are baked
-  (decimated, unskinned) in this version.
+  window says so when it is clicked. Character LODs keep their
+  skins and rig like the main mesh, and bevels are left out of the
+  LOD pass so LODs stay smaller than the main GLB.
 - **Rigs.** GameEngine (the default), Default, CMU motion
   capture, Mixamo, Mixamo Unity, OpenPose, and Rigify, with the
   no-toes and with-breast variants. Rigify rigs make the exporter
@@ -796,13 +858,12 @@ served this as a web page were removed in v1.9.)
 
     python3 -m unittest discover -s tests
 
-108 fast tests + end-to-end builds: description validation
+674 tests + end-to-end builds: description validation
 (incl. cameras, shapes, extrude/lathe/tube profiles, materials,
 textures, repeat/mirror), expansion math, constraint checks (a floating
 lamp fails), budget gate, heavy-job lock, the plan gate, the full build
 to library loop, critic honesty, the render window (geometry incl. true
-shapes, camera save/delete, self-contained page whose script passes a
-syntax check, live server round-trip), the making engine (script
+shapes and real imported meshes, camera save/delete), the making engine (script
 generation compiles and carries every part/camera/shape, missing
 Blender fails loud, binary output signatures, stale outputs from a
 previous build never pass for a new one), the game-ready gate, live
@@ -838,12 +899,11 @@ model are installed.
   build sandbox — the cloud mesh wiring is verified against a local
   mock Gradio server implementing the same API shapes. The first real
   mesh happens on a machine with a token.
-- No Character studio yet (MPFB2 route) — designed for v1.7, not
-  built. Building a character or project job fails loudly and says
-  so, instead of "succeeding" with no outputs.
-- The standalone render window (`view`) and the image picker are
-  still local web pages served by the shell itself — only the Bench
-  went native in v1.0.
+- The standalone render window (`view`) was removed in v1.9 - the
+  Render window in the Bench is the viewport now. The image picker
+  is still a local web page served by the shell itself, kept
+  deliberately: the Code Forge bridge drives it from the phone
+  browser.
 
 ## Layout
 
@@ -851,8 +911,9 @@ model are installed.
                    constraints, expand, recipes, exporters, blender_export,
                    checks, gameready, critic, seats, live, library,
                    builder, viewer, ingest, intake, graduate, unreal,
-                   imagegen, picker, settings, bench, qtbench, cloudmesh,
-                   cli)
+                   imagegen, picker, settings, bench, qtbench, qtwindows,
+                   qtdesign, cloudmesh, blender_character, tokenfile,
+                   keycheck, ollama, update, subproc, backup, applog, cli)
     designshell/   compatibility shim — forwards to skullpt, so the
                    Forge bridge and old `python3 -m designshell` commands
                    keep working

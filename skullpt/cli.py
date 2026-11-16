@@ -32,8 +32,11 @@ Commands:
   recipes <workspace>                    list graduated recipes
   apply-recipe <workspace> <file> [out]  start a description from a graduated recipe
   unreal-package <workspace> <job>       assemble the Unreal import package for a built job
-  images <workspace> <prompt...> [--job J] [--count 3]
+  images <workspace> <prompt...> [--job J] [--count 3] [--size 512]
+                       [--width W] [--height H]
                                          generate a batch of candidate reference images
+                                         (square by default; --width/--height for
+                                         portrait or landscape)
   pick <batch-dir> [--port N]            serve the Image Picker (keep / reject)
   decide <batch-dir> <file> keep|reject  decide a candidate from the terminal
   reroll <batch-dir>                     generate another round into the same batch
@@ -45,15 +48,17 @@ Commands:
                        [--render-resolution N] [--render-samples N]
                        [--render-denoise on|off]
                                          show or set workspace switches
-  backup <workspace> [dest]              zip the whole workspace (the Hugging
-                                         Face token is never in a backup)
+  backup <workspace> [dest]              zip the whole workspace (your keys
+                                         are never in a backup)
   update-check                           is there a newer SKULLPT release?
                                          (read-only - never downloads)
   bench [workspace]                      open the Bench - the shell's window,
                                          a native Linux desktop window
-                                         (Jobs home, Render, Images, Library,
-                                         Settings); no workspace means the
-                                         folder chosen in Settings, else
+                                         (Jobs home, Render, Character
+                                         Studio, Images, Library, Recipes,
+                                         Settings, Setup check, Help);
+                                         no workspace means the folder
+                                         chosen in Settings, else
                                          ~/design-shell-workspace
 """
 from __future__ import annotations
@@ -112,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("images"); p.add_argument("workspace")
     p.add_argument("prompt", nargs="+"); p.add_argument("--job", default=None)
     p.add_argument("--count", type=int, default=3); p.add_argument("--size", type=int, default=512)
+    p.add_argument("--width", type=int, default=None)
+    p.add_argument("--height", type=int, default=None)
     p = sub.add_parser("pick"); p.add_argument("batch_dir")
     p.add_argument("--port", type=int, default=8762)
     p = sub.add_parser("decide"); p.add_argument("batch_dir"); p.add_argument("file")
@@ -133,6 +140,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("update-check")
     p = sub.add_parser("bench"); p.add_argument("workspace", nargs="?", default=None)
     args = ap.parse_args(argv)
+
+    from . import applog
+    applog.install_excepthook()
+    if getattr(args, "workspace", None):
+        applog.setup(args.workspace)
 
     try:
         if args.cmd == "init":
@@ -192,7 +204,21 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"cannot file from state {job.state!r} (needs awaiting_review)", file=sys.stderr)
                 return 1
             build_report_path = job.dir / "build-report.json"
-            report_data = json.loads(build_report_path.read_text()) if build_report_path.exists() else {"outputs": sorted(p.name for p in job.output_dir.iterdir()), "recipes": []}
+            if build_report_path.exists():
+                try:
+                    report_data = json.loads(build_report_path.read_text())
+                except json.JSONDecodeError as exc:
+                    # A damaged build report must not block filing
+                    # (v1.10, N22): warn plainly and fall back to the
+                    # output listing, the same as when no report exists.
+                    print(f"build-report.json is damaged - it is not valid JSON "
+                          f"({exc.msg}, line {exc.lineno}); filing from the "
+                          f"output files instead", file=sys.stderr)
+                    report_data = {"outputs": sorted(p.name for p in job.output_dir.iterdir()),
+                                   "recipes": []}
+            else:
+                report_data = {"outputs": sorted(p.name for p in job.output_dir.iterdir()),
+                               "recipes": []}
             thumb = next((o for o in report_data.get("outputs", []) if o.endswith(".png")), None)
             if thumb is None:
                 thumb = next((o for o in report_data.get("outputs", []) if o.endswith(".svg")), None)
@@ -340,7 +366,8 @@ def main(argv: list[str] | None = None) -> int:
             prompt = " ".join(args.prompt)
             try:
                 batch, bdir = imagegen.new_batch(ws, prompt, job=args.job,
-                                                 count=args.count, size=args.size)
+                                                 count=args.count, size=args.size,
+                                                 width=args.width, height=args.height)
                 batch = imagegen.generate(ws, bdir)
             except imagegen.ImageGenError as exc:
                 print(str(exc), file=sys.stderr)
@@ -470,7 +497,12 @@ def main(argv: list[str] | None = None) -> int:
             ws = _ws(args.workspace) if args.workspace else _ws(default_workspace())
             return qt_main(ws)
         return 0
-    except (GateError, desc_mod.DescriptionError) as exc:
+    except (GateError, ValueError) as exc:
+        # A plain ValueError (a damaged seats file, a damaged job
+        # file, no such job) is a plain CLI error, not a traceback
+        # (v1.10, N22). DescriptionError is a ValueError, so it is
+        # covered here too.
+        applog.get_logger().error("command %s failed: %s", args.cmd, exc)
         print(str(exc), file=sys.stderr)
         return 2
 

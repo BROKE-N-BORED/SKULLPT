@@ -13,6 +13,7 @@ next to the asset so the asset can be re-made or varied later.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 KINDS = ("ui_component", "website", "graphic", "character", "scene", "project")
@@ -48,6 +49,45 @@ CHARACTER_DEFAULT_RIG = "game_engine"
 CHARACTER_TRIANGLE_ESTIMATE = 34048
 REQUIRED_TOP = ("name", "kind", "parts")
 PART_REQUIRED = ("id", "type")
+# Style tokens (v1.10, N23): surface/accent/text are colors. `surface`
+# is parsed as hex by the Blender exporter (_hex_rgb), so it must be
+# #RRGGBB; `accent`/`text` feed the SVG exporter too, so a CSS color
+# name is also fine there. Anything else (a bad hex, a number, a
+# made-up word) is a validation problem, caught here instead of
+# crashing the build with a bare ValueError.
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+# Common CSS color names (the 16 base colors plus the extended names
+# a planner or a user would plausibly write). Matching is
+# case-insensitive; the full CSS list is 148 names, and anything
+# outside this set should be written as #RRGGBB.
+NAMED_COLORS = frozenset({
+    "black", "silver", "gray", "grey", "white", "maroon", "red",
+    "purple", "fuchsia", "magenta", "green", "lime", "olive", "yellow",
+    "navy", "blue", "teal", "aqua", "cyan", "orange", "pink", "brown",
+    "gold", "beige", "ivory", "coral", "salmon", "khaki", "lavender",
+    "indigo", "violet", "turquoise", "tan", "plum", "orchid", "peru",
+    "sienna", "crimson", "tomato", "skyblue", "steelblue", "royalblue",
+    "seagreen", "forestgreen", "darkgreen", "darkblue", "darkred",
+    "lightblue", "lightgreen", "lightgray", "lightgrey", "darkgray",
+    "darkgrey", "dimgray", "dimgrey", "slategray", "slategrey",
+    "chocolate", "sandybrown", "firebrick", "indianred", "orangered",
+    "darkorange", "deeppink", "hotpink", "lightpink", "mediumpurple",
+    "blueviolet", "darkviolet", "rebeccapurple", "cadetblue",
+    "aquamarine", "chartreuse", "springgreen", "limegreen",
+    "mediumseagreen", "darkcyan", "deepskyblue", "dodgerblue",
+    "midnightblue", "darkslategray", "darkslategrey", "lightsalmon",
+    "peachpuff", "mistyrose", "lavenderblush", "cornsilk",
+    "lemonchiffon", "lightyellow", "palegreen", "paleturquoise",
+    "lightcyan", "aliceblue", "ghostwhite", "whitesmoke", "seashell",
+    "linen", "antiquewhite", "blanchedalmond", "bisque", "moccasin",
+    "navajowhite", "wheat", "burlywood", "rosybrown", "darkgoldenrod",
+    "goldenrod", "palegoldenrod", "darkkhaki", "yellowgreen",
+    "olivedrab", "darkolivegreen", "lawngreen", "greenyellow",
+    "mediumaquamarine", "lightseagreen", "darkturquoise",
+    "mediumturquoise", "powderblue", "cornflowerblue", "slateblue",
+    "mediumslateblue", "darkslateblue", "mediumorchid", "thistle",
+    "palevioletred", "mediumvioletred",
+})
 
 
 class DescriptionError(ValueError):
@@ -199,6 +239,33 @@ def validate(desc: dict) -> list[str]:
     rubric = desc.get("rubric", []) or []
     if not isinstance(rubric, list) or not all(isinstance(r, str) for r in rubric):
         problems.append("rubric must be a list of strings")
+    # Style tokens (v1.10, N23): the known tokens are colors. `surface`
+    # must be #RRGGBB (the Blender exporter parses it as hex);
+    # `accent`/`text` may be #RRGGBB or a CSS color name (the SVG
+    # exporter accepts names). Unknown style keys pass - the style
+    # block is open for future tokens.
+    style = desc.get("style")
+    if style is not None:
+        if not isinstance(style, dict):
+            problems.append("style must be an object")
+        else:
+            for token, value in style.items():
+                if token not in ("surface", "accent", "text"):
+                    continue
+                if not isinstance(value, str):
+                    problems.append(
+                        f"style.{token} must be a color string, got {value!r}")
+                    continue
+                if _HEX_COLOR.match(value):
+                    continue
+                if token == "surface":
+                    problems.append(
+                        f"style.surface must be a #RRGGBB hex color, got {value!r} "
+                        "(the Blender exporter reads it as hex)")
+                elif value.lower() not in NAMED_COLORS:
+                    problems.append(
+                        f"style.{token} must be a #RRGGBB hex color or a color "
+                        f"name, got {value!r}")
     # Render settings (v1.6, T25): how the renders are made, not what
     # is built - so changing them never re-opens the plan gate.
     render = desc.get("render")
@@ -342,7 +409,14 @@ def estimate_description_triangles(desc: dict) -> int:
 
 def load(path: str | Path) -> dict:
     """Load and validate a Description File from disk."""
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        # A damaged file is a plain error, not a traceback (v1.10,
+        # N22): the user hears the file is damaged and where.
+        raise DescriptionError(
+            f"this file is damaged - {path} is not valid JSON "
+            f"({exc.msg}, line {exc.lineno})") from exc
     problems = validate(data)
     if problems:
         raise DescriptionError("Invalid Description File:\n- " + "\n- ".join(problems))

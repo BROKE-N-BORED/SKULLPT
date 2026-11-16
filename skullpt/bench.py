@@ -91,6 +91,7 @@ def _start_run(kind: str, label: str, fn, queue: str | None = None) -> str:
 def _launch_run(run_id: str, fn, cancel: threading.Event, queue: str | None) -> None:
     """Start a run's thread (shared by _start_run and the queue drain)."""
     from .governor import Cancelled
+    from .live import SeatCancelled
 
     def report(fraction, text: str = "") -> None:
         with _RUNS_LOCK:
@@ -117,11 +118,24 @@ def _launch_run(run_id: str, fn, cancel: threading.Event, queue: str | None) -> 
                 run = _RUNS.get(run_id)
                 if run is not None:
                     run.update(status="cancelled", detail=str(exc))
-        except Exception as exc:  # surfaced in the Bench chat, never swallowed
+        except SeatCancelled as exc:
+            # A cancelled seat call (plan/chat, v1.10 N50) is a
+            # cancellation, not an error - same as governor.Cancelled.
             with _RUNS_LOCK:
                 run = _RUNS.get(run_id)
                 if run is not None:
+                    run.update(status="cancelled", detail=str(exc))
+        except Exception as exc:  # surfaced in the Bench chat, never swallowed
+            label = ""
+            with _RUNS_LOCK:
+                run = _RUNS.get(run_id)
+                if run is not None:
+                    label = f"{run.get('kind')} {run.get('label')}"
                     run.update(status="error", detail=str(exc))
+            from . import applog
+
+            applog.get_logger().error("run %s (%s) failed: %s",
+                                      run_id, label, exc)
         finally:
             if queue is not None:
                 _drain_queue(queue)
@@ -199,13 +213,23 @@ def cancel_run(run_id: str) -> bool:
 
 
 def _runs() -> list[dict]:
+    """Runs for the windows: every run still going (running,
+    cancelling, queued) plus the last 8 finished ones (v1.10, N29).
+    The old last-8 truncation could orphan a still-pending run over
+    a long session, so the poller showed Idle while it ran and never
+    reported its completion. Order stays chronological."""
     with _RUNS_LOCK:
+        runs = list(_RUNS.values())
+        active = {"running", "cancelling", "queued"}
+        finished = [r for r in runs if r["status"] not in active]
+        keep = {id(r) for r in finished[-8:]}
         out = []
-        for run in list(_RUNS.values())[-8:]:
-            # The cancel Event, the queued function and the queue name
-            # are not JSON-able - the windows never see them.
-            out.append({k: v for k, v in run.items()
-                        if k not in ("_cancel", "_fn", "_queue")})
+        for run in runs:
+            if run["status"] in active or id(run) in keep:
+                # The cancel Event, the queued function and the queue name
+                # are not JSON-able - the windows never see them.
+                out.append({k: v for k, v in run.items()
+                            if k not in ("_cancel", "_fn", "_queue")})
         return out
 
 
@@ -430,8 +454,12 @@ def _workspace_state_files(workspace: Path) -> dict:
     library = []
     try:
         library = Library(workspace / "library").search("")
-    except Exception:
-        library = []
+    except Exception as exc:
+        # Never silently skip (U32): a library that cannot be read at
+        # all (the index rebuild in library.py already tried) is
+        # listed with its reason, not vanished (v1.10, N24).
+        skipped.append({"where": "library", "name": "index.json",
+                        "reason": str(exc)[:200]})
     return {
         "workspace": str(workspace),
         "jobs": jobs,
@@ -485,8 +513,10 @@ def _job(workspace: Path, name: str) -> Job:
     return Job(job_dir)
 
 
-def act(workspace: Path, action: str, payload: dict) -> dict:
-    """Run one bench action; returns a JSON-able result dict."""
+def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
+    """Run one bench action; returns a JSON-able result dict. `cancel`,
+    when given, is a threading.Event the plan action passes to the
+    seat call, so cancelling a draft actually stops it (v1.10, N50)."""
     if action == "approve":
         job = _job(workspace, str(payload.get("job", "")))
         job.approve()
@@ -588,8 +618,21 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         if job.state != "awaiting_review":
             raise ValueError(f"cannot file from state {job.state!r} (needs awaiting_review)")
         report_path = job.dir / "build-report.json"
-        report = (json.loads(report_path.read_text()) if report_path.exists()
-                  else {"outputs": sorted(p.name for p in job.output_dir.iterdir())})
+        if report_path.exists():
+            try:
+                report = json.loads(report_path.read_text())
+            except json.JSONDecodeError:
+                # A damaged build report must not block filing (v1.10,
+                # N22): fall back to the output listing, the same as
+                # when no report exists.
+                from . import applog
+
+                applog.get_logger().warning(
+                    "build-report.json for %s is damaged - filing from "
+                    "the output files instead", job.dir.name)
+                report = {"outputs": sorted(p.name for p in job.output_dir.iterdir())}
+        else:
+            report = {"outputs": sorted(p.name for p in job.output_dir.iterdir())}
         # The thumbnail is the first render PNG when there is one - a
         # picture of the thing, not the SVG mock. (v1.3 took the .svg.)
         thumb = next((o for o in report.get("outputs", []) if o.endswith(".png")), None)
@@ -609,7 +652,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         if not words:
             raise ValueError("type what you want first")
         desc = live.plan_from_words(words, seats, kind=str(payload.get("kind", "scene")),
-                                  workspace=workspace)
+                                  workspace=workspace, cancel=cancel)
         job = Job.create(workspace / "jobs", desc)
         detail = f"draft job created: {job.dir.name} - approve it to build"
         used = live.last_plan_seat()
@@ -698,7 +741,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         photo = str(payload.get("photo", "")).strip()
         if not photo:
             raise ValueError("give the photo's path - e.g. "
-                             "/home/xprnc/Pictures/stool.jpg")
+                             "~/Pictures/stool.jpg")
         # A bare name resolves against the workspace first, then as-is.
         candidate = Path(photo).expanduser()
         if not candidate.is_file() and not candidate.is_absolute():
@@ -925,6 +968,15 @@ def debug_report(workspace: Path, job: str | None = None) -> str:
         for run in runs[-5:]:
             lines.append(f"  {run['kind']} {run['label']}: {run['status']}"
                          + (f" - {run['detail']}" if run.get("detail") else ""))
+    # The app log's tail (v1.10, N39): what the app did most recently,
+    # so a problem can be diagnosed from the report alone. Scrubbed
+    # with the rest of the report below.
+    from . import applog
+
+    recent = applog.tail(30)
+    if recent:
+        lines.append("recent log (last 30 lines):")
+        lines.extend(f"  {line}" for line in recent)
     text = "\n".join(lines) + "\n"
     # Defensive scrub: a token pasted into a log line must never leave
     # in a report the user sends on.
@@ -1033,11 +1085,17 @@ def parse_plan_words(message: str) -> str | None:
     return match.group(3).strip() or None
 
 
-def chat_reply(workspace: Path, message: str, selected: str | None = None) -> dict:
+def chat_reply(workspace: Path, message: str, selected: str | None = None,
+               cancel=None) -> dict:
     """One chat turn: commands route to the same act() the buttons use;
     open conversation goes to the planner seat when its key is set, and
-    says so plainly when it is not. Returns {reply, actions}."""
+    says so plainly when it is not. Returns {reply, actions}. `cancel`,
+    when given, is a threading.Event passed to the seat calls, so
+    cancelling a chat turn actually stops it (v1.10, N50) - a
+    cancellation raises SeatCancelled instead of becoming a reply."""
     import re
+
+    from . import live
 
     text = message.strip()
     low = text.lower()
@@ -1084,7 +1142,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
                     photo_arg = ""
             if not photo_arg:
                 return {"reply": ("Give me the photo's path - e.g. "
-                                  "\"mesh /home/xprnc/Pictures/stool.jpg\" - "
+                                  "\"mesh ~/Pictures/stool.jpg\" - "
                                   "or select a job that has a reference photo "
                                   "and say \"mesh this photo\"."),
                         "actions": actions}
@@ -1120,13 +1178,16 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
     words = parse_plan_words(text)
     if words:
         try:
-            result = act(workspace, "plan", {"words": words, "kind": "scene"})
+            result = act(workspace, "plan", {"words": words, "kind": "scene"},
+                         cancel=cancel)
             job_name = result["job"]
             actions.append(action_button("Approve it", "approve", {"job": job_name}))
             return {"reply": f"Drafted a job from that: {job_name}. It's waiting at the "
                              "plan gate - nothing builds until you approve it. The "
                              "summary is in the Jobs list below.",
                     "actions": actions}
+        except live.SeatCancelled:
+            raise
         except Exception as exc:
             return {"reply": str(exc), "actions": actions}
 
@@ -1153,7 +1214,6 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
     # seat second (T20). When neither brain can answer, the reply
     # says so plainly instead of faking one.
     try:
-        from . import live
         from .seats import load_seats
         seats_path = workspace / "seats.json"
         seats = load_seats(seats_path if seats_path.exists() else None)
@@ -1166,12 +1226,15 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
                    "plainly. If the user wants something made, tell them to start "
                    "their message with 'make'.")
         answer, role, _err = live.text_with_fallback(
-            seats, context + "\n\nUser: " + text, workspace=workspace)
+            seats, context + "\n\nUser: " + text, workspace=workspace,
+            cancel=cancel)
         reply = answer.strip() or "(the planner seat answered with nothing)"
         if role == "fallback":
             reply += (" (answered by the local fallback model - "
                       "the Gemini seat could not be reached)")
         return {"reply": reply, "actions": actions}
+    except live.SeatCancelled:
+        raise
     except Exception as exc:
         from .live import SeatNotConfigured
         if isinstance(exc, SeatNotConfigured):

@@ -15,6 +15,7 @@ from . import description as desc_mod
 from . import exporters, governor
 from .critic import CriticNotConfigured, get_critic
 from .jobs import Job
+from .live import SeatCancelled
 from .seats import load_seats
 
 MAX_VISION_ROUNDS = 2
@@ -32,8 +33,9 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     the Blender exporter re-runs, and the critic looks again - at most
     MAX_VISION_ROUNDS rounds (blueprint cap).
     Returns (critique, rounds) where rounds records every patch applied.
-    `cancel` is a threading.Event checked before each patch round;
-    a set event raises governor.Cancelled.
+    `cancel` is a threading.Event checked before each patch round and
+    passed to the vision call itself (v1.10, N50); a set event raises
+    governor.Cancelled between rounds or SeatCancelled mid-call.
     """
     from . import live
 
@@ -54,7 +56,8 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
                 reference_png = ref_path.read_bytes()
 
     try:
-        critique = critic.critique(desc, preview_paths, reference_png=reference_png)
+        critique = critic.critique(desc, preview_paths, reference_png=reference_png,
+                                   cancel=cancel)
     except CriticNotConfigured as exc:
         critique = get_critic(seats).critique(desc, preview_paths)
         critique["note"] += f" (vision critic unavailable: {exc})"
@@ -100,7 +103,8 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
         preview_paths = [str(job.output_dir / o) for o in outputs
                          if o.endswith((".svg", ".html", ".png"))]
         try:
-            critique = critic.critique(desc, preview_paths, reference_png=reference_png)
+            critique = critic.critique(desc, preview_paths, reference_png=reference_png,
+                                       cancel=cancel)
         except CriticNotConfigured:
             break
     return critique, rounds
@@ -123,6 +127,9 @@ def build_job(job: Job, workspace: Path, seats_path=None,
     """
     job.require_approved()  # the Plan Gate - nothing builds unapproved
     desc = job.load_description()
+    from . import applog
+
+    applog.get_logger().info("build started: %s", job.dir.name)
 
     # Render settings (T25): the job's own block wins, then the
     # workspace defaults, then the code defaults. Stamped onto the
@@ -136,6 +143,7 @@ def build_job(job: Job, workspace: Path, seats_path=None,
     budget_problems = governor.check_budget(desc)
     if budget_problems:
         job.fail("budget: " + "; ".join(budget_problems))
+        applog.get_logger().info("build refused (budget): %s", job.dir.name)
         return {"ok": False, "stage": "budget", "problems": budget_problems}
 
     # A kind with no exporters (project - no studio yet; character got
@@ -146,6 +154,7 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         reason = (f"no exporter for kind {desc['kind']!r} yet - "
                   "nothing was built, so there is nothing to check")
         job.fail(reason)
+        applog.get_logger().info("build refused (no exporter): %s", job.dir.name)
         return {"ok": False, "stage": "exporters", "problems": [reason]}
 
     lock = governor.HeavyJobLock(workspace / ".heavy.lock")
@@ -184,6 +193,8 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         return {"ok": False, "stage": "governor", "problems": [str(exc)]}
     except Exception as exc:  # exporter blew up - record it, don't hide it
         job.fail(f"export: {type(exc).__name__}: {exc}")
+        applog.get_logger().error("build failed (export): %s: %s",
+                                  job.dir.name, exc)
         return {"ok": False, "stage": "export", "problems": [str(exc)]}
 
     if cancel is not None and cancel.is_set():
@@ -211,10 +222,11 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         critique, vision_rounds = _run_critic(job, desc, outputs, seats, preview_paths,
                                               workspace=workspace,
                                               cancel=cancel, progress=progress)
-    except governor.Cancelled:
+    except (governor.Cancelled, SeatCancelled):
         # Cancelled mid-check or mid-critic: the job goes back to
         # approved, like a cancelled export - never stranded in
-        # "checking" with no way back.
+        # "checking" with no way back. A SeatCancelled from the vision
+        # call is a cancellation too (v1.10, N50).
         job.log("cancelled")
         job.transition("approved")
         raise
@@ -238,6 +250,8 @@ def build_job(job: Job, workspace: Path, seats_path=None,
     if vision_rounds:
         report["vision_loop"] = vision_rounds
     job.log("checked", ok=overall_ok)
+    applog.get_logger().info("build %s: %s",
+                             "passed" if overall_ok else "failed", job.dir.name)
     if overall_ok:
         job.transition("awaiting_review")
     elif not report_checks["ok"]:
