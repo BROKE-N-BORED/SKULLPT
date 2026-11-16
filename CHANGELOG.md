@@ -1,5 +1,57 @@
 # SKULLPT — Changelog
 
+## v1.13 - 2026-11-16 - The material system, phase 3 and final (M12-M14)
+
+The PolyOrganic-inspired material system, final phase: PBR pack
+baking, quality tiers, and true displacement. Nothing of
+PolyOrganic itself is used - it is a closed $29 add-on with no
+repo; the ideas are implemented from scratch here. The design doc's
+metallic note (§4g, "metallic is not baked separately") is
+deliberately overridden here: the task list asks for metallic
+where the family uses it, and metallic is always a constant per
+part, so its map is a flat grayscale PNG written host-side - no
+Blender pass is faked for it.
+
+- M12: PBR pack baking. After a job is built, Bake PBR maps
+  (Render window, or `bake <workspace> <job>` on the command
+  line) bakes each object material into colour, roughness,
+  normal and height maps in the job's output folder (Cycles, 1
+  sample, CPU; one material at a time, one map at a time, one
+  image in memory at a time), plus a flat metallic PNG where the
+  family uses it. Bake resolution is capped at 1024 and follows
+  the material tier (Draft 256, Balanced 512, Final 1024). The
+  bake report lands in bake-report.json and merges into the
+  build report; the maps travel into the Unreal package, and the
+  import script brings them into Unreal alongside the model
+  (colour maps sRGB, the data maps not). Named gap: glass does
+  not bake - its look comes from transmission, not surface maps
+  - and the bake report records it with the reason.
+- M13: quality tiers. Draft / Balanced / Final, per job (the
+  Render window's Material quality control, saved with the
+  render settings) or as a workspace default (Settings, or
+  `settings --material-tier`). Draft drops the wear layer, the
+  knots/chips/frost branches, and one fine-detail node per
+  family; Balanced is the full recipe; Final adds one
+  fine-detail noise node plus a merge node to the bump chain
+  and bakes at 1024. The build report lists the tier used and
+  the node counts; the dial's previews use Draft. The pruning is
+  systematic (materials.node_count is tier-aware, and the recipe
+  branches on the same conditions), so predicted and measured
+  counts still agree.
+- M14: true displacement, opt-in per material, off by default
+  (a checkbox in the part editor, only for object materials).
+  The part is subdivided at level 2 (SIMPLE, 16x triangles) and
+  the bump height drives the Material Output's Displacement
+  socket. The triangle budget gate counts the denser mesh, and
+  the build turns displacement off with a plain note (in the
+  build report and the job log) when free RAM is below the
+  governor's floor plus a 512 MB margin - the setting stays on
+  in the description. Honest limits: glTF cannot carry true
+  displacement, so the GLB holds the dense mesh and the
+  displacement itself shows in Cycles renders only; a material
+  with no bump chain (glass without frost) cannot displace, and
+  the build report says so.
+
 ## v1.12 - 2026-11-16 - The material system, phase 2 (M7-M11)
 
 The PolyOrganic-inspired material system, second phase: ten more

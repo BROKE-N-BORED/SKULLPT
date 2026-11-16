@@ -1,11 +1,12 @@
-"""Parametric materials (v1.12, M7-M11): the PolyOrganic-inspired
-material system, phase 2.
+"""Parametric materials (v1.13, M12-M14): the PolyOrganic-inspired
+material system, phase 3 (final).
 
 A material in a description is either the old string form ("wood",
 "metal", a #hex) or an OBJECT spec:
 
     {"family": "wood", "style": "walnut", "layout": "boards",
-     "params": {"seed": 42, "knots": 0.6}, "wear": {"dirt": 0.2}}
+     "params": {"seed": 42, "knots": 0.6}, "wear": {"dirt": 0.2},
+     "displacement": false}
 
 The string form keeps working exactly as before. The object form is
 validated against closed vocabularies here: only families, styles,
@@ -36,6 +37,17 @@ stats.json so a test can prove predicted == measured. The wear
 group's internal nodes live inside the group, not in the material:
 each worn material costs one group node, and the group's own count
 is reported separately as wear_nodes.
+
+v1.13 adds quality tiers (M13): Draft drops the expensive chains -
+the wear layer, the knots/chips/frost branches, and one fine-detail
+node per family where the look survives without it; Balanced is the
+full recipe; Final adds one fine-detail noise node plus a merge node
+to the bump chain. The tier is a per-job setting (workspace default
++ per-job override, like the render settings); previews use Draft
+unless the caller asks otherwise. v1.13 also adds the displacement
+opt-in (M14): a per-material boolean, off by default, CPU-gated at
+build time. The node counts in this module are tier-aware, and the
+Blender build still records the measured counts in stats.json.
 """
 from __future__ import annotations
 
@@ -48,6 +60,49 @@ from pathlib import Path
 PRESETS_FILENAME = "materials.json"
 PREVIEW_DIRNAME = "material-previews"
 PREVIEW_CACHE_LIMIT = 20
+
+# ---------------------------------------------------------------- quality tiers (v1.13, M13)
+
+TIERS = ("draft", "balanced", "final")
+DEFAULT_TIER = "balanced"
+
+# Bake resolution per tier (v1.13, M12/M13): Draft bakes small and
+# fast, Balanced is the default, Final uses the 1024 cap. 8K bakes
+# are not shipped - his PC.
+BAKE_RESOLUTIONS = {"draft": 256, "balanced": 512, "final": 1024}
+BAKE_RESOLUTION_MAX = 1024
+
+# Nodes Draft drops per family (v1.13, M13): one fine-detail node
+# whose absence the look survives. wood drops the blotch noise and
+# its range node (2); stone/marble/concrete/fabric/leather/ground
+# drop one detail noise each (marble's distort needs its scale node
+# too, so 2); brick/metal/paint/glass keep their single noise - it
+# IS the look. Draft also drops the wear layer and the knots, chips
+# and frost branches (handled in node_count, not here).
+_DRAFT_DROP: dict[str, int] = {
+    "wood": 2, "brick": 0, "stone": 1, "marble": 2, "concrete": 1,
+    "metal": 0, "fabric": 1, "leather": 1, "ground": 1, "paint": 0,
+    "glass": 0,
+}
+
+# Nodes Final adds: one fine-detail noise plus one merge node into
+# the bump chain, only for materials that have a bump at all.
+_FINAL_BONUS = 2
+
+# ---------------------------------------------------------------- displacement (v1.13, M14)
+
+# True displacement subdivides the part at level 2 (SIMPLE), which
+# multiplies its triangle count by 4^2. The budget gate counts the
+# displaced geometry, so the gate never lies (design section 7).
+DISPLACEMENT_LEVEL = 2
+DISPLACEMENT_TRI_FACTOR = 4 ** DISPLACEMENT_LEVEL  # 16
+
+# Displacement needs RAM headroom above the governor's floor: the
+# subdivided mesh lives in memory alongside the build. A build with
+# displacement on refuses the displacement (and builds with bump
+# instead) when free RAM is below floor + this margin - the user's
+# setting stays in the description, the report says what happened.
+DISPLACEMENT_RAM_MARGIN_MB = 512
 
 # ---------------------------------------------------------------- families
 
@@ -484,7 +539,8 @@ def wear_applies(family: str, name: str) -> bool:
 PAGES = ("Material", "Style", "Layout", "Detail", "Form", "Surface",
          "Life", "Colour", "Depth", "Saved")
 
-SPEC_KEYS = ("family", "style", "layout", "params", "wear")
+SPEC_KEYS = ("family", "style", "layout", "params", "wear",
+             "displacement")
 
 
 # ---------------------------------------------------------------- helpers
@@ -597,6 +653,9 @@ def validate_material_spec(spec, where: str = "material") -> list[str]:
                 elif not 0.0 <= value <= 1.0:
                     problems.append(
                         f"{where}.wear.{name} must be between 0 and 1")
+    displacement = spec.get("displacement")
+    if displacement is not None and not isinstance(displacement, bool):
+        problems.append(f"{where}.displacement must be true or false")
     return problems
 
 
@@ -627,6 +686,10 @@ def normalize_material_spec(spec: dict) -> dict:
         "layout": spec.get("layout") or fam["layouts"][0],
         "params": params,
         "wear": wear,
+        # Displacement is off by default (v1.13, M14); the dial and
+        # presets round-trip it through normalize so opening the dial
+        # never silently drops a part's displacement setting.
+        "displacement": bool(spec.get("displacement", False)),
     }
 
 
@@ -743,29 +806,72 @@ def _gated_wear(norm: dict) -> tuple[dict, bool]:
     return wear, wear_any
 
 
-def node_count(spec: dict) -> int:
+def has_bump(spec: dict) -> bool:
+    """True when the spec's recipe produces a bump height: every
+    family except glass without frost. Used for the Final tier bonus
+    and the displacement wiring."""
+    norm = normalize_material_spec(spec)
+    if norm["family"] == "glass":
+        return norm["params"]["frost"] > 0
+    return True
+
+
+def bake_resolution(tier: str) -> int:
+    """The bake resolution for a tier (v1.13, M12/M13). An unknown
+    tier falls back to Balanced."""
+    return BAKE_RESOLUTIONS.get(tier, BAKE_RESOLUTIONS[DEFAULT_TIER])
+
+
+def node_count(spec: dict, tier: str = DEFAULT_TIER) -> int:
     """The deterministic node count for a spec's recipe, including
-    the Principled BSDF and the Material Output."""
+    the Principled BSDF and the Material Output.
+
+    Tier-aware (v1.13, M13): Draft drops the fine-detail node per
+    family (_DRAFT_DROP) plus the wear layer and the knots, chips
+    and frost branches; Balanced is the full recipe; Final adds one
+    fine-detail noise node plus one merge node to the bump chain.
+    An unknown tier counts as Balanced.
+    """
     norm = normalize_material_spec(spec)
     family = norm["family"]
     total = _BASE_NODES[family]
     total += _LAYOUT_NODES.get(norm["layout"], 0)
     params = norm["params"]
-    if family == "wood" and params["knots"] > 0:
+    knots = family == "wood" and params["knots"] > 0
+    chips = family == "paint" and params["chip"] > 0
+    frost = family == "glass" and params["frost"] > 0
+    if knots:
         total += _KNOTS_NODES
-    if family == "paint" and params["chip"] > 0:
+    if chips:
         total += _CHIP_NODES
-    if family == "glass" and params["frost"] > 0:
+    if frost:
         total += _FROST_NODES
     _wear, wear_any = _gated_wear(norm)
     if wear_any:
         total += _WEAR_GROUP_NODES
+    if tier == "draft":
+        # The pruning (M13): Draft drops the detail node, the wear
+        # layer, and the knots/chips/frost branches - the recipe in
+        # blender_export.make_material branches on the same
+        # conditions, so predicted and measured counts still agree.
+        total -= _DRAFT_DROP[family]
+        if wear_any:
+            total -= _WEAR_GROUP_NODES
+        if knots:
+            total -= _KNOTS_NODES
+        if chips:
+            total -= _CHIP_NODES
+        if frost:
+            total -= _FROST_NODES
+    elif tier == "final":
+        if has_bump(spec):
+            total += _FINAL_BONUS
     return total
 
 
 # ---------------------------------------------------------------- resolution
 
-def _resolve_common(norm: dict) -> dict:
+def _resolve_common(norm: dict, tier: str = DEFAULT_TIER) -> dict:
     """The keys every family shares."""
     style = FAMILIES[norm["family"]]["styles"][norm["style"]]
     params = norm["params"]
@@ -787,7 +893,11 @@ def _resolve_common(norm: dict) -> dict:
         "seed_loc": _seed_offset(params["seed"]),
         "wear": wear,
         "wear_any": wear_any,
-        "nodes": node_count(norm),
+        # v1.13, M13/M14: the tier the recipe builds at, and the
+        # displacement opt-in. Both travel into the Blender payload.
+        "tier": tier if tier in TIERS else DEFAULT_TIER,
+        "displacement": bool(norm.get("displacement", False)),
+        "nodes": node_count(norm, tier),
     }
 
 
@@ -990,12 +1100,14 @@ _RESOLVERS = {
 }
 
 
-def resolve_spec(spec: dict) -> dict:
+def resolve_spec(spec: dict, tier: str = DEFAULT_TIER) -> dict:
     """Resolve a spec to the host-side constants the Blender recipe
     needs. All units are converted here: the template just wires
-    nodes. JSON-serialisable (tuples become lists on dump)."""
+    nodes. JSON-serialisable (tuples become lists on dump). The tier
+    (v1.13, M13) sets the node count and travels into the payload so
+    the recipe builds at the same tier the host predicted."""
     norm = normalize_material_spec(spec)
-    out = _resolve_common(norm)
+    out = _resolve_common(norm, tier)
     return _RESOLVERS[norm["family"]](norm, out)
 
 

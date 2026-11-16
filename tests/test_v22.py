@@ -88,15 +88,15 @@ def _smoke_desc() -> dict:
 
 
 class VersionTests(unittest.TestCase):
-    """v1.12 everywhere."""
+    """v1.13 everywhere."""
 
     def test_version_is_1_12(self):
-        self.assertEqual(__version__, "1.12")
+        self.assertEqual(__version__, "1.13")
 
     def test_docs_name_1_12(self):
-        self.assertIn("v1.12", (ROOT / "README.md").read_text())
-        self.assertIn("## v1.12", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.12", (ROOT / "DESIGN.md").read_text())
+        self.assertIn("v1.13", (ROOT / "README.md").read_text())
+        self.assertIn("## v1.13", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.13", (ROOT / "DESIGN.md").read_text())
 
 
 # ---------------------------------------------------------------- M7

@@ -151,7 +151,8 @@ class SettingsV16Tests(unittest.TestCase):
     def test_defaults_resolve(self):
         resolved = settings_mod.resolve_render_settings(self.ws, dict(SHOP))
         self.assertEqual(resolved, {"engine": "auto", "resolution_px": 640,
-                                    "samples": 24, "denoise": False})
+                                    "samples": 24, "denoise": False,
+                                    "tier": "balanced"})
 
     def test_job_block_wins_over_workspace(self):
         settings_mod.save_render_settings(self.ws, {"engine": "cycles",

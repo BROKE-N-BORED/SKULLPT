@@ -1178,6 +1178,13 @@ class RenderWindow(_GeometryWindow):
         self._material_crumb.setWordWrap(True)
         self._material_crumb.setVisible(False)
         form.addRow("", self._material_crumb)
+        # True displacement (v1.13, M14): only for object materials
+        # (a string material has no bump chain to displace with).
+        # Off by default; the label says what it costs.
+        self._displacement_check = QtWidgets.QCheckBox(
+            "True displacement (16x triangles, needs more RAM)")
+        self._displacement_check.setVisible(False)
+        form.addRow("", self._displacement_check)
         self._bevel_spin = QtWidgets.QDoubleSpinBox()
         self._bevel_spin.setRange(0.0, 100.0)
         self._bevel_spin.setDecimals(1)
@@ -1223,6 +1230,11 @@ class RenderWindow(_GeometryWindow):
         render_form.addRow("Cycles samples", self._samples_spin)
         self._denoise_check = QtWidgets.QCheckBox("Denoise (Cycles only)")
         render_form.addRow("", self._denoise_check)
+        self._tier_combo = QtWidgets.QComboBox()
+        self._tier_combo.addItem("Draft (fewer nodes, fast)", "draft")
+        self._tier_combo.addItem("Balanced (the full recipe)", "balanced")
+        self._tier_combo.addItem("Final (extra detail, 1024 bakes)", "final")
+        render_form.addRow("Material quality", self._tier_combo)
         right.addLayout(render_form)
         self._save_render_btn = QtWidgets.QPushButton("Save render settings")
         self._save_render_btn.setEnabled(False)
@@ -1231,6 +1243,14 @@ class RenderWindow(_GeometryWindow):
         right.addWidget(QtWidgets.QLabel(
             "These are this job's own settings. Changing them does not "
             "send the job back for approval."))
+        self._bake_btn = QtWidgets.QPushButton("Bake PBR maps")
+        self._bake_btn.setEnabled(False)
+        self._bake_btn.clicked.connect(self._bake_maps)
+        right.addWidget(self._bake_btn)
+        right.addWidget(QtWidgets.QLabel(
+            "Bakes each material into colour, roughness, normal and "
+            "height maps in the job's output folder. The job must be "
+            "built first. Glass does not bake."))
         right.addStretch(1)
         main.addLayout(right, 1)
 
@@ -1265,6 +1285,7 @@ class RenderWindow(_GeometryWindow):
         self._parts_list.clear()
         self._save_part_btn.setEnabled(False)
         self._save_render_btn.setEnabled(False)
+        self._bake_btn.setEnabled(False)
         self._editor_note.setText("Select a part to edit it.")
         self._clear_renders()
         while self._camera_buttons.count():
@@ -1423,6 +1444,7 @@ class RenderWindow(_GeometryWindow):
             self._save_part_btn.setEnabled(False)
             self._dial_btn.setEnabled(False)
             self._material_crumb.setVisible(False)
+            self._displacement_check.setVisible(False)
             self._preview_label.setVisible(False)
             self._editor_note.setText(
                 "This is the human. Edit it in the Character Studio window.")
@@ -1434,6 +1456,7 @@ class RenderWindow(_GeometryWindow):
             self._save_part_btn.setEnabled(False)
             self._dial_btn.setEnabled(False)
             self._material_crumb.setVisible(False)
+            self._displacement_check.setVisible(False)
             self._preview_label.setVisible(False)
             self._editor_note.setText("Could not find this part to edit.")
             return
@@ -1459,6 +1482,9 @@ class RenderWindow(_GeometryWindow):
                 materials_mod.breadcrumb(material))
             self._material_crumb.setVisible(True)
             self._dial_btn.setEnabled(True)
+            self._displacement_check.setChecked(
+                bool(material.get("displacement", False)))
+            self._displacement_check.setVisible(True)
             self._start_preview(material)
         elif isinstance(material, str):
             index = self._material_combo.findText(material)
@@ -1475,6 +1501,7 @@ class RenderWindow(_GeometryWindow):
                     " unless you pick a preset.")
             self._material_crumb.setVisible(False)
             self._dial_btn.setEnabled(True)
+            self._displacement_check.setVisible(False)
             self._preview_label.setVisible(False)
         else:
             # No material at all (v1.11, M5): the empty state.
@@ -1483,6 +1510,7 @@ class RenderWindow(_GeometryWindow):
                 "No material here - open the dial to start.")
             self._material_crumb.setVisible(True)
             self._dial_btn.setEnabled(True)
+            self._displacement_check.setVisible(False)
             self._preview_label.setVisible(False)
         self._bevel_spin.setValue(float(part.get("bevel_cm") or 0.0))
         self._radius_spin.setValue(float(part.get("radius_cm") or 0.0))
@@ -1511,6 +1539,17 @@ class RenderWindow(_GeometryWindow):
             fields["bevel_cm"] = self._bevel_spin.value()
         if self._radius_spin.value() or (part is not None and "radius_cm" in part):
             fields["radius_cm"] = self._radius_spin.value()
+        # Displacement (v1.13, M14): only for object materials, and
+        # only when the checkbox changed - the spec travels whole,
+        # so nothing else about the material is touched.
+        if part is not None and isinstance(part.get("material"), dict) \
+                and self._displacement_check.isVisible():
+            spec = part["material"]
+            checked = self._displacement_check.isChecked()
+            if bool(spec.get("displacement", False)) != checked:
+                new_spec = dict(spec)
+                new_spec["displacement"] = checked
+                fields["material"] = new_spec
         result = self._bench.do_action("edit-part", {
             "job": self._job_name, "part": base_id, "fields": fields})
         if result is None:
@@ -1680,7 +1719,10 @@ class RenderWindow(_GeometryWindow):
         self._res_spin.setValue(resolved["resolution_px"])
         self._samples_spin.setValue(resolved["samples"])
         self._denoise_check.setChecked(resolved["denoise"])
+        tier_index = self._tier_combo.findData(resolved["tier"])
+        self._tier_combo.setCurrentIndex(max(0, tier_index))
         self._save_render_btn.setEnabled(True)
+        self._bake_btn.setEnabled(True)
 
     def _save_render_settings(self) -> None:
         if self._job_name is None:
@@ -1690,7 +1732,8 @@ class RenderWindow(_GeometryWindow):
             "engine": self._engine_combo.currentData(),
             "resolution_px": self._res_spin.value(),
             "samples": self._samples_spin.value(),
-            "denoise": self._denoise_check.isChecked()})
+            "denoise": self._denoise_check.isChecked(),
+            "tier": self._tier_combo.currentData()})
         if result is None:
             QtWidgets.QMessageBox.warning(
                 self, "Could not save",
@@ -1698,6 +1741,22 @@ class RenderWindow(_GeometryWindow):
                 "the Jobs window says why.")
             return
         Toast.show_toast(self, "Render settings saved for this job.")
+
+    def _bake_maps(self) -> None:
+        """Bake this job's PBR maps (v1.13, M12): a background run,
+        like a build - progress shows in the Jobs window, and the
+        run can be cancelled there. The job must be built first;
+        the bake refuses plainly when it is not."""
+        if self._job_name is None:
+            return
+        result = self._bench.do_action("bake", {"job": self._job_name})
+        if result is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not bake",
+                "The bake did not start. The chat panel on the Jobs "
+                "window says why.")
+            return
+        Toast.show_toast(self, "Baking PBR maps for this job.")
 
 
 # --------------------------------------------------------- character window
@@ -2643,6 +2702,12 @@ class SettingsWindow(_GeometryWindow):
         self._denoise_check = QtWidgets.QCheckBox("Denoise (Cycles only)")
         self._denoise_check.toggled.connect(self._save_render_settings)
         render_form.addRow("", self._denoise_check)
+        self._tier_combo = QtWidgets.QComboBox()
+        self._tier_combo.addItem("Draft (fewer nodes, fast)", "draft")
+        self._tier_combo.addItem("Balanced (the full recipe)", "balanced")
+        self._tier_combo.addItem("Final (extra detail, 1024 bakes)", "final")
+        self._tier_combo.currentIndexChanged.connect(self._save_render_settings)
+        render_form.addRow("Material quality", self._tier_combo)
         main.addLayout(render_form)
         self._last_engine_label = QtWidgets.QLabel()
         self._last_engine_label.setObjectName("muted")
@@ -2729,7 +2794,8 @@ class SettingsWindow(_GeometryWindow):
         (signals blocked: loading must not re-save)."""
         saved = settings_mod.load_settings(self._workspace)
         for widget in (self._engine_combo, self._res_spin,
-                       self._samples_spin, self._denoise_check):
+                       self._samples_spin, self._denoise_check,
+                       self._tier_combo):
             widget.blockSignals(True)
         try:
             index = self._engine_combo.findData(
@@ -2741,9 +2807,13 @@ class SettingsWindow(_GeometryWindow):
                 int(saved.get("render_samples", 24)))
             self._denoise_check.setChecked(
                 bool(saved.get("render_denoise", False)))
+            tier_index = self._tier_combo.findData(
+                saved.get("material_tier", "balanced"))
+            self._tier_combo.setCurrentIndex(max(0, tier_index))
         finally:
             for widget in (self._engine_combo, self._res_spin,
-                           self._samples_spin, self._denoise_check):
+                           self._samples_spin, self._denoise_check,
+                           self._tier_combo):
                 widget.blockSignals(False)
 
     def _save_render_settings(self) -> None:
@@ -2751,7 +2821,8 @@ class SettingsWindow(_GeometryWindow):
             "engine": self._engine_combo.currentData(),
             "resolution_px": self._res_spin.value(),
             "samples": self._samples_spin.value(),
-            "denoise": self._denoise_check.isChecked()})
+            "denoise": self._denoise_check.isChecked(),
+            "tier": self._tier_combo.currentData()})
 
     def _backup_workspace(self) -> None:
         from .backup import backup_workspace
@@ -3253,6 +3324,34 @@ material as a preset for later. Close applies the material to the
 part. A part with no material shows "No material here - open the
 dial to start." Ctrl+click a part to copy its material onto the
 selected part.</p>
+<h3>Material quality</h3>
+<p>Every material builds at a quality tier: Draft, Balanced or
+Final. Draft wires fewer nodes (no wear layer, no knots, chips or
+frost, less fine detail) so builds and previews are fast; Balanced
+is the full recipe; Final adds extra fine detail and bakes at 1024.
+Set the default in Settings, or override it per job in the Render
+window - the build report lists the tier used and the node counts.
+The dial's previews always use Draft unless you ask otherwise.</p>
+<h3>Baking PBR maps</h3>
+<p>After a job is built, press Bake PBR maps in the Render window
+to turn each material into texture maps (colour, roughness, normal,
+height, and metallic where the family uses it) in the job's output
+folder. The bake size follows the material quality tier: Draft 256,
+Balanced 512, Final 1024. The maps travel into the Unreal package,
+so the imported asset carries its textures. Glass does not bake:
+its look comes from light passing through it, not from surface
+maps, so there is nothing honest to bake - the bake report says so.</p>
+<h3>True displacement</h3>
+<p>A part's material can turn its texture into real geometry:
+tick True displacement in the part editor. The part is subdivided
+16 times denser and the bump pattern pushes the surface out, so
+Cycles renders show real ridges instead of a flat bump. It costs
+triangles (16 times as many) and RAM, so the budget gate counts
+the denser mesh and the build turns displacement off with a plain
+note when the machine cannot afford it. The setting stays on in
+the description - build again when more memory is free. The GLB
+carries the dense mesh; the displacement itself shows in Cycles
+renders, while EEVEE shows bump.</p>
 <h3>Builds in a queue</h3>
 <p>Only one heavy job runs at a time. If you start a build while
 another is running, yours waits in the queue and starts when its turn
@@ -3260,7 +3359,9 @@ comes. Queued builds can be cancelled from the status bar.</p>
 <h3>Unreal</h3>
 <p>A built job can be packaged for Unreal: open the job, press
 Unreal package, and pick a folder. The package has the .glb, the
-.blend, the description, an import script, and a README.</p>
+.blend, the description, an import script, and a README. When the
+job has been baked, the texture maps go in too, and the import
+script brings them into Unreal alongside the model.</p>
 <h3>Blender</h3>
 <p>Building needs Blender 4.5.9 or newer installed. The renders
 and the game-ready model come from Blender; without it, SKULLPT can

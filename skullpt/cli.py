@@ -114,6 +114,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("out", nargs="?", default=None)
     p = sub.add_parser("unreal-package"); p.add_argument("workspace"); p.add_argument("job")
     p.add_argument("--dest", default=None)
+    p = sub.add_parser("bake"); p.add_argument("workspace"); p.add_argument("job")
+    p.add_argument("--resolution", type=int, default=None,
+                   choices=(256, 512, 1024))
     p = sub.add_parser("images"); p.add_argument("workspace")
     p.add_argument("prompt", nargs="+"); p.add_argument("--job", default=None)
     p.add_argument("--count", type=int, default=3); p.add_argument("--size", type=int, default=512)
@@ -135,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--render-resolution", type=int, default=None)
     p.add_argument("--render-samples", type=int, default=None)
     p.add_argument("--render-denoise", choices=("on", "off"), default=None)
+    p.add_argument("--material-tier", choices=("draft", "balanced", "final"),
+                   default=None)
     p = sub.add_parser("backup"); p.add_argument("workspace")
     p.add_argument("dest", nargs="?", default=None)
     p = sub.add_parser("update-check")
@@ -197,6 +202,13 @@ def main(argv: list[str] | None = None) -> int:
             (job.dir / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
             print(json.dumps(report, indent=2))
             return 0 if report.get("ok") else 1
+        elif args.cmd == "bake":
+            from .bake import bake_job
+            ws = _ws(args.workspace)
+            job = _job(ws, args.job)
+            result = bake_job(job, ws, resolution=args.resolution)
+            print(json.dumps(result, indent=2))
+            return 0 if result.get("ok") else 1
         elif args.cmd == "file":
             ws = _ws(args.workspace)
             job = _job(ws, args.job)
@@ -449,13 +461,16 @@ def main(argv: list[str] | None = None) -> int:
                 render_updates["samples"] = args.render_samples
             if args.render_denoise is not None:
                 render_updates["denoise"] = args.render_denoise == "on"
+            if args.material_tier is not None:
+                render_updates["tier"] = args.material_tier
             if render_updates:
                 current = settings_mod.save_render_settings(ws, render_updates)
                 print("render defaults saved: "
                       f"engine={current['render_engine']}, "
                       f"resolution={current['render_resolution_px']}px, "
                       f"samples={current['render_samples']}, "
-                      f"denoise={'on' if current['render_denoise'] else 'off'}")
+                      f"denoise={'on' if current['render_denoise'] else 'off'}, "
+                      f"material tier={current['material_tier']}")
             print(f"critic reference comparison: "
                   f"{'on' if current.get('critic_reference_check', True) else 'off'}"
                   f"  (a job can override this with \"critic_reference\": true/false "
@@ -463,7 +478,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"render defaults: engine={current.get('render_engine', 'auto')}, "
                   f"resolution={current.get('render_resolution_px', 640)}px, "
                   f"samples={current.get('render_samples', 24)}, "
-                  f"denoise={'on' if current.get('render_denoise') else 'off'}"
+                  f"denoise={'on' if current.get('render_denoise') else 'off'}, "
+                  f"material tier={current.get('material_tier', 'balanced')}"
                   f"  (a job can override these in its render settings)")
             last = settings_mod.last_render_engine(ws)
             if last.get("engine"):

@@ -112,19 +112,60 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
 
 def material_report(desc: dict) -> dict:
     """The per-part material lines for a build report (v1.11, M2):
-    {part_id: {breadcrumb, nodes}} for every part with an object
-    material. Empty when the description has none."""
+    {part_id: {breadcrumb, nodes, tier, displacement}} for every
+    part with an object material. Empty when the description has
+    none. The node counts are predicted at the build's tier (v1.13,
+    M13), read from the description's resolved "render" block."""
     from . import materials as materials_mod
 
+    tier = str((desc.get("render") or {}).get("tier", "balanced"))
+    if tier not in materials_mod.TIERS:
+        tier = materials_mod.DEFAULT_TIER
     out = {}
     for part in desc.get("parts", []):
         material = part.get("material")
         if isinstance(material, dict):
             out[part["id"]] = {
                 "breadcrumb": materials_mod.breadcrumb(material),
-                "nodes": materials_mod.node_count(material),
+                "nodes": materials_mod.node_count(material, tier),
+                "tier": tier,
+                "displacement": bool(material.get("displacement", False)),
             }
     return out
+
+
+def check_displacement_gate(desc: dict, free_mb: int | None = None) -> tuple[list[str], str | None]:
+    """The displacement CPU gate (v1.13, M14): true displacement
+    subdivides parts 16x, so it needs RAM headroom above the
+    governor's floor. When free RAM is below floor + margin and any
+    part has displacement on, the flag is stripped from the
+    IN-MEMORY description (the file keeps the user's setting) and
+    the build proceeds with bump instead. Returns (stripped part
+    ids, note) - the note is None when nothing was stripped.
+    `free_mb` is a test seam; when omitted the machine is read."""
+    from . import materials as materials_mod
+
+    displaced = [p["id"] for p in desc.get("parts", [])
+                 if isinstance(p.get("material"), dict)
+                 and p["material"].get("displacement")]
+    if not displaced:
+        return [], None
+    if free_mb is None:
+        free_mb = governor.free_ram_mb()
+    floor = governor.adaptive_min_free_mb()
+    needed = floor + materials_mod.DISPLACEMENT_RAM_MARGIN_MB
+    if free_mb >= needed:
+        return [], None
+    for part in desc.get("parts", []):
+        material = part.get("material")
+        if isinstance(material, dict) and material.get("displacement"):
+            material["displacement"] = False
+    note = ("True displacement was turned off for this build: only "
+            f"{free_mb} MB of RAM was free, and displacement needs "
+            f"{needed} MB free to run safely. The parts were built "
+            "with bump instead, and the setting is still on in the "
+            "description - build again when more memory is free.")
+    return displaced, note
 
 
 def build_job(job: Job, workspace: Path, seats_path=None,
@@ -162,6 +203,18 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         job.fail("budget: " + "; ".join(budget_problems))
         applog.get_logger().info("build refused (budget): %s", job.dir.name)
         return {"ok": False, "stage": "budget", "problems": budget_problems}
+
+    # Displacement CPU gate (v1.13, M14): after the budget gate (which
+    # counts displaced geometry), before the lock. A stripped build
+    # is logged on the job so the note survives even if the build
+    # later fails, and recorded in the build report's notes.
+    notes: list[str] = []
+    stripped, disp_note = check_displacement_gate(desc)
+    if disp_note is not None:
+        job.log("displacement_skipped", parts=stripped, note=disp_note)
+        applog.get_logger().info("displacement skipped for %s: %s",
+                                 job.dir.name, ", ".join(stripped))
+        notes.append(disp_note)
 
     # A kind with no exporters (project - no studio yet; character got
     # its studio in v1.7) used to "build successfully" with zero
@@ -253,6 +306,17 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         if desc.get("game_ready") and any(o.endswith(".glb") for o in outputs):
             from . import gameready
             gate = gameready.run_gate(desc, job.output_dir, outputs)
+    if vision_rounds and stripped:
+        # The vision patch loop dumps the in-memory description to
+        # the file - and the in-memory copy had displacement stripped
+        # by the CPU gate. The strip is a build-time decision, not a
+        # settings change: restore the user's setting in the file.
+        saved = job.load_description()
+        for part in saved.get("parts", []):
+            if part.get("id") in stripped \
+                    and isinstance(part.get("material"), dict):
+                part["material"]["displacement"] = True
+        desc_mod.dump(saved, job.desc_path)
     overall_ok = report_checks["ok"] and (gate is None or gate["ok"])
     report = {
         "ok": overall_ok,
@@ -262,6 +326,8 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         "machine_checks": report_checks,
         "critique": critique,
     }
+    if notes:
+        report["notes"] = notes
     materials = material_report(desc)
     if materials:
         report["materials"] = materials

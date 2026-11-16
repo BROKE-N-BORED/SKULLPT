@@ -1,4 +1,4 @@
-# SKULLPT - v1.12
+# SKULLPT - v1.13
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -86,6 +86,15 @@ v1.12 is the material system, phase 2 (M7-M11): ten more families
 paint, glass), nine layouts (bonds for brick, parquet, herringbone
 and chevron for wood), a wear layer that renders (the dial gains
 its Life page), and every pattern size in real centimetres.
+v1.13 is the material system, phase 3 and final (M12-M14): PBR pack
+baking (colour, roughness, normal, height, and metallic where the
+family uses it) into the job's output folder, with the maps carried
+into the Unreal package; quality tiers (Draft / Balanced / Final)
+for materials, per job or as a workspace default; and true
+displacement as an opt-in per material, CPU-gated (it turns off
+with a plain note when the machine cannot afford it). Glass does
+not bake - its look comes from light passing through it, not from
+surface maps - and the bake report says so.
 The core shell (install, demo, build loop, library filing) was
 verified on the target PC on 2026-11-11, and the Bench opened there
 on 2026-11-14 (Settings window, Blender Ready); the full install,
@@ -567,6 +576,50 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.13 - The material system, phase 3 and final (M12-M14)
+
+- **PBR pack baking (M12).** After a job is built, Bake PBR maps
+  (Render window, or `bake` on the command line) turns each
+  material's node recipe into texture maps in the job's output
+  folder: colour, roughness, normal, height, and metallic where
+  the family uses it. Baking runs in Blender (Cycles, 1 sample,
+  CPU), one material at a time, one map at a time. Metallic is
+  always a constant per part, so its map is a flat grayscale PNG
+  written by SKULLPT, not a Blender pass. Bake resolution is
+  capped at 1024 and follows the material tier (Draft 256,
+  Balanced 512, Final 1024). The maps travel into the Unreal
+  package, and the import script brings them into Unreal
+  alongside the model (colour maps sRGB, the data maps not).
+  Glass does not bake: its look comes from light passing through
+  it, not from surface maps, so a pack would be a lie - the bake
+  report records it as a named gap with the reason.
+- **Quality tiers (M13).** Draft / Balanced / Final, set per job
+  in the Render window or as a workspace default in Settings.
+  Draft wires fewer nodes (no wear layer, no knots, chips or
+  frost, one less fine-detail node per family) so builds and
+  previews are fast; Balanced is the full recipe; Final adds one
+  fine-detail noise node plus a merge node to the bump chain and
+  bakes at 1024. The build report lists the tier used and the
+  node counts, and the dial's previews use Draft. The pruning is
+  systematic: a node whose inputs make it a no-op is never
+  created, and the predicted counts still match the measured
+  ones in stats.json.
+- **True displacement (M14).** An opt-in per material, off by
+  default: tick True displacement in the part editor and the
+  part is subdivided 16 times denser (level 2) with the bump
+  pattern pushing the surface out through the material's
+  Displacement socket. Cycles renders show real ridges; EEVEE
+  shows bump. The triangle budget gate counts the denser mesh
+  (a displaced box estimates 192 triangles, not 12), and the
+  build turns displacement off with a plain note when free RAM
+  is below the governor's floor plus a 512 MB margin - the
+  setting stays on in the description, and the build uses bump
+  instead. Honest limits: glTF cannot carry true displacement,
+  so the GLB holds the dense mesh and the displacement itself
+  shows in Cycles renders only; a material with no bump chain
+  (glass without frost) cannot displace, and the build report
+  says so.
 
 ## v1.12 - The material system, phase 2 (M7-M11)
 

@@ -1208,10 +1208,20 @@ class LodTemplateTests(unittest.TestCase):
         # DECIMATE directly; real MPFB humans have shape keys and
         # Blender refuses to apply any modifier to a mesh with
         # shape keys, so that path broke every character build.
+        # v1.13 (M14) adds the ONE apply the template is allowed
+        # to have: the displacement subdivision, on built parts
+        # only (the part loop never touches the human, and built
+        # parts have no shape keys). The DECIMATE apply stays
+        # forbidden - this test pins the apply count at exactly
+        # one, so any future apply is a deliberate decision.
         template = blender_export._BUILD_TEMPLATE
         self.assertNotIn("modifier_move_to_index", template)
-        self.assertNotIn("modifier_apply", template)
         self.assertNotIn("export_apply=False", template)
+        applies = [line.strip() for line in template.splitlines()
+                   if "modifier_apply" in line]
+        self.assertEqual(
+            applies,
+            ["bpy.ops.object.modifier_apply(modifier=subdiv.name)"])
 
 
 @unittest.skipUnless(
@@ -1370,7 +1380,7 @@ class DesignDocTests(unittest.TestCase):
         self.text = (ROOT / "DESIGN.md").read_text()
 
     def test_header_names_v112(self):
-        self.assertIn("v1.12", self.text.splitlines()[0]
+        self.assertIn("v1.13", self.text.splitlines()[0]
                       + "\n" + "\n".join(self.text.splitlines()[1:60]))
 
     def test_nine_windows(self):
@@ -1401,10 +1411,10 @@ class VersionTests(unittest.TestCase):
     def test_version_is_111_everywhere(self):
         from skullpt import __version__
 
-        self.assertEqual(__version__, "1.12")
-        self.assertIn("v1.12", (ROOT / "README.md").read_text())
-        self.assertIn("v1.12", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.12", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.13")
+        self.assertIn("v1.13", (ROOT / "README.md").read_text())
+        self.assertIn("v1.13", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.13", (ROOT / "DESIGN.md").read_text())
 
     def test_changelog_has_a_v110_section(self):
         text = (ROOT / "CHANGELOG.md").read_text()

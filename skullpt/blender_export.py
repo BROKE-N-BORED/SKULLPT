@@ -221,15 +221,18 @@ def _layout_rot_axis(size_cm, map_rot):
     return axis if axis < 2 else 0
 
 
-def _part_material_spec(src: dict, size_cm) -> dict | None:
+def _part_material_spec(src: dict, size_cm,
+                        tier: str = "balanced") -> dict | None:
     """The resolved material spec for a part, or None for a string
     material. Adds the size-dependent geometry: the grain rotation
     (wood only), the bond face frame and prescale (bond layouts),
-    and the chevron fold axis (chevron)."""
+    and the chevron fold axis (chevron). The tier (v1.13, M13) is
+    resolved into the spec so the recipe builds at the same tier the
+    host predicted the node count for."""
     material = src.get("material")
     if not isinstance(material, dict):
         return None
-    resolved = materials_mod.resolve_spec(material)
+    resolved = materials_mod.resolve_spec(material, tier)
     bond = resolved.get("bond")
     if resolved["family"] == "wood":
         resolved["map_rot"] = _grain_rotation(size_cm, resolved["flow"])
@@ -302,6 +305,14 @@ def build_payload(desc: dict, out_dir: Path, slug: str) -> dict:
     data = scene_data(desc)
     style = desc.get("style", {}) or {}
     surface = str(style.get("surface", "#241d16"))
+    # The material tier (v1.13, M13) rides the resolved "render"
+    # block, like engine/resolution/samples; an absent or invalid
+    # tier means Balanced (the render settings resolver guarantees a
+    # valid tier on the build path, but the payload is also built
+    # directly by the character exporter and the preview script).
+    tier = str((desc.get("render") or {}).get("tier", "balanced"))
+    if tier not in materials_mod.TIERS:
+        tier = "balanced"
     src_by_id = {p["id"]: p for p in expand_parts(desc)}
     parts = []
     for box in data["boxes"]:
@@ -319,7 +330,7 @@ def build_payload(desc: dict, out_dir: Path, slug: str) -> dict:
             "color": color, "metallic": metallic, "roughness": roughness,
             "glass": src.get("material") == "glass",
             "glow": box["type"] in ("lamp", "light", "lantern"),
-            "material_spec": _part_material_spec(src, box["size"]),
+            "material_spec": _part_material_spec(src, box["size"], tier),
         })
     cameras = [dict(c) for c in data["cameras"]]
     b = data["bounds"]
@@ -470,9 +481,12 @@ def probe_engine(exe: str, timeout: int = 60, cancel=None) -> str:
     return "CYCLES"
 
 
-def preview_material_script(spec: dict, out_dir: Path, slug: str) -> str:
+def preview_material_script(spec: dict, out_dir: Path, slug: str,
+                            tier: str = "draft") -> str:
     """A minimal Blender script: one sample slab with the material,
-    one camera, one sun, a 128x96 render. Pure function."""
+    one camera, one sun, a 128x96 render. Pure function. Previews
+    use Draft (v1.13, M13) unless the caller asks otherwise: the
+    dial needs fast feedback, and the tier is in the cache key."""
     desc = {
         "name": "material preview", "kind": "scene",
         "parts": [{"id": "preview_slab", "type": "prop", "shape": "box",
@@ -480,24 +494,27 @@ def preview_material_script(spec: dict, out_dir: Path, slug: str) -> str:
                    "material": spec}],
         "cameras": [], "constraints": [], "rubric": [],
         "budget": {"max_tris": 40000, "preview_px": 640},
+        "render": {"tier": tier},
     }
     payload = build_payload(desc, out_dir, slug)
     return _PREVIEW_TEMPLATE.replace("__PAYLOAD__", repr(payload))
 
 
 def render_material_preview(spec: dict, workspace, exe=None,
-                            timeout: int = 180) -> Path:
+                            timeout: int = 180, tier: str = "draft") -> Path:
     """Render a 128x96 preview of a material spec, cached by spec
-    hash under the workspace (v1.11, M3). Returns the PNG path.
-    Raises RuntimeError with a plain message when Blender is
-    missing or the render does not land. The cache keeps the
-    newest 20 previews."""
+    hash and tier under the workspace (v1.11, M3; v1.13, M13 - the
+    tier is in the cache key, so a Draft preview never serves a
+    Balanced one, and pre-v1.13 cache entries are simply never hit).
+    Returns the PNG path. Raises RuntimeError with a plain message
+    when Blender is missing or the render does not land. The cache
+    keeps the newest 20 previews."""
     from . import settings as settings_mod
 
     ws = Path(workspace)
     cache_dir = ws / materials_mod.PREVIEW_DIRNAME
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = materials_mod.spec_hash(spec)
+    key = f"{materials_mod.spec_hash(spec)}-{tier}"
     png = cache_dir / f"{key}.png"
     if png.exists():
         return png
@@ -519,7 +536,7 @@ def render_material_preview(spec: dict, workspace, exe=None,
         tmp_path = Path(tmp)
         script_path = tmp_path / "preview.py"
         script_path.write_text(preview_material_script(spec, tmp_path,
-                                                       key))
+                                                       key, tier))
         env = dict(os.environ, DS_ENGINE=engine)
         try:
             subprocess.run(
@@ -903,15 +920,25 @@ def make_material(part):
     bsdf.inputs["Metallic"].default_value = part["metallic"]
     mspec = part.get("material_spec")
     if mspec:
-        # Parametric recipes (v1.11 M2, v1.12 M7-M9): one branch per
-        # family, each producing color_out (the colour socket, or
-        # None for glass, whose Base Color is already the tinted
-        # style colour) and bump_height (the height socket, or
-        # None). The wood recipe's structure follows the NK Wood
-        # Grain group in video-to-blender (MIT); every recipe is
-        # wired here in plain bpy. Node counts are predicted
-        # host-side (materials.py) and the measured count is
-        # recorded in the stats.
+        # Parametric recipes (v1.11 M2, v1.12 M7-M9, v1.13 M13-M14):
+        # one branch per family, each producing color_out (the
+        # colour socket, or None for glass, whose Base Color is
+        # already the tinted style colour) and bump_height (the
+        # height socket, or None). The wood recipe's structure
+        # follows the NK Wood Grain group in video-to-blender
+        # (MIT); every recipe is wired here in plain bpy. Node
+        # counts are predicted host-side (materials.py) and the
+        # measured count is recorded in the stats.
+        #
+        # Quality tiers (M13): Draft skips the wear layer, the
+        # knots/chips/frost branches, and one fine-detail node per
+        # family (guarded by `not draft` below); Final adds one
+        # fine-detail noise plus a merge node to the bump chain.
+        # The guards below must match materials.node_count exactly,
+        # or the e2e test (predicted == measured) fails.
+        tier = mspec.get("tier", "balanced")
+        draft = tier == "draft"
+        final = tier == "final"
         links = nt.links
         coord = nt.nodes.new("ShaderNodeTexCoord")
         mapping = nt.nodes.new("ShaderNodeMapping")
@@ -959,17 +986,21 @@ def make_material(part):
             fibre.inputs["Scale"].default_value = 1.0
             fibre.inputs["Detail"].default_value = 4.0
             links.new(stretch.outputs["Vector"], fibre.inputs["Vector"])
-            # Blotch: large soft tone variation.
-            blotch = nt.nodes.new("ShaderNodeTexNoise")
-            blotch.inputs["Scale"].default_value = 2.0
-            blotch.inputs["Detail"].default_value = 3.0
-            links.new(vec, blotch.inputs["Vector"])
-            blotch_range = nt.nodes.new("ShaderNodeMapRange")
-            blotch_range.inputs["From Min"].default_value = 0.3
-            blotch_range.inputs["From Max"].default_value = 0.7
-            blotch_range.inputs["To Min"].default_value = 0.9
-            blotch_range.inputs["To Max"].default_value = 1.08
-            links.new(blotch.outputs["Fac"], blotch_range.inputs["Value"])
+            # Blotch: large soft tone variation. Draft (M13) skips
+            # it - the tone node then scales by its 1.0 default.
+            blotch_range = None
+            if not draft:
+                blotch = nt.nodes.new("ShaderNodeTexNoise")
+                blotch.inputs["Scale"].default_value = 2.0
+                blotch.inputs["Detail"].default_value = 3.0
+                links.new(vec, blotch.inputs["Vector"])
+                blotch_range = nt.nodes.new("ShaderNodeMapRange")
+                blotch_range.inputs["From Min"].default_value = 0.3
+                blotch_range.inputs["From Max"].default_value = 0.7
+                blotch_range.inputs["To Min"].default_value = 0.9
+                blotch_range.inputs["To Max"].default_value = 1.08
+                links.new(blotch.outputs["Fac"],
+                          blotch_range.inputs["Value"])
             # Colour: mix light/dark by ring + fibre, toned by blotch.
             ring_term = nt.nodes.new("ShaderNodeMath")
             ring_term.operation = "MULTIPLY"
@@ -994,11 +1025,11 @@ def make_material(part):
             mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
             links.new(tone_t.outputs["Value"], mix.inputs["Factor"])
             color_out = mix.outputs["Result"]
-            if mspec["knots"] > 0:
+            if mspec["knots"] > 0 and not draft:
                 # Knots: a hard mask over high-frequency noise,
                 # mixed toward the dark colour. The knots value
                 # moves the ramp thresholds host-side
-                # (materials.resolve_spec).
+                # (materials.resolve_spec). Draft (M13) skips them.
                 knot_noise = nt.nodes.new("ShaderNodeTexNoise")
                 knot_noise.inputs["Scale"].default_value = \
                     mspec["knot_scale"]
@@ -1023,8 +1054,13 @@ def make_material(part):
                 color_out = knot_mix.outputs["Result"]
             tone = nt.nodes.new("ShaderNodeVectorMath")
             tone.operation = "SCALE"
+            # The 1.0 default is the Draft path: no blotch, no tone
+            # shift. A linked input ignores its default.
+            tone.inputs["Scale"].default_value = 1.0
             links.new(color_out, tone.inputs["Vector"])
-            links.new(blotch_range.outputs["Result"], tone.inputs["Scale"])
+            if blotch_range is not None:
+                links.new(blotch_range.outputs["Result"],
+                          tone.inputs["Scale"])
             color_out = tone.outputs["Vector"]
             bump_add = nt.nodes.new("ShaderNodeMath")
             bump_add.operation = "ADD"
@@ -1056,10 +1092,14 @@ def make_material(part):
             vor = nt.nodes.new("ShaderNodeTexVoronoi")
             vor.inputs["Scale"].default_value = mspec["vein_scale"]
             links.new(vec, vor.inputs["Vector"])
-            grain = nt.nodes.new("ShaderNodeTexNoise")
-            grain.inputs["Scale"].default_value = mspec["grain_scale"]
-            grain.inputs["Detail"].default_value = 3.0
-            links.new(vec, grain.inputs["Vector"])
+            # Draft (M13) skips the grain noise: the bump is the
+            # vein distance alone (the unlinked ADD input is 0.0).
+            grain = None
+            if not draft:
+                grain = nt.nodes.new("ShaderNodeTexNoise")
+                grain.inputs["Scale"].default_value = mspec["grain_scale"]
+                grain.inputs["Detail"].default_value = 3.0
+                links.new(vec, grain.inputs["Vector"])
             ramp = nt.nodes.new("ShaderNodeValToRGB")
             ramp.color_ramp.elements[0].position = 0.25
             ramp.color_ramp.elements[1].position = 0.75
@@ -1073,25 +1113,31 @@ def make_material(part):
             bump_add = nt.nodes.new("ShaderNodeMath")
             bump_add.operation = "ADD"
             links.new(vor.outputs["Distance"], bump_add.inputs[0])
-            links.new(grain.outputs["Fac"], bump_add.inputs[1])
+            if grain is not None:
+                links.new(grain.outputs["Fac"], bump_add.inputs[1])
             bump_height = bump_add.outputs["Value"]
         elif fam == "marble":
             # Veins: noise sampled on coordinates distorted by a
             # second noise, so the veins wander instead of
-            # running straight.
-            distort = nt.nodes.new("ShaderNodeTexNoise")
-            distort.inputs["Scale"].default_value = 2.0
-            distort.inputs["Detail"].default_value = 3.0
-            links.new(vec, distort.inputs["Vector"])
-            dscale = nt.nodes.new("ShaderNodeVectorMath")
-            dscale.operation = "MULTIPLY"
-            dk = 0.2 + mspec["contrast"] * 0.6
-            dscale.inputs[1].default_value = (dk, dk, dk)
-            links.new(distort.outputs["Color"], dscale.inputs[0])
+            # running straight. Draft (M13) skips the distortion:
+            # the veins run straight (the unlinked ADD input is
+            # (0, 0, 0)).
+            dscale = None
+            if not draft:
+                distort = nt.nodes.new("ShaderNodeTexNoise")
+                distort.inputs["Scale"].default_value = 2.0
+                distort.inputs["Detail"].default_value = 3.0
+                links.new(vec, distort.inputs["Vector"])
+                dscale = nt.nodes.new("ShaderNodeVectorMath")
+                dscale.operation = "MULTIPLY"
+                dk = 0.2 + mspec["contrast"] * 0.6
+                dscale.inputs[1].default_value = (dk, dk, dk)
+                links.new(distort.outputs["Color"], dscale.inputs[0])
             dadd = nt.nodes.new("ShaderNodeVectorMath")
             dadd.operation = "ADD"
             links.new(vec, dadd.inputs[0])
-            links.new(dscale.outputs["Vector"], dadd.inputs[1])
+            if dscale is not None:
+                links.new(dscale.outputs["Vector"], dadd.inputs[1])
             veins = nt.nodes.new("ShaderNodeTexNoise")
             veins.inputs["Scale"].default_value = mspec["vein_scale"]
             veins.inputs["Detail"].default_value = 4.0
@@ -1115,9 +1161,14 @@ def make_material(part):
             patch.inputs["Scale"].default_value = mspec["patch_scale"]
             patch.inputs["Detail"].default_value = 3.0
             links.new(vec, patch.inputs["Vector"])
-            agg = nt.nodes.new("ShaderNodeTexVoronoi")
-            agg.inputs["Scale"].default_value = mspec["aggregate_scale"]
-            links.new(vec, agg.inputs["Vector"])
+            # Draft (M13) skips the aggregate cells: the bump is
+            # the patch noise alone.
+            agg = None
+            if not draft:
+                agg = nt.nodes.new("ShaderNodeTexVoronoi")
+                agg.inputs["Scale"].default_value = \
+                    mspec["aggregate_scale"]
+                links.new(vec, agg.inputs["Vector"])
             ramp = nt.nodes.new("ShaderNodeValToRGB")
             ramp.color_ramp.elements[0].position = 0.3
             ramp.color_ramp.elements[1].position = 0.7
@@ -1130,7 +1181,8 @@ def make_material(part):
             color_out = mix.outputs["Result"]
             bump_add = nt.nodes.new("ShaderNodeMath")
             bump_add.operation = "ADD"
-            links.new(agg.outputs["Distance"], bump_add.inputs[0])
+            if agg is not None:
+                links.new(agg.outputs["Distance"], bump_add.inputs[0])
             links.new(patch.outputs["Fac"], bump_add.inputs[1])
             bump_height = bump_add.outputs["Value"]
         elif fam == "metal":
@@ -1184,19 +1236,29 @@ def make_material(part):
             mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
             links.new(ramp.outputs["Color"], mix.inputs["Factor"])
             color_out = mix.outputs["Result"]
-            fuzz = nt.nodes.new("ShaderNodeTexNoise")
-            fuzz.inputs["Scale"].default_value = mspec["fuzz_scale"]
-            fuzz.inputs["Detail"].default_value = 2.0
-            links.new(vec, fuzz.inputs["Vector"])
-            bump_height = fuzz.outputs["Fac"]
+            # Draft (M13) skips the fuzz noise: the bump is the
+            # weave sum alone.
+            fuzz = None
+            if not draft:
+                fuzz = nt.nodes.new("ShaderNodeTexNoise")
+                fuzz.inputs["Scale"].default_value = mspec["fuzz_scale"]
+                fuzz.inputs["Detail"].default_value = 2.0
+                links.new(vec, fuzz.inputs["Vector"])
+            bump_height = (fuzz.outputs["Fac"] if fuzz is not None
+                           else wadd.outputs["Value"])
         elif fam == "leather":
             pores = nt.nodes.new("ShaderNodeTexVoronoi")
             pores.inputs["Scale"].default_value = mspec["pore_scale"]
             links.new(vec, pores.inputs["Vector"])
-            crease = nt.nodes.new("ShaderNodeTexNoise")
-            crease.inputs["Scale"].default_value = mspec["crease_scale"]
-            crease.inputs["Detail"].default_value = 3.0
-            links.new(vec, crease.inputs["Vector"])
+            # Draft (M13) skips the crease noise: the bump is the
+            # pore distance alone.
+            crease = None
+            if not draft:
+                crease = nt.nodes.new("ShaderNodeTexNoise")
+                crease.inputs["Scale"].default_value = \
+                    mspec["crease_scale"]
+                crease.inputs["Detail"].default_value = 3.0
+                links.new(vec, crease.inputs["Vector"])
             ramp = nt.nodes.new("ShaderNodeValToRGB")
             ramp.color_ramp.elements[0].position = 0.25
             ramp.color_ramp.elements[1].position = 0.75
@@ -1210,16 +1272,22 @@ def make_material(part):
             bump_add = nt.nodes.new("ShaderNodeMath")
             bump_add.operation = "ADD"
             links.new(pores.outputs["Distance"], bump_add.inputs[0])
-            links.new(crease.outputs["Fac"], bump_add.inputs[1])
+            if crease is not None:
+                links.new(crease.outputs["Fac"], bump_add.inputs[1])
             bump_height = bump_add.outputs["Value"]
         elif fam == "ground":
             clump = nt.nodes.new("ShaderNodeTexNoise")
             clump.inputs["Scale"].default_value = mspec["clump_scale"]
             clump.inputs["Detail"].default_value = 3.0
             links.new(vec, clump.inputs["Vector"])
-            stones = nt.nodes.new("ShaderNodeTexVoronoi")
-            stones.inputs["Scale"].default_value = mspec["stone_scale"]
-            links.new(vec, stones.inputs["Vector"])
+            # Draft (M13) skips the stone cells: the bump is the
+            # clump noise alone.
+            stones = None
+            if not draft:
+                stones = nt.nodes.new("ShaderNodeTexVoronoi")
+                stones.inputs["Scale"].default_value = \
+                    mspec["stone_scale"]
+                links.new(vec, stones.inputs["Vector"])
             ramp = nt.nodes.new("ShaderNodeValToRGB")
             ramp.color_ramp.elements[0].position = 0.3
             ramp.color_ramp.elements[1].position = 0.7
@@ -1233,7 +1301,8 @@ def make_material(part):
             bump_add = nt.nodes.new("ShaderNodeMath")
             bump_add.operation = "ADD"
             links.new(clump.outputs["Fac"], bump_add.inputs[0])
-            links.new(stones.outputs["Distance"], bump_add.inputs[1])
+            if stones is not None:
+                links.new(stones.outputs["Distance"], bump_add.inputs[1])
             bump_height = bump_add.outputs["Value"]
         elif fam == "paint":
             peel = nt.nodes.new("ShaderNodeTexNoise")
@@ -1250,9 +1319,9 @@ def make_material(part):
             mix.inputs["B"].default_value = tuple(mspec["dark"]) + (1.0,)
             links.new(ramp.outputs["Color"], mix.inputs["Factor"])
             color_out = mix.outputs["Result"]
-            if mspec["chip"] > 0:
+            if mspec["chip"] > 0 and not draft:
                 # Chips: a hard mask over cell noise, mixed toward
-                # the dark substrate colour.
+                # the dark substrate colour. Draft (M13) skips them.
                 chip_vor = nt.nodes.new("ShaderNodeTexVoronoi")
                 chip_vor.inputs["Scale"].default_value = 12.0
                 links.new(vec, chip_vor.inputs["Vector"])
@@ -1278,7 +1347,8 @@ def make_material(part):
         elif fam == "glass":
             # No pattern nodes: the Base Color is already the
             # tinted style colour, and transmission is set below.
-            if mspec["frost"] > 0:
+            # Draft (M13) skips the frost bump.
+            if mspec["frost"] > 0 and not draft:
                 frost_noise = nt.nodes.new("ShaderNodeTexNoise")
                 frost_noise.inputs["Scale"].default_value = \
                     mspec["frost_scale"]
@@ -1426,10 +1496,11 @@ def make_material(part):
             links.new(color_out, bond_tone.inputs[0])
             links.new(brick_color, bond_tone.inputs[1])
             color_out = bond_tone.outputs["Vector"]
-        if mspec["wear_any"]:
+        if mspec["wear_any"] and not draft:
             # The shared wear group (M9): one group node per worn
             # material. Glass has no colour socket of its own, so
             # its Base Color goes in as the constant style colour.
+            # Draft (M13) skips the wear layer entirely.
             grp = _wear_group()
             wnode = nt.nodes.new("ShaderNodeGroup")
             wnode.node_tree = grp
@@ -1450,12 +1521,36 @@ def make_material(part):
         if mspec.get("transmission"):
             bsdf.inputs["Transmission Weight"].default_value = \
                 mspec["transmission"]
+        if final and bump_height is not None:
+            # Final (M13): one fine-detail noise merged into the
+            # bump chain - two nodes, counted in node_count.
+            fine = nt.nodes.new("ShaderNodeTexNoise")
+            fine.inputs["Scale"].default_value = 40.0
+            fine.inputs["Detail"].default_value = 2.0
+            links.new(vec, fine.inputs["Vector"])
+            fine_add = nt.nodes.new("ShaderNodeMath")
+            fine_add.operation = "ADD"
+            links.new(bump_height, fine_add.inputs[0])
+            links.new(fine.outputs["Fac"], fine_add.inputs[1])
+            bump_height = fine_add.outputs["Value"]
         if bump_height is not None:
             bump = nt.nodes.new("ShaderNodeBump")
             bump.inputs["Strength"].default_value = mspec["bump"]
             bump.inputs["Distance"].default_value = 0.005
             links.new(bump_height, bump.inputs["Height"])
             links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+        if mspec.get("displacement") and bump_height is not None:
+            # True displacement (M14): the bump height drives the
+            # Material Output's Displacement socket. The build
+            # loop subdivides parts whose material wires this
+            # socket, so there is geometry to move. Cycles renders
+            # the displaced surface; EEVEE shows bump only. A
+            # material with no bump chain (glass without frost)
+            # cannot displace: the socket stays unwired and the
+            # build loop leaves the part alone.
+            out_node = nt.nodes["Material Output"]
+            links.new(bump_height, out_node.inputs["Displacement"])
+            mat.cycles.displacement_method = "BOTH"
         return mat
     texture = part.get("texture")
     if texture:
@@ -1643,12 +1738,38 @@ for part in D["parts"]:
     obj.name = part["id"]
     mat = make_material(part)
     obj.data.materials.append(mat)
+    displaced = False
+    if part.get("material_spec"):
+        # True displacement (v1.13, M14): the material wires its
+        # bump height to the Displacement socket when the part
+        # asked for it and has a bump chain. The socket is the
+        # truth - no wiring, no subdivision, whatever the spec
+        # said. The subdivision is SIMPLE level 2 (16x triangles,
+        # the factor the budget gate counted) and is APPLIED at
+        # once: the GLB carries the dense mesh (glTF cannot carry
+        # true displacement), Cycles renders show the displaced
+        # surface, EEVEE shows bump. Applying it also bakes any
+        # bevel below it in the stack - correct geometry either
+        # way. Applied before stats, so stats count the dense mesh.
+        out_node = mat.node_tree.nodes.get("Material Output")
+        if out_node is not None and out_node.inputs["Displacement"].is_linked:
+            displaced = True
+            subdiv = obj.modifiers.new("displace-subdiv", "SUBSURF")
+            subdiv.subdivision_type = "SIMPLE"
+            subdiv.levels = 2
+            subdiv.render_levels = 2
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.modifier_apply(modifier=subdiv.name)
     if part.get("material_spec"):
         # Measured node counts (v1.11, M2): predicted host-side,
         # recorded here so the build report can prove they match.
+        # "displacement" records whether the socket was actually
+        # wired - the build report compares it against the spec.
         MAT_STATS[part["id"]] = {
             "breadcrumb": part["material_spec"]["breadcrumb"],
             "nodes": len(mat.node_tree.nodes),
+            "displacement": displaced,
         }
     if part["glow"]:
         bpy.ops.object.light_add(type="POINT", location=(mn[0] + sz[0] / 2, mn[1] + sz[1] / 2, mn[2] + sz[2] + 0.15))
@@ -1908,6 +2029,188 @@ for cam in D["cameras"]:
     print("DS_RENDER", scene.render.filepath)
 print("DS_DONE")
 '''
+
+
+# The bake phase (v1.13, M12): opens the .blend the build script saved
+# and bakes one material at a time into a PBR texture pack. Cycles,
+# 1 sample, CPU - baking is deterministic at 1 sample, so more
+# samples would only burn time. The .blend on disk is never saved
+# over: the image nodes and the temp materials live only in this
+# run. The host (skullpt.bake) decides which parts bake and which
+# maps each gets; glass never reaches this script.
+#
+# Two Blender behaviours this template works around (both probed on
+# 4.5.9, not assumed):
+#  - bpy.ops.object.bake() ignores scene.cycles.bake_type - the
+#    operator's own `type` property is sticky across calls, so the
+#    type is passed explicitly on every call.
+#  - There is no albedo-only DIFFUSE bake: with direct and indirect
+#    off, the colour pass bakes black. So the colour map is baked
+#    like the height map - a temp copy of the material rewired to
+#    emit the Base Color chain, baked as EMIT.
+_BAKE_TEMPLATE = r'''
+import bpy, os
+
+D = __PAYLOAD__
+OUT = D["out"]
+RES = int(D["res"])
+
+blend_path = os.path.join(OUT, D["slug"] + ".blend")
+bpy.ops.wm.open_mainfile(filepath=blend_path)
+scene = bpy.context.scene
+scene.render.engine = "CYCLES"
+scene.cycles.samples = 1
+scene.cycles.device = "CPU"
+scene.render.bake.margin = 8
+scene.render.bake.use_clear = True
+
+def _bake_map(obj, mat, map_name, path, bake_type):
+    """Bake one map of one material into a PNG at path. Returns
+    True on success. The image node is added to the material for
+    the bake and removed after, and the image is freed - a 1024
+    bake holds one image at a time, never the whole pack. The bake
+    type is passed to the operator explicitly: the operator ignores
+    scene.cycles.bake_type (probed on 4.5.9)."""
+    nt = mat.node_tree
+    img = bpy.data.images.new("bake_" + map_name, width=RES,
+                              height=RES, alpha=False,
+                              float_buffer=False)
+    node = nt.nodes.new("ShaderNodeTexImage")
+    node.image = img
+    node.select = True
+    nt.nodes.active = node
+    if map_name in ("roughness", "normal", "height"):
+        img.colorspace_settings.name = "Non-Color"
+    if map_name == "normal":
+        scene.render.bake.normal_space = "TANGENT"
+    bpy.ops.object.bake(type=bake_type)
+    img.filepath_raw = path
+    img.file_format = "PNG"
+    img.save()
+    nt.nodes.remove(node)
+    bpy.data.images.remove(img)
+    return os.path.exists(path) and os.path.getsize(path) > 0
+
+def _emit_material(mat, source):
+    """A temp copy of `mat` rewired to emit one thing: the Base
+    Color chain ("color") or the bump height ("height"). The source
+    socket feeds an Emission node, so an EMIT bake writes it as a
+    map. Returns the temp material, or None when the source is
+    missing (no bump chain for height; no Principled BSDF or no
+    Base Color for colour)."""
+    nt = mat.node_tree
+    if source == "color":
+        bsdf = None
+        for node in nt.nodes:
+            if node.type == "BSDF_PRINCIPLED":
+                bsdf = node
+                break
+        if bsdf is None:
+            return None
+        default = None
+        if not bsdf.inputs["Base Color"].is_linked:
+            default = tuple(bsdf.inputs["Base Color"].default_value)
+    else:  # height
+        bump = None
+        for node in nt.nodes:
+            if node.type == "BUMP":
+                bump = node
+                break
+        if bump is None or not bump.inputs["Height"].is_linked:
+            return None
+        default = None
+    tmp = mat.copy()
+    tmp.name = mat.name + "_bake_" + source
+    tnt = tmp.node_tree
+    src = None
+    if source == "color":
+        bsdf = None
+        for node in tnt.nodes:
+            if node.type == "BSDF_PRINCIPLED":
+                bsdf = node
+                break
+        inp = bsdf.inputs["Base Color"]
+        if inp.is_linked:
+            src = inp.links[0].from_socket
+    else:
+        bump = None
+        for node in tnt.nodes:
+            if node.type == "BUMP":
+                bump = node
+                break
+        src = bump.inputs["Height"].links[0].from_socket
+    out = tnt.nodes["Material Output"]
+    for link in list(out.inputs["Surface"].links):
+        tnt.links.remove(link)
+    em = tnt.nodes.new("ShaderNodeEmission")
+    if src is not None:
+        tnt.links.new(src, em.inputs["Color"])
+    else:
+        em.inputs["Color"].default_value = default
+    tnt.links.new(em.outputs["Emission"], out.inputs["Surface"])
+    return tmp
+
+for job in D["parts"]:
+    part_id = job["id"]
+    obj = scene.objects.get(part_id)
+    if obj is None:
+        print("DS_BAKE_SKIP", part_id, "not in the built scene")
+        continue
+    if obj.type != "MESH":
+        print("DS_BAKE_SKIP", part_id, "not a mesh")
+        continue
+    if not obj.data.uv_layers:
+        print("DS_BAKE_SKIP", part_id, "has no UV map to bake onto")
+        continue
+    if not obj.data.materials:
+        print("DS_BAKE_SKIP", part_id, "has no material")
+        continue
+    mat = obj.data.materials[0]
+    if mat is None or not mat.use_nodes:
+        print("DS_BAKE_SKIP", part_id, "material has no node tree")
+        continue
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    for map_name in job["maps"]:
+        path = os.path.join(
+            OUT, D["slug"] + "-" + part_id + "-" + map_name + ".png")
+        if map_name in ("color", "height"):
+            # Colour and height bake through a temp material that
+            # emits the source chain (see the note above the
+            # template): there is no albedo-only DIFFUSE bake.
+            tmp = _emit_material(mat, map_name)
+            if tmp is None:
+                reason = ("no bump chain to bake height from"
+                          if map_name == "height" else
+                          "no base colour to bake")
+                print("DS_BAKE_SKIP", part_id, map_name, reason)
+                continue
+            obj.data.materials[0] = tmp
+            try:
+                ok = _bake_map(obj, tmp, map_name, path, "EMIT")
+            finally:
+                obj.data.materials[0] = mat
+                bpy.data.materials.remove(tmp)
+        else:
+            bake_type = {"roughness": "ROUGHNESS",
+                         "normal": "NORMAL"}[map_name]
+            ok = _bake_map(obj, mat, map_name, path, bake_type)
+        if ok:
+            print("DS_BAKE", part_id, map_name, path)
+        else:
+            print("DS_BAKE_SKIP", part_id, map_name,
+                  "the bake did not land")
+    obj.select_set(False)
+print("DS_BAKE_DONE")
+'''
+
+
+def generate_bake_script(payload: dict) -> str:
+    """The bake script for a payload built by skullpt.bake: opens
+    the job's .blend and bakes one material at a time into its PBR
+    pack. Pure function."""
+    return _BAKE_TEMPLATE.replace("__PAYLOAD__", repr(payload))
 
 
 def _expected_outputs(desc: dict, slug: str) -> list[str]:

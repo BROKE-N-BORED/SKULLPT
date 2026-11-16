@@ -25,6 +25,11 @@ TEXTURES = ("none", "wood_grain", "brushed_metal", "worn_leather")
 # EEVEE and falls back to Cycles when it cannot run; the other two
 # pin one engine (Cycles never tries EEVEE at all).
 RENDER_ENGINES = ("auto", "eevee", "cycles")
+
+# Material quality tiers (v1.13, M13) - kept in sync with
+# materials.TIERS. The description layer validates what jobs carry;
+# the settings layer validates what the Settings window writes.
+MATERIAL_TIERS = ("draft", "balanced", "final")
 # Mesh formats ingest understands and the Blender build can import
 # (v1.6, T21/T30). The description's top-level "mesh" block names one.
 MESH_FORMATS = ("glb", "obj", "fbx", "stl")
@@ -297,6 +302,11 @@ def validate(desc: dict) -> list[str]:
             denoise = render.get("denoise")
             if denoise is not None and not isinstance(denoise, bool):
                 problems.append("render.denoise must be true or false")
+            tier = render.get("tier")
+            if tier is not None and tier not in MATERIAL_TIERS:
+                problems.append(
+                    f"render.tier must be one of {MATERIAL_TIERS}, "
+                    f"got {tier!r}")
     # Character Studio (v1.7, T26): a character description carries a
     # "character" block - 11 MPFB macro sliders, a skin, a rig. The
     # skin is REQUIRED: without one the human stays grey. Missing
@@ -373,7 +383,12 @@ def estimate_triangles(part: dict) -> int:
     before bevel modifiers - a lower bound on the real count). A part
     ingested from a real mesh carries its measured count (T30) - that
     is what Blender imports, so it is used as-is instead of the box
-    estimate of 12, and the budget gate stops under-counting imports."""
+    estimate of 12, and the budget gate stops under-counting imports.
+    A part with true displacement on (v1.13, M14) is subdivided at
+    level 2 in the build, so its estimate is multiplied by 16 (4^2) -
+    the budget gate counts displaced geometry, or the gate lies
+    (design section 7). An imported part never subdivides: its
+    measured count stands as-is."""
     mesh = part.get("mesh") or {}
     measured = mesh.get("triangles")
     if isinstance(measured, int) and measured >= 0:
@@ -381,30 +396,39 @@ def estimate_triangles(part: dict) -> int:
     shape = part.get("shape", "box")
     if shape == "cylinder":
         v = _CYLINDER_VERTICES
-        return 2 * v + 2 * (v - 2)
-    if shape == "sphere":
-        return 2 * _SPHERE_SEGMENTS * (_SPHERE_RINGS - 1)
-    if shape == "extrude":
+        base = 2 * v + 2 * (v - 2)
+    elif shape == "sphere":
+        base = 2 * _SPHERE_SEGMENTS * (_SPHERE_RINGS - 1)
+    elif shape == "extrude":
         profile = part.get("profile_cm")
         if isinstance(profile, list) and len(profile) >= 3:
-            return 4 * len(profile) - 4
-        return 12
-    if shape == "lathe":
+            base = 4 * len(profile) - 4
+        else:
+            base = 12
+    elif shape == "lathe":
         profile = part.get("profile_cm")
         if isinstance(profile, list) and len(profile) >= 2:
-            total = (_LATHE_SEGMENTS * 2) * (len(profile) - 1)
+            base = (_LATHE_SEGMENTS * 2) * (len(profile) - 1)
             if float(profile[0][0]) > 0.001:
-                total += _LATHE_SEGMENTS
+                base += _LATHE_SEGMENTS
             if float(profile[-1][0]) > 0.001:
-                total += _LATHE_SEGMENTS
-            return total
-        return 12
-    if shape == "tube":
+                base += _LATHE_SEGMENTS
+        else:
+            base = 12
+    elif shape == "tube":
         path = part.get("path_cm")
         if isinstance(path, list) and len(path) >= 2:
-            return (_TUBE_SEGMENTS * 2) * (len(path) - 1)
-        return 12
-    return 12  # box, and anything the exporter falls back to a cube for
+            base = (_TUBE_SEGMENTS * 2) * (len(path) - 1)
+        else:
+            base = 12
+    else:
+        base = 12  # box, and anything the exporter falls back to a cube for
+    material = part.get("material")
+    if isinstance(material, dict) and material.get("displacement"):
+        from .materials import DISPLACEMENT_TRI_FACTOR
+
+        return base * DISPLACEMENT_TRI_FACTOR
+    return base
 
 
 def estimate_description_triangles(desc: dict) -> int:

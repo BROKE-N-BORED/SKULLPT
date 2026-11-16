@@ -52,13 +52,15 @@ radii:
 
 # SKULLPT Design System
 
-Single source of truth for how the Bench looks (v1.12; the v1.5
+Single source of truth for how the Bench looks (v1.13; the v1.5
 system, carried forward through v1.9 unchanged in its tokens - the
 newer windows reuse these components: the render settings use the
 Settings window's form rows and the Render window's groups, the
 Vary button is a plain secondary button, the workspace/backup/update
 actions are plain menu items and dialogs; v1.11 adds the Material
-Dial below, v1.12 its Life page). The code follows this file: `skullpt/qtdesign.py`
+Dial below, v1.12 its Life page, v1.13 the material quality combo
+and the Bake PBR maps button as plain form rows and a plain
+secondary button in the Render window). The code follows this file: `skullpt/qtdesign.py`
 holds the tokens, including the fixed amber `#f5a623`, and builds
 the one stylesheet `main()` applies. If this file and the code
 disagree, this file wins and the code is wrong.
@@ -271,6 +273,18 @@ Tooltips are canvas-soft with a hairline border.
   and number keys 1-9 select pages 0-8 with 0 for Saved, for
   people who cannot flick precisely - the keyboard alternative is
   what keeps the tenth page usable.
+- **Material quality (v1.13).** The tier is a plain combo in the
+  Render window's render-settings form and in the Settings
+  window's render defaults, labelled "Material quality": Draft
+  (fewer nodes, fast), Balanced (the full recipe), Final (extra
+  detail, 1024 bakes). The Bake PBR maps button sits under the
+  Render window's render settings as a plain secondary button,
+  with a one-line note beneath it naming what baking does and
+  that the job must be built first. The displacement opt-in is a
+  plain checkbox in the part editor, visible only for object
+  materials, labelled with what it costs ("True displacement
+  (16x triangles, needs more RAM)"). No new chrome: these are
+  form rows and buttons the system already has.
 
 ### Icons (R2)
 

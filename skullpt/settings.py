@@ -10,6 +10,10 @@ Settings live at <workspace>/settings.json. The switches:
   resolution, Cycles samples, denoise - how renders are made when a
   job does not say otherwise.
 
+  Material tier (v1.13, M13): draft / balanced / final - how much
+  of each material recipe the build wires. A job's "render" block
+  can override it per job, like the other render settings.
+
 A description may carry "critic_reference": true/false to override the
 workspace switch for that one job (\"a toggle in settings, plus a
 per-job say-so as well\" - Joshua, 2026-11-11), and a "render" block
@@ -34,6 +38,9 @@ DEFAULTS = {
     "render_resolution_px": 640,
     "render_samples": 24,
     "render_denoise": False,
+    # Material quality tier (v1.13, M13): the default recipe size
+    # for builds. Balanced is the full recipe.
+    "material_tier": "balanced",
 }
 
 # The render engines the exporter knows (kept in sync with
@@ -112,7 +119,11 @@ def resolve_render_settings(workspace: str | Path, desc: dict) -> dict:
     nor the workspace names one (the pre-v1.6 path - older
     descriptions keep rendering as they did). The workspace read here
     is the raw file, not the merged defaults: a default of 640 must
-    not shadow a description's own preview size."""
+    not shadow a description's own preview size. The material tier
+    (v1.13, M13) resolves the same way: job, then workspace, then
+    Balanced."""
+    from . import materials as materials_mod
+
     raw = _raw_settings(workspace)
     job = desc.get("render") or {}
     engine = job.get("engine") or raw.get("render_engine") or "auto"
@@ -129,8 +140,11 @@ def resolve_render_settings(workspace: str | Path, desc: dict) -> dict:
     denoise = job.get("denoise")
     if not isinstance(denoise, bool):
         denoise = bool(raw.get("render_denoise", False))
+    tier = job.get("tier") or raw.get("material_tier") or "balanced"
+    if tier not in materials_mod.TIERS:
+        tier = "balanced"
     return {"engine": engine, "resolution_px": resolution,
-            "samples": samples, "denoise": denoise}
+            "samples": samples, "denoise": denoise, "tier": tier}
 
 
 def save_render_settings(workspace: str | Path, render: dict) -> dict:
@@ -149,6 +163,13 @@ def save_render_settings(workspace: str | Path, render: dict) -> dict:
         current["render_samples"] = samples
     if isinstance(render.get("denoise"), bool):
         current["render_denoise"] = render["denoise"]
+    # The material tier (v1.13, M13): the Settings window writes it
+    # as "tier", like the render block's own key.
+    from . import materials as materials_mod
+
+    tier = render.get("tier")
+    if tier in materials_mod.TIERS:
+        current["material_tier"] = tier
     save_settings(workspace, current)
     return current
 

@@ -647,6 +647,39 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
             result["detail"] = (f"{job.dir.name} is queued at position {position} - "
                                 "it builds when the run ahead of it finishes")
         return result
+    if action == "bake":
+        # PBR pack baking (v1.13, M12): a background run on the heavy
+        # queue, like a build - Blender holds the heavy-job lock.
+        # The job needs its .blend first; bake_job refuses plainly
+        # when it is not there yet.
+        job = _job(workspace, str(payload.get("job", "")))
+        resolution = payload.get("resolution")
+
+        def do_bake(cancel, report):
+            from .bake import bake_job
+
+            def on_progress(fraction, detail):
+                report(fraction, detail)
+
+            report(0.05, "starting the bake")
+            result_data = bake_job(job, workspace,
+                                   resolution=resolution,
+                                   cancel=cancel,
+                                   progress=on_progress)
+            if not result_data.get("ok"):
+                raise RuntimeError(
+                    "bake did not finish: "
+                    + "; ".join(result_data.get("problems", [])[:3]))
+            return result_data.get("detail") or f"baked {job.dir.name}"
+        queue = f"heavy:{workspace}"
+        run_id = _start_run("bake", job.dir.name, do_bake, queue=queue)
+        position = queue_position(queue, run_id)
+        result = {"ok": True, "job": job.dir.name, "run": run_id}
+        if position:
+            result["queued"] = True
+            result["detail"] = (f"{job.dir.name} is queued at position {position} - "
+                                "it bakes when the run ahead of it finishes")
+        return result
     if action == "file":
         job = _job(workspace, str(payload.get("job", "")))
         if job.state != "awaiting_review":
@@ -851,10 +884,12 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
         # Per-job render override (T25): stored in the description's
         # "render" block. Changing how a job renders is presentation,
         # not content - it never sends the job back to the plan gate.
+        # The material tier (v1.13, M13) rides the same block.
         job = _job(workspace, str(payload.get("job", "")))
         desc = job.load_description()
         render = dict(desc.get("render") or {})
-        for key in ("engine", "resolution_px", "samples", "denoise"):
+        for key in ("engine", "resolution_px", "samples", "denoise",
+                    "tier"):
             if key in payload:
                 render[key] = payload[key]
         problems = desc_mod.validate({**desc, "render": render})
@@ -923,6 +958,24 @@ def build_report(workspace: Path, name: str) -> dict | None:
     report["tris_by_part"] = per_part
     if measured_materials:
         report["measured_materials"] = measured_materials
+        # Displacement reconciliation (v1.13, M14): a part that asked
+        # for true displacement but has no bump chain (glass without
+        # frost) never wires the socket - the measured stats say so.
+        # Name it in the report's notes instead of leaving the two
+        # records disagreeing silently.
+        predicted = report.get("materials") or {}
+        notes = list(report.get("notes") or [])
+        for part_id, entry in predicted.items():
+            if not isinstance(entry, dict) or not entry.get("displacement"):
+                continue
+            measured = measured_materials.get(part_id) or {}
+            if measured and not measured.get("displacement"):
+                notes.append(
+                    f"Part {part_id} asked for true displacement but "
+                    "has no bump chain to displace with (glass without "
+                    "frost), so it was built with bump only.")
+        if notes:
+            report["notes"] = notes
     return report
 
 
