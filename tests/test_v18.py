@@ -766,7 +766,13 @@ class StagedInstallerV18Tests(unittest.TestCase):
         env.pop("WAYLAND_DISPLAY", None)
         env.pop("DESIGNSHELL_BLENDER", None)
         env.pop("DESIGNSHELL_SD_CLI", None)
-        env.pop("DESIGNSHELL_SD_MODEL", None)
+        if seed_model:
+            # v1.9 (N5): only the exact model file counts as present —
+            # point the installer at the stand-in with the override.
+            env["DESIGNSHELL_SD_MODEL"] = str(
+                home / "design-shell-models" / "other-model.gguf")
+        else:
+            env.pop("DESIGNSHELL_SD_MODEL", None)
         return stage, home, env, tmp
 
     def _run_install(self, stage, env, *args):

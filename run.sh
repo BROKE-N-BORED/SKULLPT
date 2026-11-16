@@ -4,11 +4,9 @@
 #   ./run.sh              start the Bench — SKULLPT's window (live render
 #                         view + chat + folders), a native Linux desktop
 #                         window. No browser, no web page.
-#   ./run.sh webbench <ws>  serve the legacy web Bench instead (browser).
 #   ./run.sh demo <ws>    run the built-in demo into a workspace, e.g.
 #                         ./run.sh demo ~/design-shell-workspace
 #   ./run.sh <args...>    pass anything straight to the shell CLI, e.g.
-#                         ./run.sh view examples/workbench.description.json
 #                         ./run.sh new ~/design-shell-workspace examples/tavern-room.description.json
 #
 # The Bench window runs from the private .venv install.sh creates (it has

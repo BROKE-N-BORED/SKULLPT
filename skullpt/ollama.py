@@ -1,10 +1,10 @@
-"""The local model — Ollama, the no-key seat.
+"""The local model - Ollama, the no-key seat.
 
 The fallback seat needs the Ollama server on this machine answering
 on 127.0.0.1:11434 with the model pulled. This module is the status
 check the Bench, the setup panel, and the dependency report all read:
 is the server up, is the model present. The check is cached briefly
-(30 s) so a down server never stalls a refresh — a refused connection
+(30 s) so a down server never stalls a refresh - a refused connection
 is fast, but a black-holed socket is not.
 
 The model name comes from the seats table (the fallback seat), never
@@ -63,7 +63,7 @@ def model_present(model: str | None = None, timeout: float = 2.0) -> bool:
 
 
 def status(force: bool = False) -> dict:
-    """{"server": bool, "model": bool, "model_name": str} — cached
+    """{"server": bool, "model": bool, "model_name": str} - cached
     for 30 s unless force=True (the setup panel forces a re-check
     after a fix runs)."""
     now = time.monotonic()
@@ -84,7 +84,7 @@ def ollama_binary() -> str | None:
 def pull_model(model: str | None = None,
                timeout: int = 3600) -> tuple[bool, str]:
     """Pull the model with the Ollama CLI (the server must be up).
-    Long — run it in a background thread, never on the UI thread.
+    Long - run it in a background thread, never on the UI thread.
     Returns (ok, plain-language message). A failed pull is safe to
     retry: the Ollama CLI resumes a partial download."""
     name = model or MODEL_NAME
@@ -95,7 +95,7 @@ def pull_model(model: str | None = None,
         proc = subprocess.run([binary, "pull", name], capture_output=True,
                               text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return False, f"Pulling {name} timed out — try again, it resumes."
+        return False, f"Pulling {name} timed out - try again, it resumes."
     except OSError as exc:
         return False, f"Could not run Ollama: {exc}"
     if proc.returncode != 0:

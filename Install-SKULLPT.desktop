@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Install SKULLPT
-Comment=Install SKULLPT — the native Linux design and asset workshop
+Comment=Install SKULLPT - the native Linux design and asset workshop
 Exec=python3 -c "import os,subprocess,sys; d=os.path.dirname(sys.argv[1]) or os.getcwd(); subprocess.call(['bash','./install.sh','--gui'],cwd=d)" %k
 Terminal=false
 Icon=system-software-install

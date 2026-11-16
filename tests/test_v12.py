@@ -66,7 +66,7 @@ class ShimTests(unittest.TestCase):
 
     def test_shim_submodule_imports(self):
         code = ("from designshell import bench; "
-                "assert callable(bench.serve); "
+                "assert callable(bench.act); "
                 "assert callable(bench.workspace_state)")
         res = _run([PY, "-c", code])
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -92,7 +92,7 @@ class ShimTests(unittest.TestCase):
             res = _run([PY, "-m", "skullpt", "cloud-mesh", tmp, str(png)],
                        env=env)
             self.assertEqual(res.returncode, 1)
-            self.assertIn("HF_TOKEN", res.stdout + res.stderr)
+            self.assertIn("Settings", res.stdout + res.stderr)
 
 
 class VenvSelectionTests(unittest.TestCase):

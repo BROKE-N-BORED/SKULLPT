@@ -74,7 +74,7 @@ class Job:
     def _save(self) -> None:
         # Atomic write: job.json is read by the Bench's background-build
         # poll while the build thread saves it, and a plain write_text
-        # truncates first — a reader mid-write saw an empty file and
+        # truncates first - a reader mid-write saw an empty file and
         # crashed on JSON. Write beside it and rename, so a reader
         # always sees a complete file (a crash mid-write leaves the
         # old file, not a torn one).
@@ -110,7 +110,7 @@ class Job:
     def approve(self) -> None:
         if self.state != "awaiting_approval":
             raise GateError(f"cannot approve from state {self.state!r}")
-        # What the user approved is frozen here — later steps may patch
+        # What the user approved is frozen here - later steps may patch
         # or replace description.json, but the approved copy survives.
         self.snapshot_description("description.approved.json")
         self.transition("approved")
@@ -119,7 +119,7 @@ class Job:
         """Return a failed job to `approved` so it can build again.
 
         The description was already approved; the failure was in the
-        build, not the plan. Only `failed` jobs can retry — anything
+        build, not the plan. Only `failed` jobs can retry - anything
         else is a state error, not a retry.
         """
         if self.state != "failed":
@@ -132,7 +132,7 @@ class Job:
     def require_approved(self) -> None:
         if self.state != "approved":
             raise GateError(
-                f"plan gate: job is {self.state!r}, not 'approved' — "
+                f"plan gate: job is {self.state!r}, not 'approved' - "
                 "the user must approve the description before anything is built"
             )
 
@@ -148,9 +148,9 @@ class Job:
     def delete(self) -> None:
         """Remove the job's folder entirely. The caller confirms first
         (the Bench asks with No as the default); this just does it.
-        A job mid-build cannot be deleted — stop the build first."""
+        A job mid-build cannot be deleted - stop the build first."""
         if self.state in ("building", "checking"):
-            raise GateError(f"cannot delete a job that is {self.state!r} — "
+            raise GateError(f"cannot delete a job that is {self.state!r} - "
                             "wait for the build to finish first")
         shutil.rmtree(self.dir)
 
@@ -160,18 +160,18 @@ class Job:
         Returns the Job at its new location."""
         name = (new_name or "").strip()
         if not name:
-            raise ValueError("a job needs a name — the new name is empty")
+            raise ValueError("a job needs a name - the new name is empty")
         slug = _slug(name)
         if not slug:
             raise ValueError(f"the name {new_name!r} makes no usable job folder")
         if self.state in ("building", "checking"):
-            raise GateError(f"cannot rename a job that is {self.state!r} — "
+            raise GateError(f"cannot rename a job that is {self.state!r} - "
                             "wait for the build to finish first")
         dest = self.dir.parent / slug
         if dest.exists() and dest.resolve() != self.dir.resolve():
             raise ValueError(f"a job named {slug!r} already exists")
         if dest.resolve() == self.dir.resolve():
-            return self  # same slug — nothing to move
+            return self  # same slug - nothing to move
         desc = self.load_description()
         desc["name"] = name
         problems = desc_mod.validate(desc)
@@ -190,10 +190,51 @@ class Job:
         """A fresh job with the same description: new folder, new
         session log, empty output dir, waiting at the plan gate.
         The description is the asset; the job is the workflow, and
-        the copy starts the workflow over."""
+        the copy starts the workflow over.
+
+        Files that live in the job folder travel with it (v1.9,
+        N6): the mesh GLB (a cloud-mesh job's build imports it) and
+        the reference image when it is filed here. Files outside
+        the folder (workspace meshes/, intake photos) are shared,
+        not copied - the copy keeps pointing at them.
+        """
         desc = self.load_description()
         desc["name"] = f"{desc.get('name', self.dir.name)} copy"
-        return Job.create(self.dir.parent, desc)
+        new_job = Job.create(self.dir.parent, desc)
+        self._copy_job_files(new_job, desc)
+        return new_job
+
+    def _copy_job_files(self, new_job: "Job", desc: dict) -> None:
+        """Copy the description's job-folder files into a duplicate.
+
+        Returns nothing; a file that is not there (or lives outside
+        this job's folder) is left alone - the duplicate's build
+        fails plainly on a missing mesh, as the original would.
+        """
+        repointed = False
+        mesh_file = (desc.get("mesh") or {}).get("file")
+        if mesh_file:
+            src = Path(mesh_file)
+            if not src.is_absolute():
+                src = self.dir / mesh_file
+            # Resolve before the containment check: a ".." in the
+            # recorded name must not escape the job folder.
+            if src.exists() and src.resolve().is_relative_to(self.dir.resolve()):
+                dest = new_job.dir / src.resolve().relative_to(self.dir.resolve())
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+        ref = desc.get("reference") or {}
+        stored = ref.get("stored_at")
+        if stored:
+            src = Path(stored)
+            if src.exists() and src.resolve().is_relative_to(self.dir.resolve()):
+                dest = new_job.dir / src.resolve().relative_to(self.dir.resolve())
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                desc["reference"] = dict(ref, stored_at=str(dest))
+                repointed = True
+        if repointed:
+            desc_mod.dump(desc, new_job.desc_path)
 
     def edit_part(self, part_id: str, fields: dict) -> str:
         """Change one part's parameters (position, size, material,
@@ -205,10 +246,10 @@ class Job:
         what was approved is no longer what is there, so the plan
         gate has to see it again. Returns the job's new state."""
         if self.state in ("building", "checking"):
-            raise GateError(f"cannot edit a job that is {self.state!r} — "
+            raise GateError(f"cannot edit a job that is {self.state!r} - "
                             "wait for the build to finish first")
         if self.state == "filed":
-            raise GateError("cannot edit a filed job — it lives in the "
+            raise GateError("cannot edit a filed job - it lives in the "
                             "Library now; duplicate it to change it")
         desc = self.load_description()
         part = next((p for p in desc.get("parts", []) if p.get("id") == part_id), None)
@@ -232,7 +273,7 @@ class Job:
         desc_mod.dump(desc, self.desc_path)
         self.log("part_edited", part=part_id, changed=sorted(changed))
         if self.state not in ("draft", "awaiting_approval"):
-            # What was approved is gone — the gate sees it again.
+            # What was approved is gone - the gate sees it again.
             self._state.pop("failure", None)
             self._save()
             self.transition("awaiting_approval", reason="description edited")
@@ -245,10 +286,10 @@ class Job:
         copy is snapshotted first, and a job past the plan gate goes
         back to awaiting_approval. Returns the job's new state."""
         if self.state in ("building", "checking"):
-            raise GateError(f"cannot edit a job that is {self.state!r} — "
+            raise GateError(f"cannot edit a job that is {self.state!r} - "
                             "wait for the build to finish first")
         if self.state == "filed":
-            raise GateError("cannot edit a filed job — it lives in the "
+            raise GateError("cannot edit a filed job - it lives in the "
                             "Library now; duplicate it to change it")
         if not isinstance(character, dict):
             raise ValueError("edit-character needs a character object")
@@ -266,7 +307,7 @@ class Job:
         desc_mod.dump(desc, self.desc_path)
         self.log("character_edited")
         if self.state not in ("draft", "awaiting_approval"):
-            # What was approved is gone — the gate sees it again.
+            # What was approved is gone - the gate sees it again.
             self._state.pop("failure", None)
             self._save()
             self.transition("awaiting_approval", reason="description edited")
@@ -275,7 +316,7 @@ class Job:
 
 def recover_stale_jobs(workspace: str | Path) -> list[str]:
     """Jobs left in `building`/`checking` by a crash or a closed Bench
-    go back to `approved` with a note — unless the heavy-job lock is
+    go back to `approved` with a note - unless the heavy-job lock is
     held by a live process, in which case a build may genuinely be
     running and nothing is touched. Returns the recovered job names."""
     ws = Path(workspace)
@@ -289,7 +330,7 @@ def recover_stale_jobs(workspace: str | Path) -> list[str]:
         except ValueError:
             holder = 0
         if holder > 0 and Path(f"/proc/{holder}").exists():
-            return []  # a build is running — hands off
+            return []  # a build is running - hands off
     recovered: list[str] = []
     for job_dir in sorted(p for p in jobs_root.iterdir() if p.is_dir()):
         try:

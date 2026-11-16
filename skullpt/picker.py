@@ -1,4 +1,4 @@
-"""The Image Picker — keep or reject generated candidates, on any screen.
+"""The Image Picker - keep or reject generated candidates, on any screen.
 
 Same pattern as the Live Render Window: a zero-dependency page the
 shell serves locally. Each candidate card shows the picture and its

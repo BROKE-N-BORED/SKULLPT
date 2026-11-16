@@ -19,8 +19,6 @@ Commands:
   file <workspace> <job>                 file an awaiting-review job into the Library
   search <workspace> <query> [--kind K]  search the Library before making new
   demo <workspace>                       run the bundled example end to end
-  view <description> [--port N]          serve the Live Render Window for a description
-  snapshot <description> <out.html>      write a standalone (non-live) viewer page
   plan <workspace> <words...> [--kind K] draft a description from plain words (planner seat)
   critique <workspace> <job>             run the live vision critic on a job's renders
   ingest <file.glb|.obj|.stl|.fbx|.blend> <out.json>
@@ -30,7 +28,7 @@ Commands:
   cloud-mesh <workspace> <photo> [--job J] [--seed N]
                                          photo -> textured 3D mesh on Hugging
                                          Face's free GPU, filed in a job
-                                         (needs HF_TOKEN in the environment)
+                                         (save your Hugging Face token in Settings first)
   recipes <workspace>                    list graduated recipes
   apply-recipe <workspace> <file> [out]  start a description from a graduated recipe
   unreal-package <workspace> <job>       assemble the Unreal import package for a built job
@@ -50,15 +48,13 @@ Commands:
   backup <workspace> [dest]              zip the whole workspace (the Hugging
                                          Face token is never in a backup)
   update-check                           is there a newer SKULLPT release?
-                                         (read-only — never downloads)
-  bench [workspace]                      open the Bench — the shell's window,
+                                         (read-only - never downloads)
+  bench [workspace]                      open the Bench - the shell's window,
                                          a native Linux desktop window
                                          (Jobs home, Render, Images, Library,
                                          Settings); no workspace means the
                                          folder chosen in Settings, else
                                          ~/design-shell-workspace
-  webbench <workspace> [--port N]        serve the legacy web Bench instead
-                                         (same jobs/images/library, in a browser)
 """
 from __future__ import annotations
 
@@ -87,7 +83,7 @@ def _job(ws: Path, name: str) -> Job:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="skullpt", description="SKULLPT — standalone design & asset workshop")
+    ap = argparse.ArgumentParser(prog="skullpt", description="SKULLPT - standalone design & asset workshop")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("init",):
         p = sub.add_parser(name); p.add_argument("workspace")
@@ -100,9 +96,6 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("search"); p.add_argument("workspace"); p.add_argument("query")
     p.add_argument("--kind", default=None)
     p = sub.add_parser("demo"); p.add_argument("workspace")
-    p = sub.add_parser("view"); p.add_argument("description")
-    p.add_argument("--port", type=int, default=8760)
-    p = sub.add_parser("snapshot"); p.add_argument("description"); p.add_argument("out")
     p = sub.add_parser("plan"); p.add_argument("workspace")
     p.add_argument("words", nargs="+"); p.add_argument("--kind", default="scene")
     p = sub.add_parser("critique"); p.add_argument("workspace"); p.add_argument("job")
@@ -139,8 +132,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("dest", nargs="?", default=None)
     p = sub.add_parser("update-check")
     p = sub.add_parser("bench"); p.add_argument("workspace", nargs="?", default=None)
-    p = sub.add_parser("webbench"); p.add_argument("workspace")
-    p.add_argument("--port", type=int, default=8770)
     args = ap.parse_args(argv)
 
     try:
@@ -164,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "retry":
             job = _job(_ws(args.workspace), args.job)
             job.retry()
-            print(f"retried: {job.dir.name} is approved again — build when ready")
+            print(f"retried: {job.dir.name} is approved again - build when ready")
         elif args.cmd == "delete":
             job = _job(_ws(args.workspace), args.job)
             name = job.dir.name
@@ -177,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "duplicate":
             job = _job(_ws(args.workspace), args.job)
             copy = job.duplicate()
-            print(f"duplicated as {copy.dir.name} — waiting at the plan gate")
+            print(f"duplicated as {copy.dir.name} - waiting at the plan gate")
         elif args.cmd == "recover":
             from .jobs import recover_stale_jobs
             ws = _ws(args.workspace)
@@ -186,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
                 for name in recovered:
                     print(f"recovered: {name} is approved again")
             else:
-                print("no stranded jobs — nothing to recover")
+                print("no stranded jobs - nothing to recover")
         elif args.cmd == "build":
             ws = _ws(args.workspace)
             job = _job(ws, args.job)
@@ -242,13 +233,13 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 desc = live.plan_from_words(" ".join(args.words), seats, kind=args.kind,
                                           workspace=ws)
-            except (live.SeatNotConfigured, live.SeatCallFailed) as exc:
+            except (live.SeatNotConfigured, live.SeatCallFailed, ValueError) as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
             job = Job.create(ws / "jobs", desc)
             print(f"job created: {job.dir.name} (state: {job.state})")
             print(desc_mod.summarize(desc))
-            print("\nDraft only — approve it with the approve command before anything builds.")
+            print("\nDraft only - approve it with the approve command before anything builds.")
         elif args.cmd == "critique":
             from .critic import GeminiCritic
             from .seats import load_seats
@@ -267,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
                     reference_png = ref_path.read_bytes()
             try:
                 result = critic.critique(desc, previews, reference_png=reference_png)
-            except Exception as exc:  # seat not configured / call failed — say so plainly
+            except Exception as exc:  # seat not configured / call failed - say so plainly
                 print(f"vision critique unavailable: {exc}", file=sys.stderr)
                 return 1
             print(json.dumps(result, indent=2))
@@ -298,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
             ws = _ws(args.workspace)
             # The disclosure goes first, before anything is sent.
             print(cloudmesh.DISCLOSURE)
-            print("A mesh takes a few minutes on the free queue — stay put.")
+            print("A mesh takes a few minutes on the free queue - stay put.")
             try:
                 result = cloudmesh.cloud_mesh(
                     ws, args.photo, job=args.job, seed=args.seed,
@@ -310,14 +301,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"job: {result['job']} (state: {result['state']}, "
                   f"{result['parts']} parts measured)")
             print(f"seed: {result['seed']}  space: {result['space']}")
-            print("\nThe job is waiting at the plan gate — approve it with "
+            print("\nThe job is waiting at the plan gate - approve it with "
                   "the approve command before anything builds.")
         elif args.cmd == "recipes":
             from .graduate import list_recipes
             ws = _ws(args.workspace)
             rows = list_recipes(ws)
             if not rows:
-                print("no graduated recipes yet — file an approved job and one graduates from it")
+                print("no graduated recipes yet - file an approved job and one graduates from it")
             for row in rows:
                 print(f"{row['file']}  [{row['kind']}]  {row['name']}  (from job {row['graduated_from']})")
         elif args.cmd == "apply-recipe":
@@ -354,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             except imagegen.ImageGenError as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
-            except Exception as exc:  # governor lock etc. — say it plainly
+            except Exception as exc:  # governor lock etc. - say it plainly
                 print(f"image generation stopped: {exc}", file=sys.stderr)
                 return 1
             landed = [c for c in batch["candidates"] if c["status"] == "pending"]
@@ -363,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
             for c in batch["candidates"]:
                 print(f"  {c['file']}  seed {c['seed']}  {c['status']}")
             if failed:
-                print(f"{len(failed)} candidate(s) failed — see batch.json for the engine's words")
+                print(f"{len(failed)} candidate(s) failed - see batch.json for the engine's words")
             if landed:
                 print(f"\nPick the keeper:  python3 -m skullpt pick {bdir}")
                 print(f"Or from the terminal:  python3 -m skullpt decide {bdir} cand-01.png keep")
@@ -478,18 +469,6 @@ def main(argv: list[str] | None = None) -> int:
             from .qtbench import default_workspace, main as qt_main
             ws = _ws(args.workspace) if args.workspace else _ws(default_workspace())
             return qt_main(ws)
-        elif args.cmd == "webbench":
-            from .bench import serve
-            ws = _ws(args.workspace)
-            serve(ws, port=args.port)
-        elif args.cmd == "view":
-            from .viewer import serve
-            serve(args.description, port=args.port)
-        elif args.cmd == "snapshot":
-            from .viewer import render_page
-            desc = desc_mod.load(args.description)
-            Path(args.out).write_text(render_page(desc, live=False), encoding="utf-8")
-            print(f"snapshot written: {args.out}")
         return 0
     except (GateError, desc_mod.DescriptionError) as exc:
         print(str(exc), file=sys.stderr)

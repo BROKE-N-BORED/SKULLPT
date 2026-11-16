@@ -1,4 +1,4 @@
-"""The key files — the one place a key or token may rest on disk.
+"""The key files - the one place a key or token may rest on disk.
 
 The cloud seats need keys: Gemini (planner and critic), Groq
 (repairer), Hugging Face (photo to mesh). A key is read from the
@@ -9,7 +9,7 @@ hf_token.key), readable only by its owner, with the workspace's
 .gitignore covering it so it can never be committed.
 
 A key is never printed, never logged, and never returned by any
-status call — callers only ever learn whether one is set.
+status call - callers only ever learn whether one is set.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ KEY_FILES = {
 TOKEN_FILENAME = "hf_token.key"
 
 # Environment variable -> key kind, for the seats (env first, then
-# the key file — the same precedence the HF token has always had).
+# the key file - the same precedence the HF token has always had).
 ENV_KEY_KINDS = {
     "HF_TOKEN": "hf",
     "GEMINI_API_KEY": "gemini",
@@ -89,7 +89,7 @@ def save_key(kind: str, workspace: str | Path, value: str) -> Path:
 
 def load_key(kind: str, workspace: str | Path) -> str | None:
     """The stored key, or None. The value goes only to the caller
-    that is about to use it — never into a log or a status dict."""
+    that is about to use it - never into a log or a status dict."""
     try:
         value = key_path(kind, workspace).read_text().strip()
     except OSError:

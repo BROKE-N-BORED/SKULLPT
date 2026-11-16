@@ -2,8 +2,7 @@
 
 Joshua's standing requirement: this is FOR LINUX - real desktop
 windows, not web pages. (The web Bench in bench.py was Arlo's choice,
-never his; v1.0 replaced it as the default. The web version remains
-as `webbench`.)
+never his; v1.0 replaced it as the default, and v1.9 removed it.)
 
 v1.5 splits the Bench into one window per job (U1): Jobs is home
 (bento job cards, the selected-job strip, chat, status bar); Render
@@ -920,6 +919,7 @@ if QT_AVAILABLE:
                     ("character", "user", "Character Studio"),
                     ("images", "image", "Images"),
                     ("library", "library", "Library"),
+                    ("recipes", "copy", "Recipes"),
                     ("settings", "settings", "Settings"),
                     ("help", "help-circle", "How to Use")):
                 btn = QtWidgets.QToolButton()
@@ -1153,6 +1153,8 @@ if QT_AVAILABLE:
                                lambda: self._open_window("images"))
             menu_bar.addAction("Library",
                                lambda: self._open_window("library"))
+            menu_bar.addAction("Recipes",
+                               lambda: self._open_window("recipes"))
             menu_bar.addAction("Settings",
                                lambda: self._open_window("settings"))
 
@@ -1198,8 +1200,8 @@ if QT_AVAILABLE:
         # -- windows ----------------------------------------------------
         def _open_window(self, name: str) -> None:
             from .qtwindows import (CharacterWindow, HelpWindow, ImagesWindow,
-                                    LibraryWindow, SettingsWindow, SetupWindow,
-                                    show_window)
+                                    LibraryWindow, RecipesWindow,
+                                    SettingsWindow, SetupWindow, show_window)
 
             if name == "jobs":
                 self.show()
@@ -1216,6 +1218,8 @@ if QT_AVAILABLE:
                     window = ImagesWindow(self, self.workspace)
                 elif name == "library":
                     window = LibraryWindow(self, self.workspace)
+                elif name == "recipes":
+                    window = RecipesWindow(self, self.workspace)
                 elif name == "settings":
                     window = SettingsWindow(self, self.workspace)
                 elif name == "setup":
@@ -1615,10 +1619,12 @@ if QT_AVAILABLE:
             from .qtwindows import Toast
 
             # A queued run is still active (T24): it waits its turn,
-            # it has not finished. Only done/cancelled/error leave the
-            # pending list.
+            # it has not finished. A cancelling run is still active
+            # too (v1.9, N8): its subprocess is being killed, and it
+            # must not be popped as finished before the kill lands.
+            # Only done/cancelled/error leave the pending list.
             running = [r for r in bench_mod._runs()
-                       if r["status"] in ("running", "queued")
+                       if r["status"] in ("running", "queued", "cancelling")
                        and r["id"] in self._pending_runs]
             if running:
                 run = running[0]
@@ -1628,6 +1634,11 @@ if QT_AVAILABLE:
                     self._run_label.setText(f"queued: {text}")
                     self._run_progress.setVisible(False)
                     self._cancel_btn.setVisible(True)
+                elif run["status"] == "cancelling":
+                    self._run_label.setText(f"{run['kind']}: Cancelling...")
+                    self._run_progress.setVisible(True)
+                    self._run_progress.setRange(0, 0)
+                    self._cancel_btn.setVisible(False)
                 else:
                     text = run.get("progress_text") or run["label"]
                     self._run_label.setText(f"{run['kind']}: {text}")
@@ -1645,7 +1656,7 @@ if QT_AVAILABLE:
                 self._cancel_btn.setVisible(False)
             finished = [r for r in bench_mod._runs()
                         if r["id"] in self._pending_runs
-                        and r["status"] not in ("running", "queued")]
+                        and r["status"] not in ("running", "queued", "cancelling")]
             if not finished:
                 return
             for run in finished:
@@ -1765,7 +1776,7 @@ if QT_AVAILABLE:
         def _open_asset(self) -> None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self, "Open an existing asset", "",
-                "Assets (*.glb *.blend)")
+                "Assets (*.glb *.blend *.obj *.stl *.fbx)")
             if not path:
                 return
             self._do_action("ingest", {"file": path})
@@ -1823,9 +1834,11 @@ if QT_AVAILABLE:
             DebugReportDialog(self.workspace, self._selected, self).exec()
 
         def _show_about(self) -> None:
+            from . import __version__
+
             QtWidgets.QMessageBox.about(
                 self, "About SKULLPT",
-                "SKULLPT v1.6\nA standalone Linux design and asset shell,\n"
+                f"SKULLPT v{__version__}\nA standalone Linux design and asset shell,\n"
                 "by Broke n Bored Studio.")
 
 

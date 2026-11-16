@@ -1,4 +1,4 @@
-# SKULLPT — v1.8.1
+# SKULLPT — v1.9
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -380,9 +380,8 @@ menu (or the `skullpt` command). The terminal way, for reference:
     python3 -m skullpt bench ~/design-shell-workspace
 
 One window where the workshop lives — a real Linux desktop app
-(Qt/PySide6), not a web page, no browser involved. (The old web
-Bench still exists as `webbench` for anyone who wants it, but it is
-no longer the default.) Needs PySide6; `install.sh` installs it into
+(Qt/PySide6), not a web page, no browser involved. (The old web Bench
+was removed in v1.9.) Needs PySide6; `install.sh` installs it into
 the shell's private `.venv`, and the Bench says plainly if it is
 missing (re-run the installer).
 
@@ -531,6 +530,43 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.9 — The audit fixes (N1–N21 + N51 + N55)
+
+- **Real cancel, live progress.** Cancelling a build now kills the
+  Blender or image-engine process at once (the whole process group,
+  no orphans) and the Bench shows "Cancelling..." while it dies.
+  Blender's output streams into the progress bar while it runs, so a
+  long render shows what it is doing instead of a frozen bar.
+- **The installer fails honestly now.** Every step checks its own
+  result; an optional piece that cannot be installed (image engine,
+  image model, Character Studio, launcher) warns and the install
+  continues, instead of failing the whole install or claiming
+  success it did not earn. Python and Blender stay fatal. An abort
+  safety net names the step any unexpected failure died on. The
+  image engine source is pinned to a verified commit, not upstream
+  master HEAD.
+- **Recipes in the Bench.** A Recipes window lists the templates that
+  graduate from filed jobs and starts a new draft job from one - the
+  plan gate still applies.
+- **Cloud mesh uses the Settings token.** The photo-to-mesh preflight
+  reads the Hugging Face token saved in Settings; no token means a
+  plain refusal, not a crash.
+- **The web UI is gone.** The old HTML Bench, viewer page, and
+  webbench/view/snapshot commands are removed; SKULLPT is a native
+  desktop app only. The Image Picker page stays, because the Code
+  Forge bridge drives it from the phone browser.
+- **Smaller fixes.** The Images window no longer crashes on batches;
+  `.obj` import uses the Blender 4.0+ operator; the part editor
+  leaves custom (hex/unknown) materials alone; duplicating a job
+  copies its mesh and reference image; only the exact image model
+  file counts as present; the open-asset filter adds .obj/.stl/.fbx;
+  the planner knows the character vocabulary and refuses a `project`
+  draft plainly (no builder yet); the debug scrub redacts Groq and
+  Google keys too; no em dashes in visible text anywhere; no
+  environment-variable framing left anywhere (keys live in
+  Settings); version strings come from one place. MIT licensed
+  (LICENSE file at the root).
 
 ## v1.8.1 — The new icon
 
@@ -737,25 +773,24 @@ plain message — it never pretends a scene was built.
 
 ## Live Render Window (new in v0.2)
 
-    python3 -m skullpt view examples/tavern-room.description.json
-    # open the printed http://127.0.0.1:8760/ in a browser
+The Render window in the Bench is the Live Render Window: a real
+OpenGL viewport, a native Linux desktop window, no browser involved.
 
 The window draws the description's parts at true scale (cm, z-up) and
 watches the Description File on disk — edits appear live without moving
 your camera. Drag to orbit/tilt/spin, right-drag (or Shift-drag) to pan,
-scroll or pinch to zoom, click a part in the panel to focus it. Scene
+scroll or pinch to zoom, click a part to focus it. Scene
 cameras are yours: fly to an angle, name it, save it — cameras are stored
 in the Description File itself (`cameras: [{name, position_cm,
 look_at_cm}]`), so they travel with the asset. Preset views: Iso / Front
-/ Side / Top. A non-live still page can be saved with:
-
-    python3 -m skullpt snapshot <description.json> <out.html>
+/ Side / Top.
 
 The window draws each part's true shape (v0.6: box, cylinder, sphere,
 extrude profile, lathe, tube) — an examination layer at true scale, not
 the final render; the Blender renders remain the visual verdict. The
 camera contract (inspection view + named scene cameras stored in the
-description) is unchanged.
+description) is unchanged. (The old `view` / `snapshot` commands that
+served this as a web page were removed in v1.9.)
 
 ## Tests
 

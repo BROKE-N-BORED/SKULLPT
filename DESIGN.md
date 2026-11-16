@@ -1,5 +1,5 @@
 ---
-version: 1.8.1
+version: 1.9
 name: SKULLPT-design-system
 description: The SKULLPT look, a native Linux design and asset shell. A warm near-black canvas, bone text, and amber as the one chromatic accent, the documented `#f5a623` token. Warp-derived palette logic (warm dark, hairline-only elevation, tight radii), Cursor's one-accent discipline, JetBrains Mono on every code surface. Built for an 8 GB no-GPU Mint PC: cheap motion only, nothing decorative that costs a frame.
 

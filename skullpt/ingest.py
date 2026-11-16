@@ -1,4 +1,4 @@
-"""Open-and-edit, step one: INGEST — a Description File FROM an asset.
+"""Open-and-edit, step one: INGEST - a Description File FROM an asset.
 
 Joshua's second mode (2026-11-10): open an existing object and edit it.
 Ingest measures the asset and writes the description; from there every
@@ -8,12 +8,12 @@ file is never touched.
 
   .glb   parsed directly (stdlib): node names, translations, and the
          POSITION accessors' min/max give each part's box. glTF is
-         Y-up metres; the shell is Z-up centimetres — converted here.
+         Y-up metres; the shell is Z-up centimetres - converted here.
          Node rotations are NOT unfolded into the boxes (noted in the
          description's summary when present).
   .obj   parsed directly (stdlib): groups/objects become parts, faces
          give the bounds. OBJ is Y-up; converted like glTF. One unit
-         is read as one centimetre (said plainly in the summary —
+         is read as one centimetre (said plainly in the summary -
          OBJ files carry no unit of their own).
   .stl   parsed directly (stdlib), binary and ASCII: facets give the
          bounds, one part per solid. STL is Z-up; read as-is. One
@@ -25,14 +25,14 @@ file is never touched.
          mesh's world-space bounds as JSON.
 
 Mesh preservation (v1.6, T30): ingest used to reduce everything to
-bounding boxes and throw the mesh away. Now the source mesh is kept —
-copied into <workspace>/meshes/ when a workspace is given — and the
+bounding boxes and throw the mesh away. Now the source mesh is kept -
+copied into <workspace>/meshes/ when a workspace is given - and the
 description records it in a "mesh" block, so the Blender build imports
 the real mesh instead of rebuilding the boxes (T21). Each part also
 carries its measured mesh data (source format, node, vertex and
 triangle counts) so the budget gate judges the real mesh, not a
 12-triangle box. .blend stays boxes-only: a .blend is a whole scene,
-not a mesh file, and the build has no .blend importer — its parts
+not a mesh file, and the build has no .blend importer - its parts
 keep the box estimate, which is what the build actually produces.
 """
 from __future__ import annotations
@@ -81,7 +81,7 @@ def _gltf_to_shell(vec: list[float]) -> list[float]:
 def _finish_desc(path: str | Path, parts: list[dict], notes: str,
                  mesh: dict | None = None) -> dict:
     """The shared description shape for every ingest path, validated
-    before it goes back — an ingested description that fails its own
+    before it goes back - an ingested description that fails its own
     validation is a bug in ingest, not a job to file."""
     if not parts:
         raise ValueError(f"no mesh parts found in {path}")
@@ -211,7 +211,7 @@ def ingest_glb(path: str | Path, workspace: str | Path | None = None) -> dict:
         })
     notes = f"Ingested from {Path(path).name}: {len(parts)} mesh parts measured as boxes."
     if rotated:
-        notes += " Some nodes carry rotations that were NOT unfolded into the boxes — check sizes in the render window."
+        notes += " Some nodes carry rotations that were NOT unfolded into the boxes - check sizes in the render window."
     notes += " The source mesh is kept and the build imports it; the boxes are only the measurements."
     return _finish_desc(path, parts, notes,
                         mesh=_preserve_mesh(path, workspace, "glb"))
@@ -287,7 +287,7 @@ def ingest_obj(path: str | Path, workspace: str | Path | None = None) -> dict:
             "mesh": {"source": "obj", "node": gi, "vertices": len(used), "triangles": tris},
         })
     notes = (f"Ingested from {Path(path).name}: {len(parts)} parts measured as boxes. "
-             "Measured assuming 1 unit = 1 cm — check the size in the render window. "
+             "Measured assuming 1 unit = 1 cm - check the size in the render window. "
              "The source mesh is kept and the build imports it; the boxes are only the measurements.")
     return _finish_desc(path, parts, notes,
                         mesh=_preserve_mesh(path, workspace, "obj"))
@@ -367,7 +367,7 @@ def ingest_stl(path: str | Path, workspace: str | Path | None = None) -> dict:
                      "vertices": len(verts), "triangles": len(solid["tris"])},
         })
     notes = (f"Ingested from {Path(path).name}: {len(parts)} parts measured as boxes. "
-             "Measured assuming 1 unit = 1 cm — check the size in the render window. "
+             "Measured assuming 1 unit = 1 cm - check the size in the render window. "
              "The source mesh is kept and the build imports it; the boxes are only the measurements.")
     return _finish_desc(path, parts, notes,
                         mesh=_preserve_mesh(path, workspace, "stl"))
@@ -396,7 +396,7 @@ print("DS_INGEST", len(rows))
 
 def ingest_blend(path: str | Path, workspace: str | Path | None = None) -> dict:
     """A .blend is a whole scene, not a mesh file: it stays boxes-only
-    (no "mesh" block — the build has no .blend importer, so the box
+    (no "mesh" block - the build has no .blend importer, so the box
     estimate is what the build actually produces). The workspace
     argument exists only so the dispatcher can call every ingester
     the same way; it is not used here."""
@@ -432,7 +432,7 @@ def ingest_blend(path: str | Path, workspace: str | Path | None = None) -> dict:
 
 # FBX: Blender imports the file into an empty scene (it reads the
 # file's own units and converts them to metres), then the same bounds
-# dump as .blend — plus vertex and triangle counts, which ARE the
+# dump as .blend - plus vertex and triangle counts, which ARE the
 # build's counts here because the build imports the same .fbx.
 _FBX_DUMP_SCRIPT = r'''
 import bpy, json, sys
@@ -461,7 +461,7 @@ print("DS_INGEST", len(rows))
 
 
 def ingest_fbx(path: str | Path, workspace: str | Path | None = None) -> dict:
-    """FBX via Blender's own importer — writing a binary FBX parser
+    """FBX via Blender's own importer - writing a binary FBX parser
     would be a project of its own, and Blender already does it right
     (units, axis conversion, hierarchy)."""
     exe = find_blender()

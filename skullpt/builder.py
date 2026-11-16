@@ -1,4 +1,4 @@
-"""The Builder — runs one approved job through the loop.
+"""The Builder - runs one approved job through the loop.
 
 Order of operations (the blueprint, in code):
   plan gate -> governor budget gate -> heavy-job lock -> exporters
@@ -29,7 +29,7 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
     the workspace's key file, v1.8); otherwise the offline critic
     answers and says so. When the vision critic returns
     machine-appliable patches, they are applied as parameter changes,
-    the Blender exporter re-runs, and the critic looks again — at most
+    the Blender exporter re-runs, and the critic looks again - at most
     MAX_VISION_ROUNDS rounds (blueprint cap).
     Returns (critique, rounds) where rounds records every patch applied.
     `cancel` is a threading.Event checked before each patch round;
@@ -63,6 +63,13 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
         critique["note"] += " (reference comparison is on, but the offline critic cannot see pictures)"
 
     rounds: list[dict] = []
+    if critique.get("vision") and desc.get("kind") != "scene":
+        # The vision patch loop only knows how to patch scene parts
+        # (v1.9, N15): a character's sliders are not parts, so the
+        # critic's fixes are reported, not applied. Say so plainly
+        # instead of silently skipping the loop.
+        critique["note"] += (" (the vision patch loop applies to scenes "
+                             "only - these fixes are reported, not applied)")
     if not critique.get("vision") or desc.get("kind") != "scene":
         return critique, rounds
     snapshot_saved = False
@@ -76,7 +83,7 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
         if not applied:
             break
         if not snapshot_saved:
-            # The patches rewrite the approved description in place —
+            # The patches rewrite the approved description in place -
             # freeze what was there first, so it can be recovered.
             job.snapshot_description("description.before-vision-patch.json")
             snapshot_saved = True
@@ -84,9 +91,9 @@ def _run_critic(job: Job, desc: dict, outputs: list[str], seats: dict,
         job.log("vision_patch", round=round_no, applied=applied)
         rounds.append({"round": round_no, "applied": applied})
         if progress is not None:
-            progress("critic", f"vision patch round {round_no} — rebuilding")
+            progress("critic", f"vision patch round {round_no} - rebuilding")
         fn = exporters.EXPORTERS["blender_scene"]
-        refreshed = fn(desc, job.output_dir)
+        refreshed = fn(desc, job.output_dir, cancel=cancel, progress=progress)
         for name in refreshed:
             if name not in outputs:
                 outputs.append(name)
@@ -106,16 +113,20 @@ def build_job(job: Job, workspace: Path, seats_path=None,
     `cancel`, when given, is a threading.Event checked between
     exporters and before the critic pass; a set event raises
     governor.Cancelled and the job goes back to `approved` (the
-    description is still approved — the build just did not finish).
+    description is still approved - the build just did not finish).
+    The exporters get the same event, so a set event also kills the
+    Blender process at once (v1.9, N8) instead of waiting for it.
     `progress`, when given, is called with (stage, detail) as the
-    build moves through export, check, and critic.
+    build moves through export, check, and critic, and with
+    (stage, detail, fraction) - fraction relative to the stage, 0.0
+    to 1.0 - as Blender's output streams in (v1.9, N9).
     """
-    job.require_approved()  # the Plan Gate — nothing builds unapproved
+    job.require_approved()  # the Plan Gate - nothing builds unapproved
     desc = job.load_description()
 
     # Render settings (T25): the job's own block wins, then the
     # workspace defaults, then the code defaults. Stamped onto the
-    # in-memory description only — the file keeps the user's own
+    # in-memory description only - the file keeps the user's own
     # partial block, and the resolved values ride into the build
     # report so the user can see what was actually used.
     from . import settings as settings_mod
@@ -127,12 +138,12 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         job.fail("budget: " + "; ".join(budget_problems))
         return {"ok": False, "stage": "budget", "problems": budget_problems}
 
-    # A kind with no exporters (project — no studio yet; character got
+    # A kind with no exporters (project - no studio yet; character got
     # its studio in v1.7) used to "build successfully" with zero
     # outputs. Fail loudly instead, before the lock is even taken.
     kind_exporters = exporters.DEFAULT_EXPORTERS.get(desc["kind"], ())
     if not kind_exporters:
-        reason = (f"no exporter for kind {desc['kind']!r} yet — "
+        reason = (f"no exporter for kind {desc['kind']!r} yet - "
                   "nothing was built, so there is nothing to check")
         job.fail(reason)
         return {"ok": False, "stage": "exporters", "problems": [reason]}
@@ -147,9 +158,9 @@ def build_job(job: Job, workspace: Path, seats_path=None,
                 if cancel is not None and cancel.is_set():
                     raise governor.Cancelled("build cancelled")
                 if progress is not None:
-                    progress("export", f"running the {name} exporter")
+                    progress("export", f"running the {name} exporter", 0.0)
                 fn = exporters.EXPORTERS[name]
-                outputs.extend(fn(desc, job.output_dir))
+                outputs.extend(fn(desc, job.output_dir, cancel=cancel, progress=progress))
                 job.log("export", exporter=name)
                 # The RAM floor is checked at acquire time; re-check
                 # between exporters so a build that grows past it is
@@ -157,13 +168,13 @@ def build_job(job: Job, workspace: Path, seats_path=None,
                 lock.recheck()
             used_recipes = sorted({p["type"] for p in desc["parts"]})
     except governor.Cancelled:
-        # The user stopped the run — like a governor refusal, the job
+        # The user stopped the run - like a governor refusal, the job
         # stays approved and can be built again when wanted.
         job.log("cancelled")
         job.transition("approved")
         raise
     except governor.GovernorError as exc:
-        # A governor REFUSAL is not a build failure — nothing ran (or
+        # A governor REFUSAL is not a build failure - nothing ran (or
         # nothing finished), so the job stays approved and can be
         # retried when the machine is free. (Marking it failed here
         # used to strand approved jobs in a dead state no approval
@@ -171,7 +182,7 @@ def build_job(job: Job, workspace: Path, seats_path=None,
         job.log("governor_refused", reason=str(exc))
         job.transition("approved")
         return {"ok": False, "stage": "governor", "problems": [str(exc)]}
-    except Exception as exc:  # exporter blew up — record it, don't hide it
+    except Exception as exc:  # exporter blew up - record it, don't hide it
         job.fail(f"export: {type(exc).__name__}: {exc}")
         return {"ok": False, "stage": "export", "problems": [str(exc)]}
 
@@ -202,7 +213,7 @@ def build_job(job: Job, workspace: Path, seats_path=None,
                                               cancel=cancel, progress=progress)
     except governor.Cancelled:
         # Cancelled mid-check or mid-critic: the job goes back to
-        # approved, like a cancelled export — never stranded in
+        # approved, like a cancelled export - never stranded in
         # "checking" with no way back.
         job.log("cancelled")
         job.transition("approved")

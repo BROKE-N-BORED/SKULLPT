@@ -1,4 +1,4 @@
-"""Workspace settings — the user's own switches, in one small file.
+"""Workspace settings - the user's own switches, in one small file.
 
 Settings live at <workspace>/settings.json. Today there is one switch:
 
@@ -8,7 +8,7 @@ Settings live at <workspace>/settings.json. Today there is one switch:
 
 A description may carry "critic_reference": true/false to override the
 workspace switch for that one job ("a toggle in settings, plus a
-per-job say-so as well" — Joshua, 2026-11-11).
+per-job say-so as well" - Joshua, 2026-11-11).
 
 Render settings (v1.6, T25) follow the same pattern: workspace
 defaults here, per-job overrides in the description's "render" block.
@@ -32,7 +32,7 @@ DEFAULTS = {
 }
 
 # The render engines the exporter knows (kept in sync with
-# description.RENDER_ENGINES — the settings layer validates what the
+# description.RENDER_ENGINES - the settings layer validates what the
 # Settings window writes, the description layer what jobs carry).
 RENDER_ENGINES = ("auto", "eevee", "cycles")
 
@@ -49,7 +49,7 @@ def load_settings(workspace: str | Path) -> dict:
 
 
 def _raw_settings(workspace: str | Path) -> dict:
-    """The settings file's own contents, without defaults — so the
+    """The settings file's own contents, without defaults - so the
     resolver can tell a value the user actually set from a default."""
     path = settings_path(workspace)
     if not path.exists():
@@ -92,7 +92,7 @@ def resolve_render_settings(workspace: str | Path, desc: dict) -> dict:
     wins where it speaks, then the workspace defaults the user
     actually set, then the code defaults. A description's
     budget.preview_px still sets the resolution when neither the job
-    nor the workspace names one (the pre-v1.6 path — older
+    nor the workspace names one (the pre-v1.6 path - older
     descriptions keep rendering as they did). The workspace read here
     is the raw file, not the merged defaults: a default of 640 must
     not shadow a description's own preview size."""
@@ -118,7 +118,7 @@ def resolve_render_settings(workspace: str | Path, desc: dict) -> dict:
 
 def save_render_settings(workspace: str | Path, render: dict) -> dict:
     """Store workspace render defaults (the Settings window's save).
-    Only known keys, only valid values — anything else is ignored
+    Only known keys, only valid values - anything else is ignored
     rather than written, so a bad save can never poison the file."""
     current = load_settings(workspace)
     engine = render.get("engine")
@@ -141,7 +141,7 @@ def save_render_settings(workspace: str | Path, render: dict) -> dict:
 def record_render_engine(workspace: str | Path, engine: str) -> None:
     """Remember which render engine actually worked on this machine
     (the EEVEE probe's verdict, or the engine a build fell back to).
-    Best effort — a settings file that cannot be written is not a
+    Best effort - a settings file that cannot be written is not a
     build failure. The Settings window shows it; the debug report
     carries it."""
     if engine not in ("BLENDER_EEVEE_NEXT", "CYCLES"):

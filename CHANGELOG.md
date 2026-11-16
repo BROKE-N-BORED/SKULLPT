@@ -1,5 +1,95 @@
 # SKULLPT — Changelog
 
+## v1.9 — 2026-11-16 — The audit fixes (N1–N21 + N51 + N55)
+
+The P0+P1 findings from the 2026-11-15 audit, all closed. The
+headline: cancelling a run now actually stops it, Blender's output
+streams live into the progress bar, and the installer fails honestly
+instead of failing the whole install on an optional piece or claiming
+a success it did not earn.
+
+- N1: the Images window no longer crashes on batches - `refresh`
+  reads the batch `slug` (the field state dicts carry) and computes
+  kept/pending from the candidates' statuses.
+- N2: the cloud-mesh preflight reads the Hugging Face token from
+  Settings (`token_value(workspace=...)`); no token is a plain
+  refusal, not a crash.
+- N3: `.obj` import uses `bpy.ops.wm.obj_import` (Blender 4.0+) with
+  the legacy `import_scene.obj` operator as fallback.
+- N4: the part editor leaves hex/unknown materials alone (blank combo
+  + a note, instead of forcing black metal) and only writes bevel /
+  radius where the part already has them or the value is nonzero.
+- N5: only the exact model file counts as present, in the shell
+  (`find_model`) and the installer (`find_sd_model`) - a guidance
+  .gguf in the same folder no longer passes for the main model.
+- N6: duplicating a job copies its job-folder files - the mesh GLB
+  and the reference image when it lives in the job folder (repointed
+  in the copy's description). Shared files outside the folder are
+  still shared, not copied.
+- N7: mesh resolution is job folder first, then the workspace root;
+  the working-directory candidate is gone, so a stray file in the
+  launch folder can no longer shadow the job's mesh.
+- N8: real cancel - a new `skullpt/subproc.py` runs Blender and
+  sd-cli in their own process group and kills the group on cancel
+  (no orphaned processes), and the Bench shows a "cancelling" state
+  while the kill lands. The queue treats a cancelling run as busy,
+  so the next waiter never starts under a dying run.
+- N9: live Blender progress - the two-phase run streams Blender's
+  output lines into the Bench progress text (throttled, "Saved:"
+  lines always through) and advances the fraction as renders land.
+  The image engine's lines stream the same way. Blender runs with
+  PYTHONUNBUFFERED so the lines arrive live, not in bursts.
+- N10: the legacy web UI is removed - the HTML Bench, the viewer
+  page + server, and the webbench/view/snapshot CLI commands. The
+  Image Picker page (`pick`/`decide`) is KEPT: the Code Forge bridge
+  drives it from the phone browser, so removing it would break the
+  bridge. The viewer geometry (part boxes, bounds, cameras) stays -
+  the Qt viewport draws on it.
+- N11: the installer checks every step explicitly (the worker-entry
+  `if` suppresses errexit inside `do_install`, so nothing may rely
+  on `set -e`). Blender's unpack and privileged install are checked
+  and stay fatal; the image-engine build and the Character Studio
+  install moved into checked helper functions.
+- N12: sd.cpp is pinned to the verified commit
+  32d516c0197ed5ca31305b8575e14eb1451fad33 - the installer fetches
+  that exact commit (plus submodules), not upstream master HEAD.
+- N13: the open-asset filter adds .obj/.stl/.fbx alongside .glb/.blend.
+- N14: the planner spec carries the character vocabulary (11 MPFB
+  macro sliders, required skin, rig list with game_engine default),
+  and `plan --kind project` refuses plainly before the seat is asked
+  (no builder for projects yet). Unknown kinds refuse the same way.
+- N15: the vision patch loop applies to scenes only - a character
+  build's critique now says so plainly instead of silently skipping
+  the loop.
+- N16: version strings come from `__version__` everywhere (About,
+  Help).
+- N17: Blender is settled - the installer pins 4.5.9, Help says
+  "4.5.9 or newer".
+- N18: the debug scrub redacts `gsk_` (Groq) and `AIza` (Google)
+  keys alongside the existing prefixes.
+- N19: Recipes in the Bench - a Recipes window lists the graduated
+  templates and starts a new draft job from one (the plan gate still
+  applies), reachable from the icon rail and the menu bar.
+- N20: no em dashes in visible text anywhere - the Bench detail
+  lines, chat replies, CLI help, installer dialogs, and both
+  .desktop comments. A test fails on any em dash in the Python
+  sources.
+- N21: no environment-variable framing left - the chat help, the
+  no-key reply, the CLI help, and the intake routes all point at
+  Settings; the dead env-only `_planner_ready` is deleted.
+- N51: MIT license (LICENSE at the tree root, Copyright (c) 2026
+  Broke n' Bored Studio).
+- N55: installer hardening for the real-PC failure - the EXIT trap
+  is installed (it existed but was never wired up), so any
+  unexpected abort records an INSTALL-FAILED reason naming the step
+  it died on; optional components (image-engine build + build-tools
+  heal, image-model download, Character Studio) degrade to WARNING
+  instead of failing the install; warnings accumulate instead of
+  overwriting each other; a failed launcher warns instead of
+  reporting a success it did not earn. Python and Blender stay
+  fatal, and the venv/PySide6 path stays warning-level by design (a
+  missing python3-venv must not brick the whole install).
+
 ## v1.8.1 — 2026-11-15 — The new icon
 
 - NEW ICON: the desktop icon is now a stone sculpture of a skull

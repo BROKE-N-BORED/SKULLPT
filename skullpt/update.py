@@ -1,9 +1,9 @@
-"""Update check — is there a newer SKULLPT release? (v1.6, T29).
+"""Update check - is there a newer SKULLPT release? (v1.6, T29).
 
 A read-only check against the GitHub releases page: it reads the
 latest release tag and compares it with the running version. It never
 downloads anything, never installs anything, and never changes a file
-— the user decides what to do with the answer. A network failure is
+- the user decides what to do with the answer. A network failure is
 reported plainly ("could not reach GitHub"), not as an error.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ TIMEOUT_S = 15
 
 def _version_tuple(tag: str) -> tuple[int, ...]:
     """'v1.6' -> (1, 6); anything unparseable -> () (never crashes the
-    comparison — an unparseable tag just never wins)."""
+    comparison - an unparseable tag just never wins)."""
     cleaned = tag.strip().lstrip("vV")
     try:
         return tuple(int(part) for part in cleaned.split(".") if part != "")

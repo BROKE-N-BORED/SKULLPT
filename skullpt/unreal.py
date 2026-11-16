@@ -1,4 +1,4 @@
-"""The Unreal hop — a package Unreal can import, with lineage.
+"""The Unreal hop - a package Unreal can import, with lineage.
 
 Given a built scene job, this assembles <dest>/<slug>-unreal/:
 
@@ -68,9 +68,9 @@ def package_unreal(job, dest_root: str | Path) -> Path:
     """Assemble the Unreal package for a built job; return its folder.
 
     A job that carries a real mesh (cloud-mesh GLB or an ingested
-    .glb/.obj/.fbx — T21) has that mesh packaged too: it is copied in
+    .glb/.obj/.fbx - T21) has that mesh packaged too: it is copied in
     as <slug>-mesh.<ext> and, when the job has no built GLB output
-    yet, it becomes the main asset the import script imports — a
+    yet, it becomes the main asset the import script imports - a
     cloud-meshed job reaches Unreal without a Blender build first.
     An .stl source is copied for reference but never the main asset
     (Unreal's importer does not take STL)."""
@@ -97,7 +97,7 @@ def package_unreal(job, dest_root: str | Path) -> Path:
             main_glb = glbs[0]
 
     # The job's own mesh (T21): resolve it without failing the package
-    # when the recorded file is gone — the built outputs may still be
+    # when the recorded file is gone - the built outputs may still be
     # enough on their own.
     mesh_name = None
     mesh_is_main = False
@@ -116,7 +116,7 @@ def package_unreal(job, dest_root: str | Path) -> Path:
             mesh_is_main = True
     if main_glb is None:
         raise RuntimeError(
-            "this job has no GLB output to package — build the scene first")
+            "this job has no GLB output to package - build the scene first")
 
     desc_bytes = job.desc_path.read_bytes()
     shutil.copy2(job.desc_path, dest / "description.json")
@@ -148,7 +148,7 @@ def package_unreal(job, dest_root: str | Path) -> Path:
     mesh_line = ""
     if mesh_is_main:
         mesh_line = (f"\nThis job has no Blender build yet, so the main "
-                     f"asset is the source mesh itself ({mesh_name}) — the "
+                     f"asset is the source mesh itself ({mesh_name}) - the "
                      f"mesh the job was made from.\n")
     (dest / "README.txt").write_text(
         f"Unreal package for {desc['name']}\n\n"
@@ -158,7 +158,7 @@ def package_unreal(job, dest_root: str | Path) -> Path:
         f"3. The model imports to {destination}. UCX_-named meshes in the "
         f"GLB become collision there.\n"
         f"4. import-result.json appears in this folder listing what "
-        f"Unreal created — that is the proof of import.\n"
+        f"Unreal created - that is the proof of import.\n"
         f"{mesh_line}",
         encoding="utf-8")
     return dest

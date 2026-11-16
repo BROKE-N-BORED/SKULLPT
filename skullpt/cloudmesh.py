@@ -1,10 +1,10 @@
-"""Cloud mesh step — a photo becomes a textured 3D mesh, on someone
+"""Cloud mesh step - a photo becomes a textured 3D mesh, on someone
 else's GPU (new in v1.1).
 
 The shell's PC has no GPU worth the name, so the mesh step runs on a
 free Hugging Face Space instead of locally:
 
-  Space: microsoft/TRELLIS.2 — Microsoft's official TRELLIS.2 demo,
+  Space: microsoft/TRELLIS.2 - Microsoft's official TRELLIS.2 demo,
   MIT licensed, running on Hugging Face ZeroGPU. Free quota is about
   5 minutes of GPU a day on a free account (2 minutes with no
   account); a mesh takes 3-8 minutes of wall time, most of it queue.
@@ -12,7 +12,7 @@ free Hugging Face Space instead of locally:
   /gradio_api/info on 2026-11-12 (see the endpoint table below).
 
   Flow: upload the photo -> /preprocess_image (server-side
-  background removal — unmasked backdrops become geometry) ->
+  background removal - unmasked backdrops become geometry) ->
   /image_to_3d (the generation; returns only an HTML preview) ->
   /extract_glb (the textured GLB file). The GLB is saved into the
   job's folder and the EXISTING ingest step derives the job's
@@ -37,7 +37,7 @@ API shape (from https://microsoft-trellis-2.hf.space/gradio_api/info):
 
 Auth: HF_TOKEN from the environment, or the token saved in the Bench
 under Settings (tokenfile.py: one file, mode 0600, in the workspace,
-gitignored — never in code, never in the repo; same rule as
+gitignored - never in code, never in the repo; same rule as
 GEMINI_API_KEY). No token -> a plain refusal naming the fix (free
 account at huggingface.co, Settings -> Access Tokens -> New token,
 Read role). The token rides as a Bearer header on every request,
@@ -47,7 +47,7 @@ Disclosure: every run says plainly, before anything is sent, that the
 photo is uploaded to Hugging Face's free GPU and leaves the machine.
 
 Governor: this step deliberately does NOT take the heavy-job lock and
-does NOT check the free-RAM floor — it loads no local model and runs
+does NOT check the free-RAM floor - it loads no local model and runs
 no local compute; it is network-bound. (The governor floor itself is
 untouched; builds and image generation still go through it.)
 
@@ -59,12 +59,12 @@ resizes to 512 server-side anyway). A fallback Space can be set with
 DESIGNSHELL_CLOUDMESH_FALLBACK_URL: when the primary Space cannot be
 reached at all (upload or background-removal stage), the whole flow
 runs once against the fallback instead. No fallback Space ships by
-default — every public TRELLIS.2 clone checked on 2026-11-14 was
+default - every public TRELLIS.2 clone checked on 2026-11-14 was
 paused or in error, so a hardcoded clone would be a fake fallback.
 Quota errors never trigger the fallback: the ZeroGPU quota is
 per-account across all Spaces, so a second Space would not help.
 
-Stdlib only (urllib, json, zlib) — no new dependencies. The Space base
+Stdlib only (urllib, json, zlib) - no new dependencies. The Space base
 URL can be overridden with DESIGNSHELL_CLOUDMESH_URL (the test
 suite's mock Gradio server uses this, same pattern as
 DESIGNSHELL_GEMINI_URL).
@@ -102,7 +102,7 @@ URL_ENV_OVERRIDE = "DESIGNSHELL_CLOUDMESH_URL"
 # 2026-11-14 was paused or in error.
 FALLBACK_URL_ENV = "DESIGNSHELL_CLOUDMESH_FALLBACK_URL"
 
-# Generation defaults — the Space's own UI defaults, at the cheapest
+# Generation defaults - the Space's own UI defaults, at the cheapest
 # resolution (512 saves ZeroGPU quota; 1024/1536 cost more per mesh).
 RESOLUTION = "512"
 STAGE_1 = (7.5, 0.7, 12, 5.0)    # ss guidance, rescale, steps, rescale_t
@@ -127,19 +127,19 @@ MAX_UPLOAD_DIMENSION = 1024
 TOKEN_FIX = (
     "the cloud mesh step needs a Hugging Face token: make a free account at "
     "huggingface.co, then Settings -> Access Tokens -> New token (Read role), "
-    "and put it in the environment as HF_TOKEN, or save it in the Bench "
-    "under Settings. The Settings copy lives in one file only you can read, "
-    "in your workspace, and never in the code or the repo."
+    "and save it in the Bench under Settings. The Settings copy lives in one "
+    "file only you can read, in your workspace, and never in the code or "
+    "the repo."
 )
 
 DISCLOSURE = (
     "This uploads the photo to Hugging Face's free GPU "
-    f"({SPACE_ID}) — the photo leaves this machine. The mesh comes back "
+    f"({SPACE_ID}) - the photo leaves this machine. The mesh comes back "
     "as a textured GLB and is filed in the job."
 )
 
 QUOTA_MESSAGE = (
-    "the daily free GPU time on Hugging Face is used up — try again "
+    "the daily free GPU time on Hugging Face is used up - try again "
     "tomorrow. (Free accounts get about 5 minutes of GPU a day; the "
     "quota resets 24 hours after first use.)"
 )
@@ -161,14 +161,14 @@ def base_url() -> str:
 
 
 def fallback_url() -> str | None:
-    """The fallback Space's base URL, if one is configured — else None."""
+    """The fallback Space's base URL, if one is configured - else None."""
     value = os.environ.get(FALLBACK_URL_ENV, "").strip()
     return value.rstrip("/") if value else None
 
 
 def _is_connection_failure(exc: CloudMeshError) -> bool:
     """True when the Space could not be reached at all (network down,
-    Space paused or erroring, stream dead) — the failures a fallback
+    Space paused or erroring, stream dead) - the failures a fallback
     Space can actually help with. A malformed answer from a reachable
     Space is not one of these."""
     text = str(exc)
@@ -228,11 +228,11 @@ def _request(url: str, token: str, data: bytes | None = None,
             f"(HTTP {exc.code}): {detail}") from exc
     except urllib.error.URLError as exc:
         raise CloudMeshError(
-            "could not reach the Hugging Face Space — check the network "
+            "could not reach the Hugging Face Space - check the network "
             f"and try again ({exc.reason})") from exc
     except TimeoutError as exc:
         raise CloudMeshError(
-            "the Hugging Face Space stopped answering — try again") from exc
+            "the Hugging Face Space stopped answering - try again") from exc
 
 
 def _multipart(field: str, filename: str, payload: bytes, mime: str,
@@ -270,7 +270,7 @@ def _downscale_png(data: bytes, max_dim: int) -> bytes | None:
     """Shrink a PNG to at most max_dim on its longest side, stdlib-only
     (zlib decode, unfilter, nearest-neighbour resample, re-encode).
     Returns None for anything it cannot handle safely (16-bit,
-    interlaced, truncated) — the caller then uploads the original."""
+    interlaced, truncated) - the caller then uploads the original."""
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         return None
     try:
@@ -358,7 +358,7 @@ def prepare_upload_photo(photo: Path) -> tuple[bytes, bool]:
     """The bytes to upload for a photo. A PNG larger than
     MAX_UPLOAD_DIMENSION on its longest side is shrunk first (the
     Space resizes to 512 server-side anyway; a 4000 px phone photo is
-    upload time for nothing). JPEGs and GIFs upload as-is — the shell
+    upload time for nothing). JPEGs and GIFs upload as-is - the shell
     has no JPEG encoder, and the Space resizes server-side; the cost
     is upload bandwidth, not GPU quota. Returns (payload, scaled)."""
     data = photo.read_bytes()
@@ -443,7 +443,7 @@ def _poll_events(base: str, token: str, fn: str, event_id: str,
                  deadline: float, progress=None) -> list:
     """Read the SSE stream until the call completes, errors, or times out.
     Queue-position ("estimation") events are reported through progress
-    as ("queue", detail) — the free queue is most of the wait, and a
+    as ("queue", detail) - the free queue is most of the wait, and a
     silent 5-minute wait looks like a hang."""
     url = f"{base}/gradio_api/call/{event_id}"
     req = urllib.request.Request(url, headers=_headers(token))
@@ -466,14 +466,14 @@ def _poll_events(base: str, token: str, fn: str, event_id: str,
     except TimeoutError as exc:
         # The Space took too long even to answer the stream request.
         raise CloudMeshError(
-            f"the mesh step timed out waiting for {fn} — the Space is slow "
+            f"the mesh step timed out waiting for {fn} - the Space is slow "
             "or the queue is long; try again later") from exc
     event_name = ""
     try:
         for raw_line in stream:
             if time.monotonic() > deadline:
                 raise CloudMeshError(
-                    f"the mesh step timed out waiting for {fn} — the Space "
+                    f"the mesh step timed out waiting for {fn} - the Space "
                     "is slow or the queue is long; try again later")
             line = raw_line.decode("utf-8", "replace").strip()
             if line.startswith("event:"):
@@ -516,19 +516,19 @@ def _poll_events(base: str, token: str, fn: str, event_id: str,
                             detail += f" of {int(size)}"
                         if isinstance(avg, (int, float)) and avg > 0:
                             eta = int((int(rank) + 1) * avg)
-                            detail += f" — about {eta // 60}m {eta % 60:02d}s to go"
+                            detail += f" - about {eta // 60}m {eta % 60:02d}s to go"
                         progress("queue", detail)
                 except ValueError:
                     pass
             # "generating", heartbeats: wait for the end.
     except TimeoutError as exc:
         raise CloudMeshError(
-            f"the mesh step timed out waiting for {fn} — the Space is slow "
+            f"the mesh step timed out waiting for {fn} - the Space is slow "
             "or the queue is long; try again later") from exc
     finally:
         stream.close()
     raise CloudMeshError(
-        f"the Space's {fn} stream ended without a result — try again")
+        f"the Space's {fn} stream ended without a result - try again")
 
 
 def download_file(base: str, token: str, file_data: dict,
@@ -550,7 +550,7 @@ def _image_data(server_path: str, photo: Path) -> dict:
 
 
 def validate_photo(photo: str | Path) -> Path:
-    """The photo must exist and be a readable PNG/JPEG/GIF — before any
+    """The photo must exist and be a readable PNG/JPEG/GIF - before any
     network call, so a bad image costs no GPU time."""
     path = Path(photo).expanduser()
     if not path.is_file():
@@ -561,7 +561,7 @@ def validate_photo(photo: str | Path) -> Path:
         raise CloudMeshError(f"could not read {photo}: {exc}") from exc
     if fmt not in ("png", "jpeg", "gif") or width is None:
         raise CloudMeshError(
-            f"{path.name} does not look like a photo the mesh step can use — "
+            f"{path.name} does not look like a photo the mesh step can use - "
             "send a PNG or JPEG photo")
     return path
 
@@ -574,13 +574,13 @@ def generate_mesh(photo: str | Path, token: str | None = None,
     """Photo -> textured GLB bytes, via the TRELLIS.2 Space.
 
     Returns (glb_bytes, seed). `progress`, when given, is called with
-    (stage, detail) as each step lands — the CLI and the Bench log it.
+    (stage, detail) as each step lands - the CLI and the Bench log it.
     `cancel`, when given, is a threading.Event checked between stages;
     a set event raises governor.Cancelled and nothing is written.
 
     Fallback (T28): when the primary Space cannot be reached at all
-    during the upload or background-removal stages — before any GPU
-    quota is spent — and DESIGNSHELL_CLOUDMESH_FALLBACK_URL names a
+    during the upload or background-removal stages - before any GPU
+    quota is spent - and DESIGNSHELL_CLOUDMESH_FALLBACK_URL names a
     second Space, the whole flow runs once against the fallback. A
     failure during generation or extraction does NOT fall back (the
     quota may already be spent on the primary), and neither does a
@@ -599,7 +599,7 @@ def generate_mesh(photo: str | Path, token: str | None = None,
 
     def note(stage_name: str, detail: str = "") -> None:
         # "queue" is a progress whisper inside a stage, not a stage of
-        # its own — it must not move the stage the fallback decision
+        # its own - it must not move the stage the fallback decision
         # reads (a queue report during preprocess is still preprocess).
         if stage_name != "queue":
             stage["name"] = stage_name
@@ -623,7 +623,7 @@ def generate_mesh(photo: str | Path, token: str | None = None,
                     raise
                 upload_error = exc
                 if attempt < UPLOAD_RETRIES:
-                    note("upload", "the upload stumbled — trying once more")
+                    note("upload", "the upload stumbled - trying once more")
                     time.sleep(5)
         if server_path is None:
             raise upload_error or CloudMeshError("the photo upload failed")
@@ -636,7 +636,7 @@ def generate_mesh(photo: str | Path, token: str | None = None,
             raise CloudMeshError(
                 "the Space's background-removal step gave back no image")
         check_cancel()
-        note("generate", "building the 3D shape — this is the slow part "
+        note("generate", "building the 3D shape - this is the slow part "
                          "(a few minutes on the free queue)")
         _call(flow_base, token, session_hash, "/image_to_3d",
               [masked[0], seed, RESOLUTION,
@@ -664,7 +664,7 @@ def generate_mesh(photo: str | Path, token: str | None = None,
             raise last_error or CloudMeshError("the GLB step failed")
         if len(glb_bytes) < 100 or glb_bytes[:4] != b"glTF":
             raise CloudMeshError(
-                "what came back from the Space is not a GLB file — try again")
+                "what came back from the Space is not a GLB file - try again")
         note("done", f"{len(glb_bytes)} bytes of textured mesh")
         return glb_bytes, seed
 
@@ -681,7 +681,7 @@ def generate_mesh(photo: str | Path, token: str | None = None,
         if not _is_connection_failure(exc):
             raise
         note("fallback",
-             "the main Space could not be reached — trying the fallback Space")
+             "the main Space could not be reached - trying the fallback Space")
         return run_flow(fallback)
 
 
@@ -701,7 +701,7 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
     The mesh is generated and ingested BEFORE any job is touched, so a
     failed run leaves the workspace exactly as it was. With `job`, the
     mesh lands in that job (which must still be waiting at the plan
-    gate — draft or awaiting_approval); without it, a new job is
+    gate - draft or awaiting_approval); without it, a new job is
     created from the ingested description. Either way the job ends at
     awaiting_approval: nothing builds until the description is approved.
     `cancel` is a threading.Event: a set event raises
@@ -718,7 +718,7 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
         target = Job(ws / "jobs" / job)
         if target.state not in ("draft", "awaiting_approval"):
             raise CloudMeshError(
-                f"job {job!r} is {target.state!r} — the cloud mesh step "
+                f"job {job!r} is {target.state!r} - the cloud mesh step "
                 "only lands in a job still waiting at the plan gate")
         old_desc = target.load_description()
 
@@ -727,7 +727,7 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
         timeout=timeout, progress=progress, cancel=cancel, workspace=ws)
     if cancel is not None and cancel.is_set():
         # The mesh landed but the user stopped the run before it was
-        # filed — the workspace stays exactly as it was.
+        # filed - the workspace stays exactly as it was.
         raise Cancelled("cloud mesh cancelled")
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -750,7 +750,7 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
         "generated_at": stamp(),
     }
     # The mesh block ingest wrote points at the temp GLB, which is
-    # already gone — point it at the GLB that lands in the job folder
+    # already gone - point it at the GLB that lands in the job folder
     # instead (T21): the Blender build imports it, and the Unreal
     # package carries it.
     desc["mesh"] = {"file": _glb_name(photo_path), "format": "glb",
@@ -764,7 +764,7 @@ def cloud_mesh(workspace: str | Path, photo: str | Path,
     if target is None:
         target = Job.create(ws / "jobs", desc)
     else:
-        # The mesh overwrites the job's description wholesale — freeze
+        # The mesh overwrites the job's description wholesale - freeze
         # what was there first, so it can be recovered.
         target.snapshot_description("description.before-cloud-mesh.json")
         desc_mod.dump(desc, target.desc_path)

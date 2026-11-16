@@ -1,4 +1,4 @@
-"""The Description File — the heart of SKULLPT.
+"""The Description File - the heart of SKULLPT.
 
 A Description File is a JSON document that fully describes one thing to be
 made (a UI component, a website, a graphic, a character, a scene) BEFORE any
@@ -28,7 +28,7 @@ MESH_FORMATS = ("glb", "obj", "fbx", "stl")
 # Character Studio vocabulary (v1.7, T26): the MPFB2 macro sliders,
 # rigs, and skin. The sliders are the MPFB macro set (0.0-1.0 each);
 # race is three flat keys here and maps to MPFB's nested race dict in
-# the exporter. Rigs are MPFB's built-in rig names — the files
+# the exporter. Rigs are MPFB's built-in rig names - the files
 # data/rigs/standard/rig.<name>.json (rigify/rig.<name>.json for the
 # rigify.* names) inside the MPFB extension. Skins are the .mhmat file
 # names from the MakeHuman system assets pack (23 of them).
@@ -43,7 +43,7 @@ CHARACTER_DEFAULT_RIG = "game_engine"
 # estimate. Measured from a real MPFB 2.0.18 build in the sandbox:
 # body 26,756 + low-poly eyes 172 + teeth 7,120 = 34,048. Shape keys
 # move vertices, they do not add faces, so this is the real count for
-# the studio's fixed body parts — and the game-ready gate still
+# the studio's fixed body parts - and the game-ready gate still
 # enforces the exact post-build total.
 CHARACTER_TRIANGLE_ESTIMATE = 34048
 REQUIRED_TOP = ("name", "kind", "parts")
@@ -67,7 +67,7 @@ def validate(desc: dict) -> list[str]:
         problems.append(f"kind must be one of {KINDS}, got {kind!r}")
     parts = desc.get("parts")
     if parts is not None:
-        # A character job may have no prop parts at all (v1.7, T26) —
+        # A character job may have no prop parts at all (v1.7, T26) -
         # the human comes from the character block, not from parts.
         if not isinstance(parts, list) or (not parts and kind != "character"):
             problems.append("parts must be a non-empty list")
@@ -200,7 +200,7 @@ def validate(desc: dict) -> list[str]:
     if not isinstance(rubric, list) or not all(isinstance(r, str) for r in rubric):
         problems.append("rubric must be a list of strings")
     # Render settings (v1.6, T25): how the renders are made, not what
-    # is built — so changing them never re-opens the plan gate.
+    # is built - so changing them never re-opens the plan gate.
     render = desc.get("render")
     if render is not None:
         if not isinstance(render, dict):
@@ -219,7 +219,7 @@ def validate(desc: dict) -> list[str]:
             if denoise is not None and not isinstance(denoise, bool):
                 problems.append("render.denoise must be true or false")
     # Character Studio (v1.7, T26): a character description carries a
-    # "character" block — 11 MPFB macro sliders, a skin, a rig. The
+    # "character" block - 11 MPFB macro sliders, a skin, a rig. The
     # skin is REQUIRED: without one the human stays grey. Missing
     # sliders default to 0.5 in the exporter (MPFB's own defaults).
     character = desc.get("character")
@@ -265,8 +265,8 @@ def validate(desc: dict) -> list[str]:
 
 
 # Triangle estimates for the pre-build budget gate (v1.4). These mirror
-# the Blender exporter's builders exactly — same segment counts, same
-# face counts — so the estimate is what Blender will actually build,
+# the Blender exporter's builders exactly - same segment counts, same
+# face counts - so the estimate is what Blender will actually build,
 # before bevel modifiers. The counts below are the BASE mesh:
 #   box:      a cube, 6 quads = 12 tris
 #   cylinder: primitive_cylinder_add(vertices=24): 24 side quads + two
@@ -291,8 +291,8 @@ _TUBE_SEGMENTS = 10
 
 def estimate_triangles(part: dict) -> int:
     """Triangles the Blender exporter will build for one part (base mesh,
-    before bevel modifiers — a lower bound on the real count). A part
-    ingested from a real mesh carries its measured count (T30) — that
+    before bevel modifiers - a lower bound on the real count). A part
+    ingested from a real mesh carries its measured count (T30) - that
     is what Blender imports, so it is used as-is instead of the box
     estimate of 12, and the budget gate stops under-counting imports."""
     mesh = part.get("mesh") or {}
@@ -330,7 +330,7 @@ def estimate_triangles(part: dict) -> int:
 
 def estimate_description_triangles(desc: dict) -> int:
     """Estimated triangles for a whole description, counting every
-    concrete part repeat/mirror expansion produces — plus the human
+    concrete part repeat/mirror expansion produces - plus the human
     for a character description (v1.7, T26)."""
     from .expand import expand_parts
 
@@ -363,7 +363,7 @@ def dump(desc: dict, path: str | Path) -> None:
 
 
 def summarize(desc: dict) -> str:
-    """Render a plain-English summary — this is what the user approves."""
+    """Render a plain-English summary - this is what the user approves."""
     lines = [f"{desc['name']}  [{desc['kind']}]"]
     if desc.get("summary"):
         lines.append(desc["summary"])

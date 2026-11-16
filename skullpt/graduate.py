@@ -1,8 +1,8 @@
-"""Recipe graduation — the library learns from approved work.
+"""Recipe graduation - the library learns from approved work.
 
 The blueprint's rule: recipes are not only written by hand; when a job
 is approved, built, and filed, its description graduates into a reusable
-recipe — a named template in <workspace>/recipes/ that a later job can
+recipe - a named template in <workspace>/recipes/ that a later job can
 start from instead of a blank page. Applying a recipe copies the
 template under a new name; the plan gate still applies to the new job.
 """

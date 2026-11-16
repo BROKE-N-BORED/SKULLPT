@@ -234,15 +234,8 @@ class OpenConversationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ws = _workspace(td)
             result = bench_mod.chat_reply(ws, "hello, what can you do?")
-            self.assertIn("GEMINI_API_KEY", result["reply"])
+            self.assertIn("Settings", result["reply"])
             self.assertIn("won't fake one", result["reply"])
-
-    def test_planner_ready_follows_the_key(self):
-        with tempfile.TemporaryDirectory() as td:
-            ws = _workspace(td)
-            self.assertTrue(bench_mod._planner_ready(ws))
-            os.environ.pop("GEMINI_API_KEY")
-            self.assertFalse(bench_mod._planner_ready(ws))
 
     def test_plan_action_returns_job(self):
         with tempfile.TemporaryDirectory() as td:
@@ -426,7 +419,8 @@ class SnapshotTests(unittest.TestCase):
             fake = _FakeCritic()
             with mock.patch("skullpt.builder.get_critic", return_value=fake), \
                     mock.patch.dict(exporters.EXPORTERS,
-                                    {"blender_scene": lambda d, o: []}):
+                                    {"blender_scene":
+                                     lambda d, o, cancel=None, progress=None: []}):
                 critique, rounds = builder_mod._run_critic(
                     job, json.loads(json.dumps(ROOM)), [], {}, [])
             self.assertEqual(len(rounds), 1)
@@ -479,9 +473,12 @@ class InstallerDownloadTests(unittest.TestCase):
         self.assertIn("BLENDER_VERSION", INSTALL_SH)
 
     def test_build_jobs_capped_on_small_machines(self):
-        self.assertIn("BUILD_JOBS=2", INSTALL_SH)
+        # v1.9 (N11): the build lives in build_image_engine(), so the
+        # cap uses the helper's locals, not the old globals.
+        self.assertIn("build_jobs=2", INSTALL_SH)
         self.assertIn("8388608", INSTALL_SH)  # 8 GiB in KiB
-        self.assertIn('cmake --build "$TMPD/sd/build" -j"$BUILD_JOBS"', INSTALL_SH)
+        self.assertIn('cmake --build "$tmpd/sd/build" -j"$build_jobs"',
+                      INSTALL_SH)
 
     def test_no_sudo_anywhere(self):
         self.assertNotIn("sudo", INSTALL_SH)
@@ -604,6 +601,11 @@ class _StagedInstallV14(unittest.TestCase):
         # Blender on PATH, not an ambient DESIGNSHELL_BLENDER, which
         # takes precedence in find_blender.
         env.pop("DESIGNSHELL_BLENDER", None)
+        if seed_model:
+            # v1.9 (N5): only the exact model file counts as present —
+            # point the installer at the stand-in with the override.
+            env["DESIGNSHELL_SD_MODEL"] = str(
+                home / "design-shell-models" / "other-model.gguf")
         env["STUB_DIR"] = str(bin_dir)
         env["STUB_STATE"] = str(state_dir)
         env["PKEXEC_LOG"] = str(tmp / "pkexec.log")

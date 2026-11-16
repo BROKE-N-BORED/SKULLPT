@@ -1,6 +1,6 @@
 """The Bench's windows (R5): Render, Character Studio, Images, Library,
-Settings, Help, plus the shared pieces (stage pills, job cards, toasts,
-debug report).
+Recipes, Settings, Help, plus the shared pieces (stage pills, job cards,
+toasts, debug report).
 
 Each window does one job (U1). Every window remembers its geometry
 (U5). No em dashes anywhere in this file (U33); visible labels use
@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 
 from . import bench as bench_mod
+from . import graduate
 from . import imagegen
 from . import keycheck
 from . import settings as settings_mod
@@ -666,7 +667,17 @@ class RenderWindow(_GeometryWindow):
             spin.setValue(float(value))
         material = part.get("material")
         index = self._material_combo.findText(material) if material else -1
-        self._material_combo.setCurrentIndex(max(0, index))
+        if index >= 0:
+            self._material_combo.setCurrentIndex(index)
+        else:
+            # A hex or unknown material is not a named preset: leave
+            # the combo blank rather than forcing the first preset
+            # (v1.9, N4) - saving keeps the material as it is.
+            self._material_combo.setCurrentIndex(-1)
+            self._editor_note.setText(
+                self._editor_note.text()
+                + f" Material {material} is custom and stays as it is"
+                " unless you pick a preset.")
         self._bevel_spin.setValue(float(part.get("bevel_cm") or 0.0))
         self._radius_spin.setValue(float(part.get("radius_cm") or 0.0))
         self._save_part_btn.setEnabled(True)
@@ -679,10 +690,21 @@ class RenderWindow(_GeometryWindow):
         fields = {
             "position_cm": [s.value() for s in self._pos_spins],
             "size_cm": [s.value() for s in self._size_spins],
-            "material": self._material_combo.currentText(),
-            "bevel_cm": self._bevel_spin.value(),
-            "radius_cm": self._radius_spin.value(),
         }
+        # Material: only when a preset is selected. A blank combo
+        # means the part's material is custom (hex/unknown) - it is
+        # left exactly as it is (v1.9, N4).
+        if self._material_combo.currentIndex() >= 0:
+            fields["material"] = self._material_combo.currentText()
+        # Bevel/radius: only where they apply. A part that never had
+        # one keeps not having one; a part that had one can still be
+        # set back to zero (v1.9, N4).
+        part = next((p for p in self._desc.get("parts", [])
+                     if p.get("id") == base_id), None)
+        if self._bevel_spin.value() or (part is not None and "bevel_cm" in part):
+            fields["bevel_cm"] = self._bevel_spin.value()
+        if self._radius_spin.value() or (part is not None and "radius_cm" in part):
+            fields["radius_cm"] = self._radius_spin.value()
         result = self._bench.do_action("edit-part", {
             "job": self._job_name, "part": base_id, "fields": fields})
         if result is None:
@@ -1163,10 +1185,14 @@ class ImagesWindow(_GeometryWindow):
         self._batch_list.clear()
         state = bench_mod.workspace_state(self._workspace)
         for batch in state.get("batches", []):
+            # State dicts carry "slug", not "name" (v1.9, N1); kept /
+            # pending come from the candidates, not stored counts.
+            candidates = batch.get("candidates", [])
+            kept = sum(1 for c in candidates if c.get("status") == "kept")
+            pending = sum(1 for c in candidates if c.get("status") == "pending")
             item = QtWidgets.QListWidgetItem(
-                f"{batch['name']} ({batch.get('kept', 0)} kept, "
-                f"{batch.get('pending', 0)} waiting)")
-            item.setData(QtCore.Qt.UserRole, batch["name"])
+                f"{batch['slug']} ({kept} kept, {pending} waiting)")
+            item.setData(QtCore.Qt.UserRole, batch["slug"])
             self._batch_list.addItem(item)
         if current is not None:
             for row in range(self._batch_list.count()):
@@ -1361,6 +1387,130 @@ class LibraryWindow(_GeometryWindow):
         self._bench.refresh()
         self._bench.select_job(job.dir.name)
         Toast.show_toast(self, f"Started {job.dir.name} from the library entry.")
+
+
+class RecipesWindow(_GeometryWindow):
+    """Graduated recipes: start a new job from a filed job's template.
+
+    A recipe graduates when a job is approved, built, and filed - the
+    Library learns from approved work. Starting from one makes a new
+    draft job from the template; the plan gate still applies, so the
+    new job waits for approval before anything builds (v1.9, N19).
+    """
+
+    GEOMETRY_KEY = "RecipesWindow"
+
+    def __init__(self, bench, workspace: Path, parent=None):
+        super().__init__(parent)
+        self._bench = bench
+        self._workspace = Path(workspace)
+        self._selected_file: str | None = None
+        self.setWindowTitle("SKULLPT - Recipes")
+        self.setMinimumSize(560, 380)
+
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        main = QtWidgets.QVBoxLayout(central)
+        main.setContentsMargins(8, 8, 8, 8)
+
+        intro = QtWidgets.QLabel(
+            "Recipes graduate from filed jobs. Starting from one makes a "
+            "new draft job - it still waits at the plan gate for approval.")
+        intro.setWordWrap(True)
+        main.addWidget(intro)
+
+        middle = QtWidgets.QHBoxLayout()
+        self._list = QtWidgets.QListWidget()
+        self._list.itemClicked.connect(self._on_recipe)
+        middle.addWidget(self._list, 2)
+
+        detail = QtWidgets.QVBoxLayout()
+        self._detail = QtWidgets.QLabel(
+            "No recipes yet. File a built job into the Library and its "
+            "recipe graduates here.")
+        self._detail.setWordWrap(True)
+        detail.addWidget(self._detail)
+        self._name = QtWidgets.QLineEdit()
+        self._name.setPlaceholderText("Name the new job (optional)")
+        detail.addWidget(self._name)
+        self._start_btn = QtWidgets.QPushButton("Start a job from this")
+        self._start_btn.setObjectName("primary")
+        self._start_btn.setEnabled(False)
+        self._start_btn.clicked.connect(self._start_job)
+        detail.addWidget(self._start_btn)
+        detail.addStretch(1)
+        middle.addLayout(detail, 1)
+        main.addLayout(middle, 1)
+
+        restore_geometry(self, self.GEOMETRY_KEY)
+        if self.width() < 560:
+            self.resize(800, 520)
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Re-read the graduated recipes."""
+        current = self._selected_file
+        self._list.clear()
+        self._selected_file = None
+        self._start_btn.setEnabled(False)
+        recipes = graduate.list_recipes(self._workspace)
+        for recipe in recipes:
+            item = QtWidgets.QListWidgetItem(
+                f"{recipe.get('name', recipe.get('file', ''))}  "
+                f"[{recipe.get('kind', '')}]")
+            item.setData(QtCore.Qt.UserRole, recipe.get("file", ""))
+            self._list.addItem(item)
+        if not recipes:
+            self._detail.setText(
+                "No recipes yet. File a built job into the Library and "
+                "its recipe graduates here.")
+        if current is not None:
+            for row in range(self._list.count()):
+                item = self._list.item(row)
+                if item.data(QtCore.Qt.UserRole) == current:
+                    self._list.setCurrentRow(row)
+                    self._on_recipe(item)
+                    return
+
+    def _on_recipe(self, item) -> None:
+        recipe_file = item.data(QtCore.Qt.UserRole)
+        self._selected_file = recipe_file
+        path = self._workspace / "recipes" / recipe_file
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        template = data.get("template") or {}
+        parts = template.get("parts") or []
+        summary = str(template.get("summary", "")).strip()
+        if len(summary) > 200:
+            summary = summary[:197] + "..."
+        lines = [
+            f"{data.get('name', recipe_file)}",
+            f"Kind: {data.get('kind', '-')}",
+            f"Graduated from: {data.get('graduated_from', '-')}",
+            f"Parts: {len(parts)}",
+        ]
+        if summary:
+            lines.append(f"Summary: {summary}")
+        self._detail.setText("\n".join(lines))
+        self._start_btn.setEnabled(True)
+
+    def _start_job(self) -> None:
+        if self._selected_file is None:
+            return
+        new_name = self._name.text().strip() or None
+        try:
+            desc = graduate.apply_recipe(self._workspace, self._selected_file,
+                                         new_name)
+        except (OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not start from this recipe", str(exc))
+            return
+        job = Job.create(self._workspace / "jobs", desc)
+        self._bench.refresh()
+        self._bench.select_job(job.dir.name)
+        Toast.show_toast(self, f"Started {job.dir.name} from the recipe.")
 
 
 # ---------------------------------------------------------- settings window
@@ -2029,7 +2179,7 @@ comes. Queued builds can be cancelled from the status bar.</p>
 Unreal package, and pick a folder. The package has the .fbx, the
 textures, and an import script.</p>
 <h3>Blender</h3>
-<p>Building needs Blender 5.2 LTS or newer installed. The renders
+<p>Building needs Blender 4.5.9 or newer installed. The renders
 and the game-ready model come from Blender; without it, SKULLPT can
 still draft descriptions and show the viewport.</p>
 <h3>Your workspace</h3>
@@ -2041,7 +2191,7 @@ switches to another folder right away. Help, then Check for updates,
 asks GitHub whether a newer SKULLPT is out; it never downloads
 anything by itself.</p>
 <h3>About</h3>
-<p>SKULLPT v1.8. A standalone Linux design and asset shell, by
+<p>SKULLPT v__SKULLPT_VERSION__. A standalone Linux design and asset shell, by
 Broke n Bored Studio. Source: github.com/BROKE-N-BORED/SKULLPT</p>
 </body></html>"""
 
@@ -2056,8 +2206,10 @@ class HelpWindow(_GeometryWindow):
         super().__init__(parent)
         self.setWindowTitle("SKULLPT - How to Use")
         self.setMinimumSize(480, 360)
+        from . import __version__
+
         browser = QtWidgets.QTextBrowser()
-        browser.setHtml(_HELP_HTML)
+        browser.setHtml(_HELP_HTML.replace("__SKULLPT_VERSION__", __version__))
         self.setCentralWidget(browser)
         restore_geometry(self, self.GEOMETRY_KEY)
         if self.width() < 480:

@@ -1,4 +1,4 @@
-"""Key validation — a tiny real call that proves a key works.
+"""Key validation - a tiny real call that proves a key works.
 
 Saving a key in Settings runs one read-only list call against the
 provider: if the key is accepted, the key is saved; if the provider
@@ -32,12 +32,12 @@ def _check(url: str, headers: dict, timeout: float) -> tuple[bool, str]:
         return True, "Key accepted."
     except urllib.error.HTTPError as exc:
         if exc.code in (400, 401, 403):
-            return False, ("That key did not work — the service said it "
+            return False, ("That key did not work - the service said it "
                            "is not valid. Check the key and try again.")
         return False, (f"The check failed (the service answered "
-                       f"HTTP {exc.code}) — the key was not saved.")
+                       f"HTTP {exc.code}) - the key was not saved.")
     except (urllib.error.URLError, TimeoutError, OSError):
-        return False, ("Could not reach the service — check the network "
+        return False, ("Could not reach the service - check the network "
                        "connection and try again.")
 
 

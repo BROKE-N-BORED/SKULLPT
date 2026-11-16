@@ -1,27 +1,18 @@
-"""The Bench — SKULLPT's window.
+"""The Bench's action engine - the shared face behind the Qt windows.
 
-One local web page that holds the whole workshop in a single view:
+Everything the native desktop Bench does runs through here: the job
+actions (plan, approve, build, file, retry, ...), the workspace state
+the windows read, the chat commands, and the background-run machinery
+(builds, image generation, cloud mesh) with progress, cancel, and the
+build queue. Heavy work runs in background threads so a four-minute
+generation never freezes the window. Every action calls the same
+functions the CLI calls - the Bench is a face on the shell, not a
+second shell.
 
-- LEFT: the project folders — jobs, Library, image batches, intake,
-  workspace files; clicking a job selects it.
-- CENTER: the Live Render Window for the selected job (the same
-  viewer as the standalone `view` command, served by the bench, its
-  camera saves writing back into the job), with the job's state,
-  the plan-gate buttons, its renders and its build verdict.
-- RIGHT: a chat panel. Commands ("make …", "picture of …",
-  "approve", "build", "file", "status") route to the same actions
-  the buttons use; open conversation goes to the planner seat when
-  its key is set, and says so plainly when it is not.
-- BELOW: new-job drafting, every job's card, the reference-image
-  step (generate, keep / reject in place, re-roll), the Library,
-  and the settings toggle.
-
-Zero dependencies, same pattern as the render window and the
-picker — the shell serves it locally and any browser is the window.
-Heavy work (builds, image generation) runs in background threads and
-the page polls for state, so a four-minute generation never freezes
-the window. Every action calls the same functions the CLI calls —
-the bench is a face on the shell, not a second shell.
+The old web Bench that used to live in this file was removed in v1.9
+(SKULLPT is a native Linux desktop app - no web UI, by standing rule).
+The image picker (`picker.py`) is the one page left, kept because the
+Code Forge bridge drives it on the owner's phone browser.
 """
 from __future__ import annotations
 
@@ -41,7 +32,7 @@ EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
 # Examples that must never be offered, even though the file exists in
 # the tree. The skull was never authorized work (Joshua: "I didnt tell
-# you to make it", 2026-11-11) — it stays in the tree untouched, but
+# you to make it", 2026-11-11) - it stays in the tree untouched, but
 # the Bench must not offer it as a one-click starting point. The packer
 # also excludes it from zips; this gate is the in-code backstop.
 EXCLUDED_EXAMPLES = {"skull.description.json"}
@@ -50,21 +41,26 @@ _RUNS: dict[str, dict] = {}
 _RUNS_LOCK = threading.Lock()
 _RUN_SEQ = [0]
 
+# Statuses that hold a queue slot: a run being cancelled still owns
+# its heavy-job lock until its thread exits, so the next waiter must
+# not start while it is dying (v1.9, N8).
+_BUSY_STATUSES = ("running", "cancelling")
+
 
 def _start_run(kind: str, label: str, fn, queue: str | None = None) -> str:
     """Run `fn` in a background thread; returns the run id.
 
     `fn` takes two arguments: a `cancel` threading.Event (set when
-    the user cancels the run) and a `report` callable —
-    `report(fraction_or_None, text)` — for progress. `fn` may return
+    the user cancels the run) and a `report` callable -
+    `report(fraction_or_None, text)` - for progress. `fn` may return
     a string (stored as the run's detail) or a dict (stored whole as
     the run's result, with its "detail" or "reply" as the detail).
     A governor.Cancelled from `fn` marks the run "cancelled", not
-    "error" — stopping a run is not a failure.
+    "error" - stopping a run is not a failure.
 
     Queue (v1.6, T24): when `queue` names a queue and another run in
     that queue is already running, the new run is recorded with
-    status "queued" and starts when its turn comes — the heavy-job
+    status "queued" and starts when its turn comes - the heavy-job
     lock is one-at-a-time, so builds and image rounds wait in line
     instead of colliding on it. The queue drains itself: every run
     starts the next queued run in its queue when it finishes.
@@ -76,7 +72,7 @@ def _start_run(kind: str, label: str, fn, queue: str | None = None) -> str:
         run_id = f"run-{_RUN_SEQ[0]}"
         cancel = threading.Event()
         busy = queue is not None and any(
-            r.get("_queue") == queue and r["status"] == "running"
+            r.get("_queue") == queue and r["status"] in _BUSY_STATUSES
             for r in _RUNS.values())
         _RUNS[run_id] = {"id": run_id, "kind": kind, "label": label,
                          "status": "queued" if busy else "running",
@@ -121,7 +117,7 @@ def _launch_run(run_id: str, fn, cancel: threading.Event, queue: str | None) -> 
                 run = _RUNS.get(run_id)
                 if run is not None:
                     run.update(status="cancelled", detail=str(exc))
-        except Exception as exc:  # surfaced on the page, never swallowed
+        except Exception as exc:  # surfaced in the Bench chat, never swallowed
             with _RUNS_LOCK:
                 run = _RUNS.get(run_id)
                 if run is not None:
@@ -136,14 +132,14 @@ def _launch_run(run_id: str, fn, cancel: threading.Event, queue: str | None) -> 
 def _drain_queue(queue: str) -> None:
     """Start the oldest queued run in a queue, if none is running."""
     with _RUNS_LOCK:
-        if any(r.get("_queue") == queue and r["status"] == "running"
+        if any(r.get("_queue") == queue and r["status"] in _BUSY_STATUSES
                for r in _RUNS.values()):
             return
         waiting = [r for r in _RUNS.values()
                    if r.get("_queue") == queue and r["status"] == "queued"]
         if not waiting:
             return
-        # Run ids are "run-N" in creation order — the lowest number
+        # Run ids are "run-N" in creation order - the lowest number
         # waited longest.
         nxt = min(waiting, key=lambda r: int(str(r["id"]).split("-")[1]))
         fn = nxt.pop("_fn", None)
@@ -171,22 +167,29 @@ def queue_position(queue: str, run_id: str) -> int:
 def cancel_run(run_id: str) -> bool:
     """Ask a running run to stop at its next safe checkpoint, or drop
     a queued run from its queue. Returns False when the run is not
-    running or queued (already finished, or no such run) —
-    cancelling a finished run is a no-op, not an error."""
+    running or queued (already finished, or no such run) -
+    cancelling a finished run is a no-op, not an error. A running
+    run moves to status "cancelling" at once (v1.9, N8) so the Bench
+    can say so while the subprocess is being killed; its thread
+    records "cancelled" when the kill lands. Cancelling a run that
+    is already cancelling is a no-op that returns True."""
     queue: str | None = None
     with _RUNS_LOCK:
         run = _RUNS.get(run_id)
-        if run is None or run["status"] not in ("running", "queued"):
+        if run is None or run["status"] not in ("running", "queued", "cancelling"):
             return False
         if run["status"] == "queued":
             queue = run.get("_queue")
             run.pop("_fn", None)
             run.update(status="cancelled",
                        detail="removed from the queue before it started")
+        elif run["status"] == "cancelling":
+            return True
         else:
             event = run.get("_cancel")
             if event is not None:
                 event.set()
+            run.update(status="cancelling", detail="Cancelling...")
             return True
     # Outside the lock: dropping a queued run may free the queue for
     # the next waiter (the drain takes the lock itself).
@@ -200,7 +203,7 @@ def _runs() -> list[dict]:
         out = []
         for run in list(_RUNS.values())[-8:]:
             # The cancel Event, the queued function and the queue name
-            # are not JSON-able — the page never sees them.
+            # are not JSON-able - the windows never see them.
             out.append({k: v for k, v in run.items()
                         if k not in ("_cancel", "_fn", "_queue")})
         return out
@@ -221,7 +224,7 @@ def engine_status(workspace: Path) -> dict:
         from .seats import load_seats
         seats = load_seats(seats_path if seats_path.exists() else None)
         # A key counts when it is set in the environment OR saved in
-        # the workspace's key file (v1.8) — never the value itself.
+        # the workspace's key file (v1.8) - never the value itself.
         gemini_key = live.key_available(seats.get("critic", {}), workspace)
         groq_key = live.key_available(seats.get("repairer", {}), workspace)
     except Exception:
@@ -311,14 +314,14 @@ def missing_setup_items(workspace: Path) -> list[dict]:
 # ------------------------------------------------------- state cache (P7)
 
 # workspace_state used to re-read every job, batch, and the library
-# index on each refresh — fine at 5 jobs, slow at 50. The file-derived
+# index on each refresh - fine at 5 jobs, slow at 50. The file-derived
 # part is now cached per workspace, keyed by an mtime+size signature
 # over the workspace files; anything that writes a file invalidates
 # it. Engines and runs are NOT cached (they change without any file
 # changing: a new Blender install, a run finishing).
 _STATE_CACHE: dict[str, dict] = {}
 _STATE_CACHE_LOCK = threading.Lock()
-# Milliseconds the last workspace_state call took (P8 — the debug
+# Milliseconds the last workspace_state call took (P8 - the debug
 # report shows it, so the next audit has numbers, not guesses).
 LAST_STATE_MS: float | None = None
 
@@ -353,7 +356,7 @@ def _workspace_signature(workspace: Path) -> list:
 
 def invalidate_workspace_cache(workspace: str | Path | None = None) -> None:
     """Drop the cached state for one workspace (or all of them).
-    Normally unnecessary — file writes invalidate it — but tests and
+    Normally unnecessary - file writes invalidate it - but tests and
     anything that changes state without touching a file can force it."""
     with _STATE_CACHE_LOCK:
         if workspace is None:
@@ -493,7 +496,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         job = _job(workspace, str(payload.get("job", "")))
         job.retry()
         return {"ok": True, "job": job.dir.name,
-                "detail": f"{job.dir.name} is approved again — build when ready"}
+                "detail": f"{job.dir.name} is approved again - build when ready"}
     if action == "delete":
         job = _job(workspace, str(payload.get("job", "")))
         name = job.dir.name
@@ -508,7 +511,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         job = _job(workspace, str(payload.get("job", "")))
         copy = job.duplicate()
         return {"ok": True, "job": copy.dir.name,
-                "detail": f"duplicated as {copy.dir.name} — waiting at the plan gate"}
+                "detail": f"duplicated as {copy.dir.name} - waiting at the plan gate"}
     if action == "edit-part":
         job = _job(workspace, str(payload.get("job", "")))
         fields = payload.get("fields") or {}
@@ -517,7 +520,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         new_state = job.edit_part(str(payload.get("part", "")), fields)
         detail = f"part {payload.get('part')} updated"
         if new_state == "awaiting_approval":
-            detail += " — the description changed, so it needs approval again"
+            detail += " - the description changed, so it needs approval again"
         return {"ok": True, "job": job.dir.name, "state": new_state,
                 "detail": detail}
     if action == "edit-character":
@@ -528,7 +531,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         new_state = job.edit_character(character)
         detail = f"character {job.dir.name} updated"
         if new_state == "awaiting_approval":
-            detail += " — the description changed, so it needs approval again"
+            detail += " - the description changed, so it needs approval again"
         return {"ok": True, "job": job.dir.name, "state": new_state,
                 "detail": detail}
     if action == "new-character":
@@ -537,7 +540,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         job = Job.create(workspace / "jobs",
                          default_character_description(name))
         return {"ok": True, "job": job.dir.name,
-                "detail": f"character job created: {job.dir.name} — "
+                "detail": f"character job created: {job.dir.name} - "
                 "shape the human, then approve it to build"}
     if action == "build":
         job = _job(workspace, str(payload.get("job", "")))
@@ -545,9 +548,20 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         def do_build(cancel, report):
             from .builder import build_job
             stages = {"export": 0.3, "check": 0.65, "critic": 0.85}
+            # Where each stage starts (v1.9, N9): a fraction from the
+            # exporter is relative to its stage, so it maps onto the
+            # band between the previous stage's point and this one.
+            starts = {"export": 0.05, "check": 0.3, "critic": 0.65}
 
-            def on_progress(stage, detail):
-                report(stages.get(stage), f"{stage}: {detail}")
+            def on_progress(stage, detail, fraction=None):
+                point = stages.get(stage)
+                if fraction is not None and point is not None:
+                    base = starts.get(stage, 0.0)
+                    clamped = max(0.0, min(1.0, fraction))
+                    report(base + clamped * (point - base),
+                           f"{stage}: {detail}")
+                else:
+                    report(point, f"{stage}: {detail}")
 
             report(0.05, "starting the build")
             report_data = build_job(job, workspace, cancel=cancel,
@@ -566,7 +580,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         result: dict = {"ok": True, "job": job.dir.name, "run": run_id}
         if position:
             result["queued"] = True
-            result["detail"] = (f"{job.dir.name} is queued at position {position} — "
+            result["detail"] = (f"{job.dir.name} is queued at position {position} - "
                                 "it builds when the run ahead of it finishes")
         return result
     if action == "file":
@@ -576,7 +590,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         report_path = job.dir / "build-report.json"
         report = (json.loads(report_path.read_text()) if report_path.exists()
                   else {"outputs": sorted(p.name for p in job.output_dir.iterdir())})
-        # The thumbnail is the first render PNG when there is one — a
+        # The thumbnail is the first render PNG when there is one - a
         # picture of the thing, not the SVG mock. (v1.3 took the .svg.)
         thumb = next((o for o in report.get("outputs", []) if o.endswith(".png")), None)
         if thumb is None:
@@ -597,10 +611,10 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         desc = live.plan_from_words(words, seats, kind=str(payload.get("kind", "scene")),
                                   workspace=workspace)
         job = Job.create(workspace / "jobs", desc)
-        detail = f"draft job created: {job.dir.name} — approve it to build"
+        detail = f"draft job created: {job.dir.name} - approve it to build"
         used = live.last_plan_seat()
         if used.get("seat") == "fallback":
-            detail += (" (drafted by the local fallback model — "
+            detail += (" (drafted by the local fallback model - "
                        "the Gemini seat could not be reached)")
         if used.get("repaired"):
             detail += (f" (the {used.get('repair_seat')} seat repaired "
@@ -632,7 +646,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         run = _start_run("images", batch["slug"], do_images,
                          queue=f"heavy:{workspace}")
         return {"ok": True, "run": run, "batch": batch["slug"],
-                "detail": "generating — candidates appear below as they land"}
+                "detail": "generating - candidates appear below as they land"}
     if action == "decide":
         slug = str(payload.get("batch", ""))
         bdir = workspace / "images" / slug
@@ -683,7 +697,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         from . import cloudmesh
         photo = str(payload.get("photo", "")).strip()
         if not photo:
-            raise ValueError("give the photo's path — e.g. "
+            raise ValueError("give the photo's path - e.g. "
                              "/home/xprnc/Pictures/stool.jpg")
         # A bare name resolves against the workspace first, then as-is.
         candidate = Path(photo).expanduser()
@@ -694,13 +708,13 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         # Fast failures (missing photo, no token, wrong job state) before
         # the background run starts, so the chat answers at once.
         photo_path = cloudmesh.validate_photo(candidate)
-        cloudmesh.token_value()
+        cloudmesh.token_value(workspace=workspace)
         job_name = payload.get("job") or None
         if job_name:
             job = _job(workspace, job_name)
             if job.state not in ("draft", "awaiting_approval"):
                 raise ValueError(
-                    f"job {job_name!r} is {job.state!r} — the cloud mesh "
+                    f"job {job_name!r} is {job.state!r} - the cloud mesh "
                     "step only lands in a job still waiting at the plan gate")
 
         def do_mesh(cancel, report):
@@ -714,10 +728,10 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
                 workspace, photo_path, job=job_name,
                 seed=payload.get("seed"), cancel=cancel, progress=on_progress)
             return (f"meshed {photo_path.name} into job {result['job']} "
-                    f"({result['parts']} parts) — waiting at the plan gate")
+                    f"({result['parts']} parts) - waiting at the plan gate")
         run = _start_run("cloud-mesh", photo_path.name, do_mesh)
         return {"ok": True, "run": run,
-                "detail": "meshing on Hugging Face's free GPU — a few "
+                "detail": "meshing on Hugging Face's free GPU - a few "
                           "minutes; the photo leaves this machine"}
     if action == "intake":
         from .intake import intake_photo
@@ -740,7 +754,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
         mesh_note = (" the source mesh is kept in the workspace and the "
                      "build will import it" if desc.get("mesh") else "")
         return {"ok": True, "job": job.dir.name,
-                "detail": f"read {Path(path).name} into job {job.dir.name} — "
+                "detail": f"read {Path(path).name} into job {job.dir.name} - "
                           "waiting at the plan gate; the original file "
                           f"was not changed.{mesh_note}"}
     if action == "unreal-package":
@@ -759,7 +773,7 @@ def act(workspace: Path, action: str, payload: dict) -> dict:
     if action == "render-settings":
         # Per-job render override (T25): stored in the description's
         # "render" block. Changing how a job renders is presentation,
-        # not content — it never sends the job back to the plan gate.
+        # not content - it never sends the job back to the plan gate.
         job = _job(workspace, str(payload.get("job", "")))
         desc = job.load_description()
         render = dict(desc.get("render") or {})
@@ -832,7 +846,7 @@ def build_report(workspace: Path, name: str) -> dict | None:
 
 def recover_stale(workspace: Path) -> list[str]:
     """Return jobs stranded in `building`/`checking` by a crash to
-    `approved` — unless a build is genuinely running (see
+    `approved` - unless a build is genuinely running (see
     jobs.recover_stale_jobs). Returns the recovered job names."""
     from .jobs import recover_stale_jobs
 
@@ -843,7 +857,7 @@ def debug_report(workspace: Path, job: str | None = None) -> str:
     """One readable report for diagnosing a problem: versions, engine
     status, free RAM, the RAM floor, workspace state timing, the
     selected job's state + session log tail + build report summary,
-    and recent runs. Never includes secrets — engine status is
+    and recent runs. Never includes secrets - engine status is
     booleans only, and token-shaped strings are scrubbed."""
     import platform
     import re
@@ -892,7 +906,7 @@ def debug_report(workspace: Path, job: str | None = None) -> str:
                              + (f" (stage {report.get('stage')})" if report.get("stage") else ""))
                 for check in (report.get("machine_checks") or {}).get("checks", []):
                     lines.append(f"  check {check.get('check')}: "
-                                 f"{'pass' if check.get('ok') else 'FAIL'} — {check.get('detail', '')}")
+                                 f"{'pass' if check.get('ok') else 'FAIL'} - {check.get('detail', '')}")
                 if report.get("total_tris") is not None:
                     lines.append(f"  triangles: {report['total_tris']}")
                 problems = report.get("problems") or []
@@ -910,11 +924,11 @@ def debug_report(workspace: Path, job: str | None = None) -> str:
         lines.append("recent runs:")
         for run in runs[-5:]:
             lines.append(f"  {run['kind']} {run['label']}: {run['status']}"
-                         + (f" — {run['detail']}" if run.get("detail") else ""))
+                         + (f" - {run['detail']}" if run.get("detail") else ""))
     text = "\n".join(lines) + "\n"
     # Defensive scrub: a token pasted into a log line must never leave
     # in a report the user sends on.
-    text = re.sub(r"(hf_|sk-|ghp_|github_pat_)[A-Za-z0-9_\-]{8,}", "[redacted]", text)
+    text = re.sub(r"(hf_|sk-|gsk_|AIza|ghp_|github_pat_)[A-Za-z0-9_\-]{8,}", "[redacted]", text)
     return text
 
 
@@ -929,7 +943,7 @@ def _chat_path(workspace: Path) -> Path:
 
 
 def chat_history(workspace: Path) -> list[dict]:
-    """The chat transcript for a workspace — loaded from disk on first
+    """The chat transcript for a workspace - loaded from disk on first
     use, so it survives a Bench restart (it was memory-only before
     v1.4). Call save_chat_history() after appending."""
     key = str(workspace)
@@ -950,7 +964,7 @@ def chat_history(workspace: Path) -> list[dict]:
 
 def save_chat_history(workspace: Path) -> None:
     """Write the in-memory transcript to workspace/chat.jsonl (one
-    JSON entry per line, newest 60). A failed save is swallowed —
+    JSON entry per line, newest 60). A failed save is swallowed -
     chat persistence must never break a chat turn."""
     history = _CHATS.get(str(workspace))
     if history is None:
@@ -963,20 +977,6 @@ def save_chat_history(workspace: Path) -> None:
         tmp.replace(path)
     except OSError:
         pass
-
-
-def _planner_ready(workspace: Path) -> bool:
-    """True when the planner seat's key is set in the environment."""
-    import os
-
-    try:
-        from .seats import load_seats
-        seats_path = workspace / "seats.json"
-        seats = load_seats(seats_path if seats_path.exists() else None)
-        env_key = seats.get("planner", {}).get("env_key")
-        return bool(env_key and os.environ.get(env_key))
-    except Exception:
-        return False
 
 
 def _pick_job(workspace: Path, text: str, selected: str | None,
@@ -1010,8 +1010,9 @@ def _pick_job(workspace: Path, text: str, selected: str | None,
 _CHAT_HELP = ("Commands I take right here: \"make <what you want>\" drafts a job "
               "for your approval; \"picture of <thing>\" generates 3 reference "
               "candidates; \"mesh <photo path>\" turns a photo into a textured "
-              "3D mesh on Hugging Face's free GPU (needs HF_TOKEN) — \"mesh "
-              "this photo\" uses the selected job's reference photo; "
+              "3D mesh on Hugging Face's free GPU - save your Hugging Face "
+              "token in Settings first. \"mesh this photo\" uses the "
+              "selected job's reference photo; "
               "\"approve\" / \"build\" / \"file\" act on the selected "
               "job; \"retry\" sends a failed job back to approved so it can "
               "build again; \"status\" reports the workshop.")
@@ -1058,7 +1059,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
     if low in ("help", "help?", "commands"):
         return {"reply": _CHAT_HELP, "actions": actions}
 
-    # "mesh <photo path>" / "mesh this photo" — the cloud mesh step.
+    # "mesh <photo path>" / "mesh this photo" - the cloud mesh step.
     mesh_match = re.match(r"^(mesh|cloud[ -]?mesh)\b\s*(.*)$", low)
     if mesh_match:
         rest = mesh_match.group(2).strip().strip("\"'")
@@ -1082,14 +1083,14 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
                 except Exception:
                     photo_arg = ""
             if not photo_arg:
-                return {"reply": ("Give me the photo's path — e.g. "
-                                  "\"mesh /home/xprnc/Pictures/stool.jpg\" — "
+                return {"reply": ("Give me the photo's path - e.g. "
+                                  "\"mesh /home/xprnc/Pictures/stool.jpg\" - "
                                   "or select a job that has a reference photo "
                                   "and say \"mesh this photo\"."),
                         "actions": actions}
         try:
             act(workspace, "cloud-mesh", {"photo": photo_arg, "job": job_arg})
-            return {"reply": ("Meshing that photo on Hugging Face's free GPU — "
+            return {"reply": ("Meshing that photo on Hugging Face's free GPU - "
                               "a few minutes. The photo leaves this machine; "
                               "the textured mesh comes back into a job waiting "
                               "at the plan gate."),
@@ -1110,7 +1111,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
         try:
             result = act(workspace, "images",
                          {"prompt": prompt.strip(), "job": selected})
-            return {"reply": f"Generating 3 candidates for \"{prompt.strip()}\" — "
+            return {"reply": f"Generating 3 candidates for \"{prompt.strip()}\" - "
                              "they'll appear in the Reference images section as they land.",
                     "actions": actions}
         except Exception as exc:
@@ -1123,7 +1124,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
             job_name = result["job"]
             actions.append(action_button("Approve it", "approve", {"job": job_name}))
             return {"reply": f"Drafted a job from that: {job_name}. It's waiting at the "
-                             "plan gate — nothing builds until you approve it. The "
+                             "plan gate - nothing builds until you approve it. The "
                              "summary is in the Jobs list below.",
                     "actions": actions}
         except Exception as exc:
@@ -1168,477 +1169,18 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None) -> di
             seats, context + "\n\nUser: " + text, workspace=workspace)
         reply = answer.strip() or "(the planner seat answered with nothing)"
         if role == "fallback":
-            reply += (" (answered by the local fallback model — "
+            reply += (" (answered by the local fallback model - "
                       "the Gemini seat could not be reached)")
         return {"reply": reply, "actions": actions}
     except Exception as exc:
         from .live import SeatNotConfigured
         if isinstance(exc, SeatNotConfigured):
-            return {"reply": "I take commands here — 'make …', 'picture of …', "
+            return {"reply": "I take commands here - 'make …', 'picture of …', "
                              "'mesh <photo path>', 'approve', 'build', 'file', 'retry', 'status'. "
-                             "For open conversation I need the "
-                             "Gemini key set in the environment (GEMINI_API_KEY) — without it "
-                             "there's no brain on this seat, and I won't fake one.",
+                             "For open conversation I need your Gemini key "
+                             "saved in Settings - without it there's no brain "
+                             "on this seat, and I won't fake one.",
                     "actions": actions}
         return {"reply": str(exc), "actions": actions}
 
 
-def job_view_page(workspace: Path, name: str) -> str:
-    """The Live Render Window for one job, served by the bench itself —
-    its scene/camera calls are rewritten to the bench's per-job routes,
-    so camera saves land in the job's own description."""
-    from . import viewer
-
-    job = _job(workspace, name)
-    page = viewer.render_page(job.load_description(), live=True)
-    page = page.replace('"/api/scene"', f'"/api/scene-job/{name}"')
-    page = page.replace('"/api/cameras"', f'"/api/cameras-job/{name}"')
-    return page
-
-
-# ---------------------------------------------------------------------- page
-
-PAGE_CSS = """
-body { margin:0; font-family: system-ui, sans-serif; background:#17130f; color:#f2ede4; }
-header { padding:16px 20px 4px; } h1 { font-size:20px; margin:0 0 4px; }
-.sub { opacity:.75; font-size:13px; } .chips { margin:8px 0 2px; }
-.chip { display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px;
-  background:#2c241b; margin-right:6px; } .chip.ok { background:#2e4a22; }
-.chip.missing { background:#5c2b23; }
-.layout { display:grid; grid-template-columns: 230px 1fr 330px; gap:12px;
-  padding:10px 20px; align-items:start; }
-@media (max-width: 1050px) { .layout { grid-template-columns: 1fr; } }
-section { padding:6px 20px; } h2 { font-size:15px; margin:10px 0 8px; opacity:.9; }
-aside h2, .viewpane h2 { margin-top:2px; }
-.card { background:#241d16; border-radius:12px; padding:12px 14px; margin-bottom:10px; }
-.card h3 { margin:0 0 4px; font-size:15px; } .meta { font-size:12px; opacity:.8; }
-.state { font-weight:700; } .st-awaiting_approval { color:#e0a458; }
-.st-approved { color:#8ecae6; } .st-awaiting_review { color:#9ed08a; }
-.st-filed { color:#9ed08a; } .st-failed { color:#e08a8a; }
-pre { white-space:pre-wrap; font-size:12px; background:#0d0a08; border-radius:8px;
-  padding:10px; max-height:260px; overflow:auto; }
-button { padding:8px 14px; border-radius:8px; border:0; font-size:13px; cursor:pointer;
-  background:#3a2f22; color:#f2ede4; margin:4px 6px 2px 0; }
-button.primary { background:#b07d2b; color:#17130f; font-weight:700; }
-button.keep { background:#3f6128; color:#eef7e6; } button.reject { background:#5c2b23; color:#fbeae6; }
-button:disabled { opacity:.4; cursor:default; }
-input[type=text], textarea, select { background:#0d0a08; color:#f2ede4; border:1px solid #3a2f22;
-  border-radius:8px; padding:8px; font-size:13px; width:100%; box-sizing:border-box; margin:4px 0 8px; }
-textarea { min-height:54px; }
-.imgs { display:flex; flex-wrap:wrap; gap:10px; } .cand { width:200px; }
-.cand img { width:200px; height:200px; object-fit:cover; border-radius:8px; background:#0d0a08; display:block; }
-.cand .meta { margin:6px 2px; } .ref { outline:2px solid #b07d2b; border-radius:8px; }
-.render { max-width:320px; border-radius:8px; margin:6px 8px 2px 0; }
-.run { font-size:12px; padding:4px 0; } .err { color:#e08a8a; } .good { color:#9ed08a; }
-details summary { cursor:pointer; font-size:13px; opacity:.85; }
-.folder-item { padding:6px 8px; border-radius:8px; cursor:pointer; font-size:13px; }
-.folder-item:hover { background:#2c241b; } .folder-item.sel { background:#3a2f22; }
-.folder-head { font-size:12px; opacity:.7; margin:10px 0 2px; text-transform:uppercase; letter-spacing:.06em; }
-#viewframe { width:100%; height:520px; border:0; border-radius:12px; background:#0d0a08; }
-.chatlog { height:430px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:4px 2px; }
-.msg { padding:8px 10px; border-radius:10px; font-size:13px; white-space:pre-wrap; }
-.msg.user { background:#3a2f22; align-self:flex-end; max-width:92%; }
-.msg.bot { background:#241d16; align-self:flex-start; max-width:92%; }
-.chatrow { display:flex; gap:8px; } .chatrow input { flex:1; margin:0; }
-.chatrow button { margin:0; }
-"""
-
-
-PAGE_SCRIPT = """
-var S = null; var SEL = null; var VIEWED = null; var CHATLEN = -1;
-function esc(s){ var d=document.createElement('div'); d.textContent=String(s==null?'':s); return d.innerHTML; }
-async function post(action, payload) {
-  var body = Object.assign({action: action}, payload || {});
-  var r = await fetch('/api/act', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(body)});
-  var data = await r.json();
-  if (!data.ok) alert(data.error || 'failed');
-  refresh();
-}
-function chip(label, ok) { return '<span class="chip ' + (ok ? 'ok' : 'missing') + '">' +
-  esc(label) + (ok ? ' \\u2713' : ' missing') + '</span>'; }
-function jobButtons(j) {
-  var h = '';
-  if (j.state === 'awaiting_approval') h += '<button class="primary" onclick="post(\\'approve\\',{job:\\'' + j.name + '\\'})">Approve</button>';
-  if (j.state === 'approved') h += '<button class="primary" onclick="post(\\'build\\',{job:\\'' + j.name + '\\'})">Build</button>';
-  if (j.state === 'awaiting_review') h += '<button class="primary" onclick="post(\\'file\\',{job:\\'' + j.name + '\\'})">File into Library</button>';
-  if (j.state === 'failed') h += '<button class="primary" onclick="post(\\'retry\\',{job:\\'' + j.name + '\\'})">Retry</button>';
-  return h;
-}
-function selectJob(name) { SEL = name; render(); }
-function jobCard(j) {
-  var h = '<div class="card"><h3>' + esc(j.title) + '</h3><div class="meta">' +
-    esc(j.name) + ' \\u00b7 ' + esc(j.kind) + ' \\u00b7 <span class="state st-' + esc(j.state) + '">' +
-    esc(j.state) + '</span>' +
-    (j.has_reference ? ' \\u00b7 reference: ' + esc(j.reference_source || 'photo') : '') + '</div>';
-  if (j.report) h += '<div class="meta">' + (j.report.ok
-    ? '<span class="good">last build passed</span>'
-    : '<span class="err">last build failed: ' + esc((j.report.problems || []).join('; ')) + '</span>') + '</div>';
-  h += '<div>' + jobButtons(j) + '</div>';
-  j.renders.forEach(function(rn) {
-    h += '<img class="render" src="/files/job/' + encodeURIComponent(j.name) + '/' + encodeURIComponent(rn) + '">';
-  });
-  if (j.outputs.length) h += '<div class="meta">files: ' + j.outputs.map(esc).join(', ') + '</div>';
-  h += '<details><summary>description summary</summary><pre>' + esc(j.summary) + '</pre></details></div>';
-  return h;
-}
-function batchCard(b) {
-  var h = '<div class="card"><h3>' + esc(b.prompt) + '</h3><div class="meta">batch ' +
-    esc(b.slug) + (b.job ? ' \\u00b7 job ' + esc(b.job) : '') +
-    (b.reference_file ? ' \\u00b7 reference: ' + esc(b.reference_file) : '') + '</div><div class="imgs">';
-  b.candidates.forEach(function(c) {
-    h += '<div class="cand">';
-    if (c.status === 'rejected') h += '<div class="meta err">rejected \\u2014 deleted</div>';
-    else if (c.status === 'failed') h += '<div class="meta err">generation failed</div>';
-    else h += '<img class="' + (b.reference_file === c.file ? 'ref' : '') +
-      '" src="/files/batch/' + encodeURIComponent(b.slug) + '/' + encodeURIComponent(c.file) + '">';
-    h += '<div class="meta">seed ' + c.seed + ' \\u00b7 ' + esc(c.status) + '</div>';
-    if (c.status === 'pending') {
-      h += '<button class="keep" onclick="post(\\'decide\\',{batch:\\'' + b.slug + '\\',file:\\'' + c.file + '\\',decision:\\'keep\\'})">Keep</button>' +
-           '<button class="reject" onclick="post(\\'decide\\',{batch:\\'' + b.slug + '\\',file:\\'' + c.file + '\\',decision:\\'reject\\'})">Reject</button>';
-    }
-    h += '</div>';
-  });
-  h += '</div><button onclick="post(\\'reroll\\',{batch:\\'' + b.slug + '\\'})">Generate another round</button></div>';
-  return h;
-}
-function render() {
-  if (!S) return;
-  document.getElementById('ws').textContent = S.workspace;
-  document.getElementById('chips').innerHTML =
-    chip('Blender', S.engines.blender) + chip('Image engine', S.engines.image_engine) +
-    chip('Image model', S.engines.image_model) + chip('Gemini key', S.engines.gemini_key) +
-    chip('HF token', S.engines.hf_token);
-  document.getElementById('runs').innerHTML = S.runs.filter(function(r){return r.status==='running';})
-    .map(function(r){ return '<div class="run">\\u23f3 ' + esc(r.kind) + ': ' + esc(r.label) + ' \\u2014 working\\u2026</div>'; }).join('') +
-    S.runs.filter(function(r){return r.status==='error';}).slice(-2)
-    .map(function(r){ return '<div class="run err">' + esc(r.kind) + ' ' + esc(r.label) + ': ' + esc(r.detail) + '</div>'; }).join('');
-  // folders pane
-  var f = '<div class="folder-head">Jobs</div>';
-  if (!S.jobs.length) f += '<div class="meta">no jobs yet</div>';
-  S.jobs.forEach(function(j){
-    f += '<div class="folder-item' + (SEL === j.name ? ' sel' : '') + '" onclick="selectJob(\\'' + j.name + '\\')">\\u25b8 ' +
-      esc(j.title) + ' <span class="state st-' + esc(j.state) + '">' + esc(j.state) + '</span></div>';
-  });
-  f += '<div class="folder-head">Library</div>' + (S.folders.library.length
-    ? S.folders.library.map(function(n){ return '<div class="folder-item">\\u25b8 ' + esc(n) + '</div>'; }).join('')
-    : '<div class="meta">empty</div>');
-  f += '<div class="folder-head">Image batches</div>' + (S.folders.images.length
-    ? S.folders.images.map(function(n){ return '<div class="folder-item">\\u25b8 ' + esc(n) + '</div>'; }).join('')
-    : '<div class="meta">none yet</div>');
-  f += '<div class="folder-head">Intake (photos in)</div>' + (S.folders.intake.length
-    ? S.folders.intake.map(function(n){ return '<div class="folder-item">\\u25b8 ' + esc(n) + '</div>'; }).join('')
-    : '<div class="meta">nothing in intake</div>');
-  f += '<div class="folder-head">Workspace files</div>' + (S.folders.root_files.length
-    ? S.folders.root_files.map(function(n){ return '<div class="folder-item">\\u25b8 ' + esc(n) + '</div>'; }).join('')
-    : '<div class="meta">none</div>');
-  if (S.skipped && S.skipped.length) {
-    f += '<div class="folder-head">Couldn\\'t read</div>' + S.skipped.map(function(s){
-      return '<div class="folder-item err">\\u25b8 ' + esc(s.where) + ' / ' + esc(s.name) +
-        ' <span class="meta">' + esc(s.reason) + '</span></div>'; }).join('');
-  }
-  document.getElementById('folders').innerHTML = f;
-  // selection default: first job
-  if (!SEL && S.jobs.length) SEL = S.jobs[0].name;
-  if (SEL && !S.jobs.some(function(j){ return j.name === SEL; })) SEL = S.jobs.length ? S.jobs[0].name : null;
-  var sel = S.jobs.filter(function(j){ return j.name === SEL; })[0];
-  // render view pane
-  var vp = document.getElementById('viewpane-head');
-  if (sel) {
-    vp.innerHTML = '<b>' + esc(sel.title) + '</b> <span class="state st-' + esc(sel.state) + '">' + esc(sel.state) + '</span> ' +
-      jobButtons(sel) +
-      '<button onclick="window.open(\\'/view/' + sel.name + '\\',\\'_blank\\')">Open the render window full-screen</button>';
-    if (VIEWED !== SEL) { VIEWED = SEL; document.getElementById('viewframe').src = '/view/' + SEL; }
-  } else {
-    vp.innerHTML = '<span class="meta">no job selected \\u2014 start one below or ask in the chat</span>';
-    if (VIEWED !== null) { VIEWED = null; document.getElementById('viewframe').src = 'about:blank'; }
-  }
-  document.getElementById('jobdetail').innerHTML = sel ? jobCard(sel) : '';
-  document.getElementById('jobs').innerHTML = S.jobs.length ? S.jobs.map(jobCard).join('') : '<div class="meta">no jobs yet</div>';
-  var isel = document.getElementById('imgjob');
-  var cur = isel.value;
-  isel.innerHTML = '<option value="">(no job \\u2014 batch only)</option>' + S.jobs.map(function(j){
-    return '<option value="' + j.name + '">' + esc(j.title) + '</option>'; }).join('');
-  isel.value = cur || SEL || '';
-  document.getElementById('batches').innerHTML = S.batches.length ? S.batches.map(batchCard).join('') : '<div class="meta">no image batches yet</div>';
-  document.getElementById('library').innerHTML = S.library.length ? S.library.map(function(a){
-    return '<div class="card"><h3>' + esc(a.name) + '</h3><div class="meta">' + esc(a.kind) +
-      ' \\u00b7 ' + a.files.length + ' files: ' + a.files.map(esc).join(', ') + '</div></div>'; }).join('')
-    : '<div class="meta">library is empty</div>';
-  document.getElementById('critref').checked = !!S.settings.critic_reference_check;
-  var ex = document.getElementById('example');
-  if (!ex.options.length) ex.innerHTML = S.examples.map(function(e){
-    return '<option value="' + esc(e) + '">' + esc(e) + '</option>'; }).join('');
-  document.getElementById('planbtn').disabled = !S.engines.gemini_key;
-  document.getElementById('plannote').textContent = S.engines.gemini_key ? ''
-    : 'needs GEMINI_API_KEY in the environment \\u2014 until then, start from an example below';
-  document.getElementById('genbtn').disabled = !(S.engines.image_engine && S.engines.image_model);
-  document.getElementById('gennote').textContent = (S.engines.image_engine && S.engines.image_model) ? ''
-    : 'needs the image engine + model \\u2014 see the README install options';
-  // chat transcript (only re-render when it changed, so typing is safe)
-  if (S.chat.length !== CHATLEN) {
-    CHATLEN = S.chat.length;
-    var log = document.getElementById('chatlog');
-    log.innerHTML = S.chat.map(function(m){
-      var h = '<div class="msg ' + (m.role === 'user' ? 'user' : 'bot') + '">' + esc(m.text);
-      (m.actions || []).forEach(function(a){
-        h += '<br><button class="primary" onclick="post(\\'' + a.action + '\\',' + JSON.stringify(a.payload).replace(/"/g, '&quot;') + ')">' + esc(a.label) + '</button>';
-      });
-      return h + '</div>';
-    }).join('');
-    log.scrollTop = log.scrollHeight;
-  }
-}
-async function sendChat() {
-  var input = document.getElementById('chatinput');
-  var text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  var r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({message: text, job: SEL})});
-  var data = await r.json();
-  if (!data.ok) alert(data.error || 'chat failed');
-  CHATLEN = -1;
-  refresh();
-}
-async function refresh() {
-  try { var r = await fetch('/api/state'); var d = await r.json(); if (d.ok) { S = d.state; render(); } } catch (e) {}
-}
-refresh(); setInterval(refresh, 3000);
-"""
-
-_PAGE = ("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
-         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-         "<title>SKULLPT Bench</title><style>" + PAGE_CSS + "</style></head><body>"
-         "<header><h1>SKULLPT \\u2014 Bench</h1>"
-         "<div class=\"sub\">workspace: <span id=\"ws\"></span></div>"
-         "<div class=\"chips\" id=\"chips\"></div><div id=\"runs\"></div></header>"
-         "<div class=\"layout\">"
-         "<aside><h2>Project folders</h2><div class=\"card\" id=\"folders\"></div></aside>"
-         "<div class=\"viewpane\"><h2>Live render view</h2>"
-         "<div class=\"card\"><div id=\"viewpane-head\"></div>"
-         "<iframe id=\"viewframe\" title=\"Live render view\"></iframe>"
-         "<div class=\"meta\">Drag to orbit \\u00b7 right-drag to pan \\u00b7 scroll to zoom \\u00b7 "
-         "click a part to focus it. Cameras you save in there write back into the job.</div></div>"
-         "<div id=\"jobdetail\"></div></div>"
-         "<aside><h2>Chat</h2><div class=\"card\">"
-         "<div class=\"chatlog\" id=\"chatlog\"></div>"
-         "<div class=\"chatrow\"><input type=\"text\" id=\"chatinput\" "
-         "placeholder=\"make a market stall \\u00b7 picture of a brass lamp \\u00b7 approve \\u00b7 build\""
-         " onkeydown=\"if(event.key==='Enter')sendChat()\">"
-         "<button class=\"primary\" onclick=\"sendChat()\">Send</button></div>"
-         "<div class=\"meta\">Commands work without any key. Open conversation uses the "
-         "planner seat (Gemini key) when it's set.</div></div></aside>"
-         "</div>"
-         "<section><h2>New job</h2><div class=\"card\">"
-         "<label>What do you want? (the planner drafts the description \\u2014 you approve before anything builds)</label>"
-         "<textarea id=\"words\" placeholder=\"a small market stall with a wood counter\"></textarea>"
-         "<button class=\"primary\" id=\"planbtn\" onclick=\"post('plan',{words:document.getElementById('words').value,kind:'scene'})\">Draft from words</button>"
-         " <span class=\"meta\" id=\"plannote\"></span>"
-         "<div style=\"margin-top:10px\"><label>\\u2026or start from a bundled example</label>"
-         "<select id=\"example\"></select>"
-         "<button onclick=\"post('new-example',{example:document.getElementById('example').value})\">Start from example</button></div>"
-         "</div></section>"
-         "<section><h2>All jobs</h2><div id=\"jobs\"></div></section>"
-         "<section><h2>Reference images</h2><div class=\"card\">"
-         "<label>Prompt for candidate pictures (3 at a time; the keeper becomes the job's reference)</label>"
-         "<input type=\"text\" id=\"imgprompt\" placeholder=\"a brass oil lamp, product photo\">"
-         "<select id=\"imgjob\"></select>"
-         "<button class=\"primary\" id=\"genbtn\" onclick=\"post('images',{prompt:document.getElementById('imgprompt').value,job:document.getElementById('imgjob').value||null})\">Generate 3 candidates</button>"
-         " <span class=\"meta\" id=\"gennote\"></span></div>"
-         "<div id=\"batches\"></div></section>"
-         "<section><h2>Library</h2><div id=\"library\"></div></section>"
-         "<section><h2>Settings</h2><div class=\"card\">"
-         "<label><input type=\"checkbox\" id=\"critref\" onchange=\"post('settings',{critic_reference:this.checked})\">"
-         " Vision critic compares builds against the job's chosen reference picture</label>"
-         "<div class=\"meta\">A single job can override this either way with \"critic_reference\": true/false in its description.</div>"
-         "</div></section>"
-         "<script>\n" + PAGE_SCRIPT + "\n</script></body></html>\n")
-
-
-def render_page() -> str:
-    return _PAGE
-
-
-# -------------------------------------------------------------------- server
-
-_CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-           ".svg": "image/svg+xml", ".html": "text/html", ".css": "text/css",
-           ".json": "application/json", ".glb": "model/gltf-binary"}
-
-
-def make_server(workspace: str | Path, host: str = "127.0.0.1", port: int = 8770):
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    ws = Path(workspace)
-    (ws / "jobs").mkdir(parents=True, exist_ok=True)
-    (ws / "library").mkdir(parents=True, exist_ok=True)
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def _send(self, code: int, body: bytes, ctype: str):
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def _json(self, code: int, obj: dict):
-            self._send(code, (json.dumps(obj) + "\n").encode(), "application/json")
-
-        def _serve_file(self, base: Path, name: str):
-            target = (base / name).resolve()
-            if target.parent != base.resolve() and base.resolve() not in target.parents:
-                self._json(404, {"ok": False, "error": "not found"})
-                return
-            if not target.is_file():
-                self._json(404, {"ok": False, "error": "not found"})
-                return
-            ctype = _CTYPES.get(target.suffix.lower(), "application/octet-stream")
-            self._send(200, target.read_bytes(), ctype)
-
-        def _read_body(self) -> dict:
-            length = int(self.headers.get("Content-Length") or 0)
-            return json.loads(self.rfile.read(length) or b"{}")
-
-        def do_GET(self):
-            import urllib.parse
-            try:
-                if self.path == "/":
-                    self._send(200, render_page().encode(), "text/html; charset=utf-8")
-                elif self.path == "/api/state":
-                    self._json(200, {"ok": True, "state": workspace_state(ws)})
-                elif self.path.startswith("/view/"):
-                    name = urllib.parse.unquote(self.path[len("/view/"):])
-                    self._send(200, job_view_page(ws, name).encode(),
-                               "text/html; charset=utf-8")
-                elif self.path.startswith("/api/scene-job/"):
-                    from . import viewer
-                    name = urllib.parse.unquote(self.path[len("/api/scene-job/"):])
-                    job = _job(ws, name)
-                    self._json(200, viewer.scene_data(job.load_description()))
-                elif self.path.startswith("/files/job/"):
-                    parts = self.path[len("/files/job/"):].split("/", 1)
-                    if len(parts) != 2:
-                        self._json(404, {"ok": False, "error": "not found"})
-                        return
-                    job_name = urllib.parse.unquote(parts[0])
-                    fname = urllib.parse.unquote(parts[1])
-                    job_dir = ws / "jobs" / job_name
-                    if job_dir.parent != ws / "jobs" or not job_dir.is_dir():
-                        self._json(404, {"ok": False, "error": "not found"})
-                        return
-                    if (job_dir / "output" / fname).exists():
-                        self._serve_file(job_dir / "output", fname)
-                    else:
-                        self._serve_file(job_dir, fname)
-                elif self.path.startswith("/files/batch/"):
-                    parts = self.path[len("/files/batch/"):].split("/", 1)
-                    if len(parts) != 2:
-                        self._json(404, {"ok": False, "error": "not found"})
-                        return
-                    slug = urllib.parse.unquote(parts[0])
-                    fname = urllib.parse.unquote(parts[1])
-                    bdir = ws / "images" / slug
-                    if bdir.parent != ws / "images" or not bdir.is_dir():
-                        self._json(404, {"ok": False, "error": "not found"})
-                        return
-                    batch = imagegen.load_batch(bdir)
-                    if fname not in {c["file"] for c in batch["candidates"]}:
-                        self._json(404, {"ok": False, "error": "not a candidate"})
-                        return
-                    self._serve_file(bdir, fname)
-                else:
-                    self._json(404, {"ok": False, "error": "not found"})
-            except Exception as exc:
-                self._json(500, {"ok": False, "error": str(exc)})
-
-        def do_POST(self):
-            import urllib.parse
-            if self.path == "/api/act":
-                try:
-                    payload = self._read_body()
-                    action = str(payload.pop("action", ""))
-                    self._json(200, act(ws, action, payload))
-                except Exception as exc:
-                    self._json(400, {"ok": False, "error": str(exc)})
-                return
-            if self.path == "/api/chat":
-                try:
-                    payload = self._read_body()
-                    message = str(payload.get("message", "")).strip()
-                    if not message:
-                        self._json(400, {"ok": False, "error": "empty message"})
-                        return
-                    history = chat_history(ws)
-                    history.append({"role": "user", "text": message})
-                    result = chat_reply(ws, message,
-                                        selected=payload.get("job") or None)
-                    history.append({"role": "bot", "text": result["reply"],
-                                    "actions": result.get("actions", [])})
-                    del history[:-60]
-                    save_chat_history(ws)
-                    self._json(200, {"ok": True, "reply": result["reply"],
-                                     "actions": result.get("actions", [])})
-                except Exception as exc:
-                    self._json(400, {"ok": False, "error": str(exc)})
-                return
-            if self.path.startswith("/api/cameras-job/"):
-                try:
-                    from . import viewer
-                    name = urllib.parse.unquote(self.path[len("/api/cameras-job/"):])
-                    job = _job(ws, name)
-                    payload = self._read_body()
-                    desc = job.load_description()
-                    if "delete" in payload:
-                        removed = viewer.delete_camera(desc, str(payload["delete"]))
-                        desc_mod.dump(desc, job.desc_path)
-                        self._json(200, {"ok": removed,
-                                         "cameras": desc.get("cameras", [])})
-                    else:
-                        entry = viewer.upsert_camera(desc, payload)
-                        desc_mod.dump(desc, job.desc_path)
-                        self._json(200, {"ok": True, "camera": entry,
-                                         "cameras": desc.get("cameras", [])})
-                except Exception as exc:
-                    self._json(400, {"ok": False, "error": str(exc)})
-                return
-            self._json(404, {"ok": False, "error": "not found"})
-
-    return ThreadingHTTPServer((host, port), Handler)
-
-
-def _open_browser(url: str) -> None:
-    """Open the Bench URL in the default browser. Best-effort only:
-    a missing browser must never break the server. Set
-    DESIGNSHELL_NO_BROWSER=1 to skip the open (headless use)."""
-    if os.environ.get("DESIGNSHELL_NO_BROWSER"):
-        return
-    try:
-        import webbrowser
-
-        webbrowser.open(url)
-    except Exception:
-        pass
-
-
-def serve(workspace: str | Path, host: str = "127.0.0.1", port: int = 8770) -> str:
-    """Serve the Bench for a workspace; returns the URL. Blocks."""
-    server = make_server(workspace, host, port)
-    url = f"http://{host}:{server.server_address[1]}/"
-    print(f"SKULLPT Bench: {url}  (opening in your browser)")
-    print(f"Workspace: {workspace}  (Ctrl+C to stop)")
-    # The Bench is a web page — a server that only prints a URL never
-    # shows the user anything. Open the window for them.
-    opener = threading.Timer(0.5, _open_browser, args=(url,))
-    opener.daemon = True
-    opener.start()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-    return url

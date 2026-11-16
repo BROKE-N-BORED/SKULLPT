@@ -1,24 +1,18 @@
-"""The Bench — the shell's window (v0.8).
+"""The Bench action engine (v0.8).
 
 The bench is a face on the same functions the CLI calls; these tests
-drive it the way the page does (actions + state + file serving) with
-a fake image engine, and check the page script parses.
+drive it through actions + state with a fake image engine.
+(The web page these tests once drove was removed in v1.9.)
 """
 from __future__ import annotations
 
-import json
 import os
-import re
 import shutil
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 import unittest.mock
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -141,72 +135,6 @@ class BenchFlowTests(BenchCase):
         with self.assertRaises(ValueError):
             bench.act(self.ws, "decide", {"batch": "../nope", "file": "x.png",
                                           "decision": "keep"})
-
-
-class BenchServerTests(BenchCase):
-    def setUp(self):
-        super().setUp()
-        self.server = bench.make_server(self.ws, port=0)
-        self.port = self.server.server_address[1]
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def tearDown(self):
-        self.server.shutdown()
-        super().tearDown()
-
-    def _get(self, path):
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}",
-                                    timeout=5) as resp:
-            return resp.status, resp.read()
-
-    def _post(self, payload):
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/api/act",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read())
-
-    def test_page_state_and_action_roundtrip(self):
-        status, body = self._get("/")
-        self.assertEqual(status, 200)
-        self.assertIn(b"Bench", body)
-        status, body = self._get("/api/state")
-        data = json.loads(body)
-        self.assertTrue(data["ok"])
-        self.assertIn("engines", data["state"])
-        result = self._post({"action": "new-example",
-                             "example": "shop-panel.description.json"})
-        self.assertTrue(result["ok"])
-        status, body = self._get("/api/state")
-        self.assertEqual(len(json.loads(body)["state"]["jobs"]), 1)
-
-    def test_file_serving_and_traversal_guard(self):
-        bench.act(self.ws, "new-example", {"example": "shop-panel.description.json"})
-        job_name = bench.workspace_state(self.ws)["jobs"][0]["name"]
-        bench.act(self.ws, "approve", {"job": job_name})
-        run = wait_run(bench.act(self.ws, "build", {"job": job_name})["run"])
-        self.assertEqual(run["status"], "done", run)
-        # a text output serves fine
-        status, body = self._get(f"/files/job/{job_name}/tavern-shop-panel.html")
-        self.assertEqual(status, 200)
-        self.assertIn(b"<", body)
-        # traversal is refused
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self._get(f"/files/job/{job_name}/..%2F..%2Fseats.json")
-        self.assertEqual(ctx.exception.code, 404)
-        with self.assertRaises(urllib.error.HTTPError):
-            self._get("/files/batch/nope/cand-01.png")
-
-    @unittest.skipUnless(shutil.which("node"), "node not available")
-    def test_page_script_parses(self):
-        page = bench.render_page()
-        script = re.search(r"<script>\n(.*)\n</script>", page, re.S).group(1)
-        script_file = self.tmp / "bench-script.js"
-        script_file.write_text(script)
-        proc = subprocess.run(["node", "--check", str(script_file)],
-                              capture_output=True, text=True)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
 if __name__ == "__main__":

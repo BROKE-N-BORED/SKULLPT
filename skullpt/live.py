@@ -1,9 +1,9 @@
-"""Live seats — real provider calls behind the planner and critic seats.
+"""Live seats - real provider calls behind the planner and critic seats.
 
 Until v0.6 the seats were configuration only. This module is the wire:
 stdlib HTTP calls to the provider the seat names. A key comes from the
 environment first, then from the workspace's key file (v1.8: Settings
-saves Gemini and Groq keys there, owner-only, gitignored — the same
+saves Gemini and Groq keys there, owner-only, gitignored - the same
 precedence the HF token has always had). A key is never stored by the
 shell anywhere else, and never logged. Endpoint overrides exist so
 the wiring itself can be tested against a local mock server:
@@ -65,7 +65,7 @@ def _key_for(seat: dict, workspace=None) -> str:
         if stored:
             return stored
     raise SeatNotConfigured(
-        f"seat {seat.get('provider')}/{seat.get('model')} has no key — "
+        f"seat {seat.get('provider')}/{seat.get('model')} has no key - "
         "paste one in the Bench Settings window")
 
 
@@ -154,9 +154,9 @@ def seat_text(seat: dict, prompt: str, image_png: bytes | None = None,
 # ------------------------------------------------------- fallback (v1.5, T20)
 
 # Which seat the last plan/text call actually used, what the primary
-# seat said when it failed, and whether the draft needed a repair —
+# seat said when it failed, and whether the draft needed a repair -
 # so the Bench and CLI can report honestly ("drafted by the local
-# fallback — Gemini could not be reached", "the repairer fixed two
+# fallback - Gemini could not be reached", "the repairer fixed two
 # problems in the draft") instead of silently switching brains.
 _LAST_PLAN: dict = {"seat": None, "primary_error": None,
                     "repaired": False, "repair_seat": None}
@@ -175,7 +175,7 @@ def text_with_fallback(seats: dict, prompt: str,
     error, unreachable), ask the local fallback seat instead.
 
     Returns (text, role-used, primary-error-or-None). When both fail,
-    the PRIMARY seat's error is raised — the user hears the real
+    the PRIMARY seat's error is raised - the user hears the real
     reason, not the fallback's connection-refused noise."""
     primary_error: Exception | None = None
     try:
@@ -209,12 +209,26 @@ the floor has base_z equal to the floor's top. extrude parts also need
 lathe parts need "profile_cm": [[radius, z], ...] (>=2). tube parts need
 "path_cm": [[x, y, z], ...] (>=2) and "radius_cm".
 Constraints: {"type": "on_ground", "part": id} or
-{"type": "sits_on", "part": id, "on": support_id} — a part's base_z must
+{"type": "sits_on", "part": id, "on": support_id} - a part's base_z must
 equal its support's base_z + height. Include a floor part
 {"id": "floor", "type": "floor", "shape": "box"} under everything.
 Optional per part: "repeat": {"count": n, "step_cm": [dx, dy, dz]},
 "mirror": {"axis": "x", "at_cm": n}, "bevel_cm": n, "texture":
 wood_grain|brushed_metal|worn_leather|none.
+For kind "character" the description is different: the human comes
+from a "character" block, not from parts (parts may be empty, for
+props only). "character": {"gender": 0.0-1.0, "age": 0.0-1.0,
+"muscle": 0.0-1.0, "weight": 0.0-1.0, "proportions": 0.0-1.0,
+"height": 0.0-1.0, "cupsize": 0.0-1.0, "firmness": 0.0-1.0,
+"race_asian": 0.0-1.0, "race_caucasian": 0.0-1.0,
+"race_african": 0.0-1.0, "skin": "<name>.mhmat",
+"rig": "game_engine"}. Every slider is 0.0 to 1.0 (0.5 when the
+request does not say); gender 0 is female, 1 is male; age 0 is
+young, 1 is old. "skin" is REQUIRED - a .mhmat file name from the
+MakeHuman system assets pack, e.g. young_caucasian_male.mhmat.
+"rig" is optional (game_engine is the default) and must be one of
+game_engine|game_engine_with_breast|default|default_no_toes|cmu_mb|
+mixamo|mixamo_unity|openpose|rigify.human|rigify.human_toes.
 """
 
 
@@ -253,7 +267,7 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene",
                     workspace=None) -> dict:
     """Draft a Description File from plain words via the planner seat.
 
-    The draft still goes through the plan gate — this fills in the form,
+    The draft still goes through the plan gate - this fills in the form,
     it does not approve anything. If the planner seat cannot answer
     (no key, provider error, unreachable), the local fallback seat
     (Ollama) is tried with the same prompt; when both fail, the
@@ -264,9 +278,23 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene",
     attempt (v1.6, T22): the repairer seat is sent the draft plus the
     validation problems and asked to fix exactly those. If the repair
     validates, it is used and recorded; if it still fails, the error
-    names both attempts. A repair is bounded to one attempt — a draft
+    names both attempts. A repair is bounded to one attempt - a draft
     that needs two repairs is a draft to rewrite, not to patch.
+
+    A kind with no exporter (project - no studio yet) is refused
+    before the seat is even asked (v1.9, N14): drafting something
+    that cannot build wastes the call and files a dead job.
     """
+    from . import exporters as exporters_mod
+
+    if kind not in desc_mod.KINDS:
+        raise ValueError(
+            f"unknown kind {kind!r} - pick one of: {', '.join(desc_mod.KINDS)}")
+    if not exporters_mod.DEFAULT_EXPORTERS.get(kind, ()):
+        raise ValueError(
+            f"kind {kind!r} has no builder yet - SKULLPT cannot build it "
+            "from words. Draft a scene, character, graphic, website, or "
+            "UI component instead.")
     _LAST_PLAN.update(repaired=False, repair_seat=None)
     prompt = (
         "You are the planner seat of a design workshop. Turn the request "
@@ -281,7 +309,7 @@ def plan_from_words(words: str, seats: dict, kind: str = "scene",
         repair_prompt = (
             "You are the repairer seat of a design workshop. A draft "
             "Description File failed validation. Fix ONLY the listed "
-            "problems — do not redesign, rename, or add parts. Reply "
+            "problems - do not redesign, rename, or add parts. Reply "
             "with ONLY the corrected JSON object, no commentary.\n\n"
             + FORMAT_SPEC +
             "\nProblems:\n- " + "\n- ".join(problems) +
@@ -334,7 +362,7 @@ ALLOWED_PATCH_FIELDS = ("position_cm", "size_cm", "material", "bevel_cm", "radiu
 def extract_patches(fixes: list[dict]) -> list[dict]:
     """Pull machine-appliable patches out of critic fixes.
 
-    A fix may carry "patch": {"field": value} with one allowed field —
+    A fix may carry "patch": {"field": value} with one allowed field -
     patches are parameter changes, never rewrites, per the blueprint.
     """
     out = []

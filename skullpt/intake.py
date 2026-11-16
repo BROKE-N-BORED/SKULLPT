@@ -1,9 +1,9 @@
-"""Photo intake — a photograph becomes a tracked reference, honestly.
+"""Photo intake - a photograph becomes a tracked reference, honestly.
 
 The GitHub sweep's pipeline starts with a photo. This module does the
 part the shell can stand behind today: the photo is copied into the
 workspace, measured (real pixel dimensions, parsed from the file), and
-filed as a draft description whose `reference` block records it — so a
+filed as a draft description whose `reference` block records it - so a
 planner (or Joshua) builds FROM the photo with the reference on record.
 
 Since v1.1 the first route is built in: `cloudmesh` sends the photo to
@@ -51,8 +51,9 @@ ROUTES = (
     "Routes from this photo to a 3D asset:\n"
     "  1. Free cloud mesh (built in, v1.1): cloud-mesh <workspace> <photo> "
     "turns the photo into a textured GLB on a Hugging Face ZeroGPU space "
-    "(free quota, a few textured GLBs a day; needs HF_TOKEN) and files "
-    "the mesh + its description in a job.\n"
+    "(free quota, a few textured GLBs a day; save your Hugging Face "
+    "token in Settings first) and files the mesh + its description "
+    "in a job.\n"
     "  2. Local draft: SF3D or TripoSR on the PC (draft grade, offline) "
     "-> GLB -> ingest <file.glb> <out.description.json>.\n"
     "  3. Build from the photo as a reference: plan a description with "

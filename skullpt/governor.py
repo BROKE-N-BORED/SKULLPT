@@ -1,4 +1,4 @@
-"""Resource Governor — keeps heavy jobs from thrashing a small PC.
+"""Resource Governor - keeps heavy jobs from thrashing a small PC.
 
 Two duties:
 1. Budget gate: a Description File's budget (triangles, texture size,
@@ -16,7 +16,7 @@ from pathlib import Path
 
 DEFAULT_MIN_FREE_MB = 1024  # refuse heavy work under ~1 GB free
 # The adaptive floor is the larger of the absolute floor above and this
-# share of the machine's total RAM — on a bigger machine the floor
+# share of the machine's total RAM - on a bigger machine the floor
 # rises so the desktop keeps breathing room; on a small one the
 # absolute floor is what counts. (v1.5, P6.)
 ADAPTIVE_FLOOR_FRACTION = 0.15
@@ -30,7 +30,7 @@ class Cancelled(RuntimeError):
     """A long-running step stopped because the user cancelled it.
 
     Raised at the next safe checkpoint (between exporters, between
-    image candidates, between cloud-mesh stages) — never mid-write.
+    image candidates, between cloud-mesh stages) - never mid-write.
     Lives here because every long-running module already imports the
     governor, and the run machinery needs one shared type to tell
     "cancelled" apart from "failed".
@@ -43,7 +43,7 @@ def check_budget(desc: dict) -> list[str]:
     The triangle key is `max_tris` (what the planner writes, what the
     game-ready gate reads, what the examples use). `max_triangles` is
     still honored when `max_tris` is absent, for descriptions written
-    before v1.4 — it is a legacy alias, not a second key. The total is
+    before v1.4 - it is a legacy alias, not a second key. The total is
     estimated from the shapes (description.estimate_triangles, over
     the repeat/mirror expansion), so the pre-build gate means
     something instead of summing zeros.
@@ -125,13 +125,13 @@ class HeavyJobLock:
         self._check_ram(min_free_mb)
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         # Atomic creation: two processes starting at once cannot both
-        # win — O_EXCL makes exactly one of them the holder, and the
+        # win - O_EXCL makes exactly one of them the holder, and the
         # loser sees the file and reads a live pid. A stale lock (dead
         # holder) is removed and the create retried once. An empty lock
         # file is NOT stale: it is a contender that just created the
         # file and has not written its pid yet (the write follows the
         # create by two syscalls). Stealing it lets two heavy jobs run
-        # at once — the old code did exactly that under load, and both
+        # at once - the old code did exactly that under load, and both
         # contenders reported "won". (v1.7 verification fix.)
         for _attempt in range(2):
             try:
@@ -159,7 +159,7 @@ class HeavyJobLock:
             self._held = True
             self._min_free_mb = min_free_mb
             return
-        raise GovernorError("could not take the heavy-job lock — try again")
+        raise GovernorError("could not take the heavy-job lock - try again")
 
     def _read_holder(self) -> int:
         """The pid recorded in the lock file, or 0 when the file is
@@ -173,7 +173,7 @@ class HeavyJobLock:
         free = free_ram_mb()
         if free is not None and free < min_free_mb:
             raise GovernorError(
-                f"only {free} MB RAM free (floor is {min_free_mb} MB) — wait, don't thrash"
+                f"only {free} MB RAM free (floor is {min_free_mb} MB) - wait, don't thrash"
             )
 
     def recheck(self) -> None:

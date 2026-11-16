@@ -1,8 +1,8 @@
-"""The Recipe Library — tested building blocks, not raw generation.
+"""The Recipe Library - tested building blocks, not raw generation.
 
 A recipe is a small function that renders ONE kind of part (a panel, a
 button, a token sheet) from its parameters in the Description File. The
-model's job in later studios is to choose recipes and fill parameters —
+model's job in later studios is to choose recipes and fill parameters -
 the geometry/markup itself lives here, written once and covered by tests.
 
 Recipes graduate: when an approved job invents a pattern worth keeping, it
@@ -60,7 +60,7 @@ HTML_RECIPES = {
 }
 
 # Part types a recipe does not know are rendered as a labelled placeholder
-# by the exporter — visible in previews, never silently dropped.
+# by the exporter - visible in previews, never silently dropped.
 
 
 def tokens_css(desc: dict) -> str:

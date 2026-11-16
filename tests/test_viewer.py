@@ -1,9 +1,6 @@
-"""Live Render Window tests: geometry, cameras, page, and the live server."""
-import json
+"""Live Render Window tests: scene geometry and cameras."""
 import sys
-import threading
 import unittest
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -12,19 +9,6 @@ from skullpt import description as desc_mod
 from skullpt import viewer
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "tavern-room.description.json"
-
-
-def _post(url, payload):
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return json.loads(resp.read())
-
-
-def _get(url):
-    with urllib.request.urlopen(url, timeout=5) as resp:
-        return resp.status, resp.read().decode()
 
 
 class GeometryTests(unittest.TestCase):
@@ -79,57 +63,6 @@ class CameraTests(unittest.TestCase):
                 "cameras": [{"name": "", "position_cm": [0, 0], "look_at_cm": [0, 0, 0]}]}
         problems = desc_mod.validate(desc)
         self.assertTrue(any("cameras[0]" in p for p in problems))
-
-
-class PageTests(unittest.TestCase):
-    def setUp(self):
-        self.desc = desc_mod.load(EXAMPLE)
-        self.page = viewer.render_page(self.desc, live=True)
-
-    def test_page_is_self_contained(self):
-        self.assertNotIn("http://", self.page)
-        self.assertNotIn("https://", self.page)
-        self.assertIn("<canvas", self.page)
-
-    def test_page_carries_scene_and_controls(self):
-        for token in ("Tavern Room", "Door view", "addCam", "setCam", "pointerdown", "wheel"):
-            self.assertIn(token, self.page)
-
-    def test_snapshot_is_not_live(self):
-        page = viewer.render_page(self.desc, live=False)
-        self.assertIn("var LIVE = false", page)
-
-
-class ServerTests(unittest.TestCase):
-    def test_live_round_trip(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / "scene.description.json"
-            target.write_text(EXAMPLE.read_text())
-            server = viewer.make_server(target, port=0)
-            port = server.server_address[1]
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                base = f"http://127.0.0.1:{port}"
-                status, body = _get(base + "/")
-                self.assertEqual(status, 200)
-                self.assertIn("Live Render Window", body)
-                status, body = _get(base + "/api/scene")
-                scene = json.loads(body)
-                self.assertEqual(scene["name"], "Tavern Room")
-                res = _post(base + "/api/cameras",
-                            {"name": "My angle", "position_cm": [10, -50, 90], "look_at_cm": [200, 200, 50]})
-                self.assertTrue(res["ok"])
-                on_disk = desc_mod.load(target)
-                names = [c["name"] for c in on_disk["cameras"]]
-                self.assertIn("My angle", names)
-                res = _post(base + "/api/cameras", {"delete": "My angle"})
-                self.assertTrue(res["ok"])
-                self.assertNotIn("My angle", [c["name"] for c in desc_mod.load(target)["cameras"]])
-            finally:
-                server.shutdown()
-                server.server_close()
 
 
 if __name__ == "__main__":

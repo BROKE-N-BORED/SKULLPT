@@ -1,4 +1,4 @@
-"""Image generation — the front half of the reference pipeline.
+"""Image generation - the front half of the reference pipeline.
 
 A prompt goes in, a batch of candidate pictures comes out; Joshua keeps
 or rejects each one, and the keeper becomes a job's locked reference
@@ -7,20 +7,20 @@ are deleted and their seeds recorded, so a re-roll never serves the
 same picture twice.
 
 The engine is leejet's stable-diffusion.cpp (binary name `sd-cli`)
-driving an SD 1.5 LCM model — the class that fits an 8 GB, CPU-only
+driving an SD 1.5 LCM model - the class that fits an 8 GB, CPU-only
 machine: ~2.3 GB RAM and minutes per picture instead of the half-hour
 a full-step model takes. The shell shells out to it exactly the way it
 shells out to Blender: an external tool, a loud failure when it is
 missing, and nothing faked when it is not there.
 
 Pins (verified 2026-11-11):
-  engine release master-1086-465adf3 — NOTE the prebuilt Linux binary
+  engine release master-1086-465adf3 - NOTE the prebuilt Linux binary
   needs glibc 2.43 (Ubuntu 26.04); on Mint (glibc 2.39) the engine is
   built from source instead, which install.sh --with-image-engine does.
   model: LCM_Dreamshaper_v7-f16.gguf (2,135 MB) from Hugging Face repo
   Steward/lcm-dreamshaper-v7-gguf.
 
-Guidance (v1.6, T27): a batch may carry a "guidance" record —
+Guidance (v1.6, T27): a batch may carry a "guidance" record -
 img2img from a starting picture (--init-img + --strength), a ControlNet
 model + control image (--control-net/--control-image/--control-strength),
 or an IP-Adapter model + image (--ip-adapter/--clip_vision/
@@ -52,7 +52,7 @@ ENGINE_REPO = "https://github.com/leejet/stable-diffusion.cpp"
 # Guidance model homes (v1.6, T27): env override wins, else a scan of
 # ~/design-shell-models/ for the first file whose name matches. The
 # stable-diffusion.cpp docs list the GGUF control/IP-Adapter models;
-# any of them works — the shell does not pin one.
+# any of them works - the shell does not pin one.
 CONTROL_NET_ENV = "DESIGNSHELL_SD_CONTROL_NET"
 IP_ADAPTER_ENV = "DESIGNSHELL_SD_IP_ADAPTER"
 CLIP_VISION_ENV = "DESIGNSHELL_SD_CLIP_VISION"
@@ -95,7 +95,11 @@ def find_engine() -> Path | None:
 
 
 def find_model(workspace: str | Path | None = None) -> Path | None:
-    """The model file, or None. Env override wins; then the model home."""
+    """The model file, or None. Env override wins; then the model home.
+
+    Only the exact model file counts - a guidance model (ControlNet,
+    IP-Adapter) in the same folder is not the main model.
+    """
     import os
 
     override = os.environ.get("DESIGNSHELL_SD_MODEL")
@@ -108,25 +112,21 @@ def find_model(workspace: str | Path | None = None) -> Path | None:
         exact = home / MODEL_FILENAME
         if exact.exists():
             return exact
-        if home.exists():
-            ggufs = sorted(home.glob("*.gguf"))
-            if ggufs:
-                return ggufs[0]
     return None
 
 
 def engine_missing_text() -> str:
-    return ("the image engine (stable-diffusion.cpp) is not installed — "
+    return ("the image engine (stable-diffusion.cpp) is not installed - "
             "nothing was generated and nothing was faked. Fix: open the "
             "Bench and use the Setup check, or re-run the SKULLPT "
-            "installer — it builds the engine from source; the prebuilt "
+            "installer - it builds the engine from source; the prebuilt "
             "Linux binary needs a newer system library than Mint ships.")
 
 
 def model_missing_text() -> str:
-    return (f"the image model is not downloaded — nothing was generated. "
+    return (f"the image model is not downloaded - nothing was generated. "
             f"Fix: open the Bench and use the Setup check, or re-run the "
-            f"SKULLPT installer — it downloads {MODEL_FILENAME} "
+            f"SKULLPT installer - it downloads {MODEL_FILENAME} "
             f"(about 2.1 GB) for you.")
 
 
@@ -172,7 +172,7 @@ def guidance_missing_text(kind: str) -> str:
     }
     label, env_name = names[kind]
     return (f"{label} is needed for this kind of guidance and none was "
-            f"found — nothing was generated. Fix: download a {label} "
+            f"found - nothing was generated. Fix: download a {label} "
             f"(.gguf) and put it in ~/design-shell-models/, or set "
             f"{env_name} to its path.")
 
@@ -248,7 +248,7 @@ def _resolve_guidance(workspace: str | Path, batch: dict,
                       overrides: dict | None = None) -> tuple[list[str], dict]:
     """Turn a batch's guidance record (+ explicit overrides, which win)
     into sd-cli flags. Models are resolved here, before the lock is
-    taken — a missing model or picture fails fast with a plain message
+    taken - a missing model or picture fails fast with a plain message
     instead of halfway through a round. Returns (flags, guidance)."""
     guidance = dict(batch.get("guidance") or {})
     if overrides:
@@ -261,7 +261,7 @@ def _resolve_guidance(workspace: str | Path, batch: dict,
         if not Path(init_img).exists():
             raise ImageGenError(
                 f"the starting picture for this batch is missing: {init_img} "
-                "— it was deleted or moved since the batch was made")
+                "- it was deleted or moved since the batch was made")
         flags += ["-i", str(init_img),
                   "--strength", str(guidance.get("strength", 0.75))]
     control_net = guidance.get("control_net")
@@ -272,7 +272,7 @@ def _resolve_guidance(workspace: str | Path, batch: dict,
         control_image = guidance.get("control_image")
         if not control_image or not Path(control_image).exists():
             raise ImageGenError(
-                "ControlNet guidance needs a control image — pick the "
+                "ControlNet guidance needs a control image - pick the "
                 "picture whose shape the generation should follow")
         flags += ["--control-net", str(model),
                   "--control-image", str(control_image),
@@ -289,7 +289,7 @@ def _resolve_guidance(workspace: str | Path, batch: dict,
         ip_image = guidance.get("ip_adapter_image")
         if not ip_image or not Path(ip_image).exists():
             raise ImageGenError(
-                "IP-Adapter guidance needs a style image — pick the "
+                "IP-Adapter guidance needs a style image - pick the "
                 "picture whose look the generation should borrow")
         flags += ["--ip-adapter", str(model), "--clip_vision", str(clip),
                   "--ip-adapter-image", str(ip_image),
@@ -304,13 +304,14 @@ def generate(workspace: str | Path, batch_dir: str | Path,
     """Generate one round of candidates into the batch.
 
     Runs under the governor's heavy-job lock. A candidate that fails or
-    times out is recorded as failed — the round reports what landed.
-    `cancel`, when given, is a threading.Event checked before each
-    candidate; a set event raises governor.Cancelled and the candidates
-    already landed stay landed. `progress`, when given, is called with
-    (done, total, text) as each candidate lands. `guidance`, when
-    given, overrides the batch's stored guidance for this round (and
-    is stored, so later rounds reuse it).
+    times out is recorded as failed - the round reports what landed.
+    `cancel`, when given, is a threading.Event: a set event kills the
+    sd-cli process at once and raises governor.Cancelled (v1.9, N8),
+    and the candidates already landed stay landed. `progress`, when
+    given, is called with (done, total, text) as each candidate lands,
+    and with the engine's live output lines in between (v1.9, N9).
+    `guidance`, when given, overrides the batch's stored guidance for
+    this round (and is stored, so later rounds reuse it).
     """
     batch = load_batch(batch_dir)
     engine = find_engine()
@@ -335,7 +336,7 @@ def generate(workspace: str | Path, batch_dir: str | Path,
         for done in range(n):
             if cancel is not None and cancel.is_set():
                 raise governor.Cancelled(
-                    f"image batch cancelled — {done} of {n} candidates landed")
+                    f"image batch cancelled - {done} of {n} candidates landed")
             seed = _fresh_seed(batch, rng)
             index = len(batch["candidates"]) + 1
             fname = f"cand-{index:02d}.png"
@@ -348,13 +349,23 @@ def generate(workspace: str | Path, batch_dir: str | Path,
                    "-s", str(seed), "-o", str(out)] + flags
             record = {"file": fname, "seed": seed, "status": "pending"}
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      timeout=timeout_s)
-                if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
+                from . import subproc
+
+                def _engine_line(line: str) -> None:
+                    # The engine's live output, throttled by the
+                    # caller's own poll: the Bench shows the latest
+                    # line while the candidate renders (v1.9, N9).
+                    if progress is not None and line.strip():
+                        progress(done, n, line.strip()[:120])
+
+                rc, output = subproc.run_cancellable(
+                    cmd, timeout=timeout_s, cancel=cancel,
+                    on_line=_engine_line)
+                if rc == 0 and out.exists() and out.stat().st_size > 0:
                     record["status"] = "pending"
                 else:
                     record["status"] = "failed"
-                    record["error"] = (proc.stderr or proc.stdout or "")[-400:]
+                    record["error"] = (output or "")[-400:]
                     out.unlink(missing_ok=True)
             except subprocess.TimeoutExpired:
                 record["status"] = "failed"
@@ -376,14 +387,14 @@ def vary(workspace: str | Path, batch_dir: str | Path, filename: str,
     strength is how far the variations may wander from it (0.6 keeps
     the picture recognisable, 0.9 barely remembers it). The new batch
     records "variation_of" so the lineage is visible. A rejected
-    candidate cannot be varied — its file is already deleted."""
+    candidate cannot be varied - its file is already deleted."""
     batch = load_batch(batch_dir)
     record = next((c for c in batch["candidates"] if c["file"] == filename), None)
     if record is None:
         raise ImageGenError(f"no candidate {filename!r} in this batch")
     if record["status"] != "kept":
         raise ImageGenError(
-            f"only a kept candidate can be varied — {filename} is {record['status']}")
+            f"only a kept candidate can be varied - {filename} is {record['status']}")
     src = Path(batch_dir) / filename
     if not src.exists():
         raise ImageGenError(f"candidate file missing: {src}")

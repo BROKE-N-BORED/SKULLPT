@@ -314,13 +314,18 @@ def find_mpfb(blender_exe: str | None = None,
     return {"installed": False, "assets": False, "mpfb_dir": None, "skins": []}
 
 
-def export_blender_character(desc: dict, out_dir: Path) -> list[str]:
+def export_blender_character(desc: dict, out_dir: Path,
+                             cancel=None, progress=None) -> list[str]:
     """Exporter entry point for kind="character": (desc, out_dir) ->
     output file names. Same two-phase run as the scene exporter; the
     pre-flight checks fail plainly before Blender starts when
     Character Studio (or its assets, or the job's skin) is missing,
     because inside Blender a missing skin only warns and the human
     builds grey, a silent wrong result.
+
+    `cancel` kills the Blender process at once (v1.9, N8);
+    `progress` streams Blender's output as (stage, detail, fraction)
+    (v1.9, N9).
     """
     exe = blender_export.find_blender()
     if exe is None:
@@ -347,4 +352,5 @@ def export_blender_character(desc: dict, out_dir: Path) -> list[str]:
             "skin from the installed assets pack in the Character "
             "Studio window.")
     return blender_export.export_blender_with_build_script(
-        desc, out_dir, generate_character_script, "character")
+        desc, out_dir, generate_character_script, "character",
+        cancel=cancel, progress=progress)

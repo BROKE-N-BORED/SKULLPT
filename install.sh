@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# SKULLPT — install / update.
+# SKULLPT - install / update.
 #
 # Double-click Install SKULLPT (or run ./install.sh --gui): the install
-# runs behind a progress window — no terminal needed. If it needs a
+# runs behind a progress window - no terminal needed. If it needs a
 # system package (python3-venv for the Bench window's private folder,
 # or build tools for the optional image engine), it installs it itself
 # with one GUI password prompt and carries on. When it finishes it asks
@@ -13,28 +13,28 @@
 # Cinnamon's own spices probe: xenity (Mint's maintained Zenity fork),
 # zenity, yad. All three take the same flags for the dialogs used here.
 # If none is installed, --gui falls back to the terminal installer
-# below — the install still works and is still logged, there is just
+# below - the install still works and is still logged, there is just
 # no progress window. That is the degraded path, not the plan.
 #
 # What this does, in order:
 #   1. Checks Python >= 3.10 (the shell core is standard-library only).
 #   2. Creates a private .venv in this folder and installs PySide6 into
-#      it — the Bench window's only dependency. Mint's Python refuses
+#      it - the Bench window's only dependency. Mint's Python refuses
 #      to install packages outside a venv, so the shell keeps its own.
 #      (The core shell never touches pip; only the Bench window runs
 #      from the venv.) If python3-venv is missing, the installer
 #      installs that one system package itself (one GUI password
-#      prompt) and retries — it never asks the user to type anything.
+#      prompt) and retries - it never asks the user to type anything.
 #   3. Installs everything SKULLPT needs, skipping what is already
-#      there: Blender (the pinned LTS — a newer installed Blender is
+#      there: Blender (the pinned LTS - a newer installed Blender is
 #      never downgraded, and the pinned version is never reinstalled),
 #      the image engine (stable-diffusion.cpp built from source, plus
 #      its model), Character Studio (the MPFB2 extension plus the
 #      MakeHuman system assets pack), and Ollama with the local model
-#      (qwen3:4b — the no-key fallback seat). A fresh machine downloads
+#      (qwen3:4b - the no-key fallback seat). A fresh machine downloads
 #      up to about 7.7 GB in total; the sizes are disclosed before
 #      anything starts, and anything already installed is skipped, so
-#      a re-run downloads far less — or nothing at all. Downloads
+#      a re-run downloads far less - or nothing at all. Downloads
 #      resume and verify.
 #   4. Runs the shell's own test suite as the install proof.
 #   5. Prints a dependency report: everything checked, with versions.
@@ -47,7 +47,7 @@
 #                                    exists, else the terminal installer)
 #   ./install.sh --gui               install with the progress window
 #   ./install.sh --terminal          install in the terminal
-#   ./install.sh --with-blender      kept for compatibility — the default
+#   ./install.sh --with-blender      kept for compatibility - the default
 #   ./install.sh --with-image-engine install already includes Blender,
 #   ./install.sh --with-character-studio the image engine, Character
 #   ./install.sh --with-ollama       Studio, and Ollama + the local model
@@ -70,9 +70,16 @@ BLENDER_URL="https://download.blender.org/release/Blender4.5/${BLENDER_TARBALL}"
 # checksum file (download.blender.org/release/Blender4.5/blender-4.5.9.sha256).
 BLENDER_SHA256="dcdc3eca6c9825bb35a8033b689c053f3cb5a9b0cd2a61b2eac2a49436b4ad3d"
 SD_REPO="https://github.com/leejet/stable-diffusion.cpp"
+# The image engine is pinned to a verified commit, not upstream master
+# HEAD (v1.9, N12): 32d516c0197ed5ca31305b8575e14eb1451fad33 is the
+# commit the sandbox's working engine was built from
+# (master-1088-32d516c, "feat: add MiniMax-H3-Image support (#2324)").
+# The installer fetches that exact commit, so a later upstream break
+# can never break an install.
+SD_COMMIT="32d516c0197ed5ca31305b8575e14eb1451fad33"
 SD_MODEL_FILE="LCM_Dreamshaper_v7-f16.gguf"
 SD_MODEL_URL="https://huggingface.co/Steward/lcm-dreamshaper-v7-gguf/resolve/main/${SD_MODEL_FILE}"
-# SHA-256 of LCM_Dreamshaper_v7-f16.gguf (2,134,675,232 bytes — the
+# SHA-256 of LCM_Dreamshaper_v7-f16.gguf (2,134,675,232 bytes - the
 # Hugging Face repo's file, unchanged since 2023-11-28).
 SD_MODEL_SHA256="0642060766117fdeb8cae0ccdc73ee974ac5779be1112d0a82f2b965bbd00e15"
 SD_MODEL_HOME="$HOME/design-shell-models"
@@ -80,7 +87,7 @@ SD_MODEL_HOME="$HOME/design-shell-models"
 # Extensions platform (the SHA-256 is published in the download URL
 # itself; the downloaded zip is 45,956,992 bytes) plus the
 # MakeHuman system assets pack (CC0 skins, eyes, teeth, hair,
-# clothes — 280,737,770 bytes, measured from the real download;
+# clothes - 280,737,770 bytes, measured from the real download;
 # files2 is the primary mirror, files the backup). The same values
 # live in skullpt/blender_character.py; a test asserts they match.
 MPFB_VERSION="2.0.18"
@@ -89,7 +96,7 @@ MPFB_URL="https://extensions.blender.org/download/sha256:${MPFB_SHA256}/add-on-m
 ASSETS_SHA256="b542127a8e25547c7c29c19f2d1d2adb9a664c80396ecd694095dbc8028a0107"
 ASSETS_URL="https://files2.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip"
 ASSETS_URL_FALLBACK="https://files.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip"
-# Ollama (v1.8): the local model server. There is no .deb — the
+# Ollama (v1.8): the local model server. There is no .deb - the
 # official install script is the supported route; it installs the
 # binary to /usr, creates the ollama user, and sets up + starts the
 # systemd service. The script downloads the Linux bundle
@@ -103,7 +110,7 @@ OLLAMA_MODEL="qwen3:4b"
 # Persistent download cache: a mktemp dir is wiped on every run, so a
 # download that can be resumed needs a place that survives.
 DOWNLOAD_CACHE="$HOME/.cache/skullpt"
-# v1.8: the default install is the FULL install — Blender, the image
+# v1.8: the default install is the FULL install - Blender, the image
 # engine + model, Character Studio, and Ollama + the local model.
 # The --with-* flags are kept for compatibility (re-runs, scripts
 # that already pass them); they change nothing now.
@@ -124,6 +131,14 @@ for arg in "$@"; do
     --_run-worker) WORKER=1 ;;
   esac
 done
+
+# Install state the abort safety net (v1.9, N55) reads: the step in
+# progress, whether a failure reason was already recorded, and the
+# accumulated non-fatal warnings. The worker's EXIT trap uses these
+# to name the step an unexpected abort died on.
+CURRENT_STEP="starting up"
+FAILED_RECORDED=0
+WARNING=""
 
 # --- Dialog tool -----------------------------------------------------------
 # First one found, in the order Cinnamon's own spices probe. Empty when
@@ -148,20 +163,61 @@ find_dialog() {
 # accident.) The number goes last: the dialog auto-closes on 100, so
 # nothing may be written to the pipe after it.
 step() {
+  # Track the step in progress: if the worker aborts unexpectedly,
+  # the EXIT trap names this step in the failure reason.
+  CURRENT_STEP="${2:-}"
   if [ "${SKULLPT_GUI_MODE:-0}" = "1" ]; then
-    echo "# $2"
-    echo "$1"
+    echo "# ${2:-}"
+    echo "${1:-0}"
   else
-    echo "== $2 =="
+    echo "== ${2:-} =="
   fi
 }
 
 # gui_fail <text>: records a fatal failure's plain-language reason for
 # the GUI wrapper, which shows it in an error dialog. Terminal mode
-# already prints the reason itself, so this stays quiet there.
+# already prints the reason itself, so this stays quiet there. It also
+# marks the failure recorded, so the abort trap does not double-report.
 gui_fail() {
+  FAILED_RECORDED=1
   if [ "${SKULLPT_GUI_MODE:-0}" = "1" ]; then
     echo "INSTALL-FAILED: $1"
+  fi
+}
+
+# add_warning <text>: records a non-fatal problem (an optional
+# component that could not be installed - the install completes and
+# the Bench's Setup check is the retry path). Warnings accumulate:
+# when several optional pieces fail, the dialog names all of them.
+add_warning() {
+  if [ -z "$WARNING" ]; then
+    WARNING="$1"
+  else
+    WARNING="$WARNING $1"
+  fi
+}
+
+# _worker_abort_trap: the abort safety net (v1.9, N55). Runs on EVERY
+# worker exit via an EXIT trap. A clean exit (status 0) or a failure
+# already recorded by gui_fail does nothing. Any other nonzero exit -
+# a `set -u` abort, a step returning nonzero without a reason, a
+# signal - records an INSTALL-FAILED reason naming the step it died
+# on, so the GUI wrapper never has to fall back to the generic
+# "Something went wrong" text. The marker goes straight into
+# install.log (the tee pipe may be dead - a dead progress dialog is
+# one of the aborts this covers) and to stdout, so the terminal shows
+# it too; a duplicate line in the log when both paths are alive is
+# harmless (the wrapper takes the first).
+_worker_abort_trap() {
+  local status=$?
+  [ "$status" -eq 0 ] && return 0
+  [ "${FAILED_RECORDED:-0}" = "1" ] && return 0
+  local msg="The install stopped during ${CURRENT_STEP:-the install} (exit $status)."
+  echo "INSTALL-FAILED: $msg" >> install.log 2>/dev/null || true
+  if [ "${SKULLPT_GUI_MODE:-0}" = "1" ]; then
+    echo "INSTALL-FAILED: $msg"
+  else
+    echo "ERROR: $msg See install.log in the SKULLPT folder for details." >&2
   fi
 }
 
@@ -175,7 +231,7 @@ gui_warn() {
 }
 
 # --- Privileged installs ---------------------------------------------------
-# Installs system packages with ONE pkexec call — a GUI password
+# Installs system packages with ONE pkexec call - a GUI password
 # prompt, no terminal. Used for the python3-venv package and for the
 # image-engine build tools. Returns 0 on success; 1 when pkexec is
 # missing, the user declines, or apt fails. Callers say so in plain
@@ -195,7 +251,7 @@ apt_install_via_pkexec() {
 # the partial file is deleted and the download retried once from
 # scratch; a second failure fails with a plain message. When a fallback
 # URL is given (the assets pack has a backup mirror), a failed download
-# from the first URL is retried from the second before giving up — the
+# from the first URL is retried from the second before giving up - the
 # resume still applies, since both mirrors hold the same file.
 # Returns 0 on a verified file, 1 otherwise.
 download_verified() {
@@ -208,7 +264,7 @@ download_verified() {
   local attempt
   for attempt in 1 2; do
     if [ "$attempt" = "2" ]; then
-      echo "$label did not come down cleanly — downloading it again from scratch..."
+      echo "$label did not come down cleanly - downloading it again from scratch..."
       rm -f "$dest"
     fi
     local dl_ok=0
@@ -222,7 +278,7 @@ download_verified() {
       if [ "$attempt" = "1" ]; then
         continue
       fi
-      echo "ERROR: could not download $label — check the network, then re-run the installer." >&2
+      echo "ERROR: could not download $label - check the network, then re-run the installer." >&2
       return 1
     fi
     if [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$want" ]; then
@@ -230,9 +286,133 @@ download_verified() {
       return 0
     fi
   done
-  echo "ERROR: $label downloaded but does not match its checksum — the download may be corrupted." >&2
+  echo "ERROR: $label downloaded but does not match its checksum - the download may be corrupted." >&2
   rm -f "$dest"
   return 1
+}
+
+# build_image_engine: compile stable-diffusion.cpp from source into
+# /opt/sd.cpp and link sd-cli into /usr/local/bin. Returns 0 with a
+# working sd-cli, 1 otherwise - the caller warns and continues, since
+# image generation is optional (v1.9, N11/N55). The source is pinned
+# to the verified commit SD_COMMIT (v1.9, N12), not upstream master
+# HEAD, so a later upstream break can never break an install. Every
+# step is checked explicitly (N11): a failed step cleans up its own
+# temp dir and says why, instead of the install marching on with a
+# half-built engine.
+build_image_engine() {
+  local tmpd
+  tmpd="$(mktemp -d)"
+  if ! git init -q "$tmpd/sd" \
+      || ! git -C "$tmpd/sd" remote add origin "$SD_REPO" \
+      || ! git -C "$tmpd/sd" fetch --depth 1 origin "$SD_COMMIT" \
+      || ! git -C "$tmpd/sd" checkout -q "$SD_COMMIT" \
+      || ! git -C "$tmpd/sd" submodule update --init --recursive --depth 1; then
+    echo "ERROR: the image engine source (stable-diffusion.cpp) could not be downloaded." >&2
+    rm -rf "$tmpd"
+    return 1
+  fi
+  if ! cmake -S "$tmpd/sd" -B "$tmpd/sd/build" -DCMAKE_BUILD_TYPE=Release >/dev/null; then
+    echo "ERROR: the image engine could not be configured (cmake failed)." >&2
+    rm -rf "$tmpd"
+    return 1
+  fi
+  # Build parallelism is capped on small machines: a full -j$(nproc)
+  # compile can eat the whole 8 GB and thrash. 8 GB or less gets
+  # -j2; bigger machines use all their cores.
+  local mem_kb build_jobs
+  mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [ "${mem_kb:-0}" -le 8388608 ]; then
+    build_jobs=2
+  else
+    build_jobs="$(nproc)"
+  fi
+  if ! cmake --build "$tmpd/sd/build" -j"$build_jobs" >/dev/null; then
+    echo "ERROR: the image engine could not be compiled." >&2
+    rm -rf "$tmpd"
+    return 1
+  fi
+  if ! pkexec sh -c 'rm -rf /opt/sd.cpp && mkdir -p /opt/sd.cpp/bin && cp "$1/bin/"* /opt/sd.cpp/bin/ && ln -sf /opt/sd.cpp/bin/sd-cli /usr/local/bin/sd-cli' _ "$tmpd/sd/build"; then
+    echo "ERROR: the image engine could not be installed - the install was declined or failed." >&2
+    rm -rf "$tmpd"
+    return 1
+  fi
+  rm -rf "$tmpd"
+  return 0
+}
+
+# install_character_studio: download MPFB + the system assets pack and
+# install them into Blender's user extensions folder. Returns 0 on
+# success, 1 otherwise - the caller warns and continues, since
+# Character Studio is optional (v1.9, N11/N55). Expects BLENDER_BIN,
+# BLENDER_CFG_VER, MPFB_EXT_DIR, and DOWNLOAD_CACHE to be set by
+# do_install; sets MPFB_STATUS on success. Every step is checked
+# explicitly (N11): a failed download or a missing landing warns with
+# its own reason instead of failing the whole install.
+install_character_studio() {
+  if [ -z "$BLENDER_BIN" ]; then
+    echo "ERROR: Character Studio needs Blender, and Blender was not found." >&2
+    add_warning "Character Studio needs Blender first - install Blender, then re-run the installer."
+    return 1
+  fi
+  if [ -z "$BLENDER_CFG_VER" ]; then
+    echo "ERROR: could not read Blender's version, so the extension folder is unknown." >&2
+    add_warning "Character Studio could not read Blender's version - re-run the installer."
+    return 1
+  fi
+  step 52 "Installing Character Studio"
+  echo "Character Studio downloads two files: MPFB $MPFB_VERSION (about 44 MB)"
+  echo "and the MakeHuman system assets pack (about 268 MB). Together about 311 MB."
+  mkdir -p "$DOWNLOAD_CACHE"
+  if ! download_verified "$MPFB_URL" "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" \
+      "$MPFB_SHA256" "MPFB $MPFB_VERSION (about 44 MB)"; then
+    add_warning "MPFB could not be downloaded - check the network, then re-run the installer."
+    return 1
+  fi
+  if ! download_verified "$ASSETS_URL" "$DOWNLOAD_CACHE/makehuman_system_assets_cc0.zip" \
+      "$ASSETS_SHA256" "the MakeHuman system assets pack (about 268 MB)" \
+      "$ASSETS_URL_FALLBACK"; then
+    add_warning "The system assets pack could not be downloaded - check the network, then re-run the installer."
+    return 1
+  fi
+  # Install the extension with Blender's own command; when that
+  # fails, unzip it into the user extensions folder by hand
+  # (Blender scans that folder at startup). Unzipping uses
+  # Python's zipfile, so no extra program is needed.
+  if "$BLENDER_BIN" --background --command extension install-file \
+      -r user_default "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" >/dev/null 2>&1; then
+    echo "MPFB $MPFB_VERSION installed into Blender $BLENDER_CFG_VER."
+  else
+    echo "Blender's extension install did not work - installing MPFB by hand..."
+    mkdir -p "$MPFB_EXT_DIR"
+    if ! python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+        "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" "$MPFB_EXT_DIR"; then
+      echo "ERROR: MPFB did not land in Blender's extension folder." >&2
+      add_warning "MPFB did not land in Blender's extension folder - re-run the installer."
+      return 1
+    fi
+  fi
+  if [ ! -f "$MPFB_EXT_DIR/__init__.py" ]; then
+    echo "ERROR: MPFB did not land in Blender's extension folder." >&2
+    add_warning "MPFB did not land in Blender's extension folder - re-run the installer."
+    return 1
+  fi
+  # The assets pack unzips into MPFB's data folder, next to the
+  # extension's own data - that is where MPFB looks for skins.
+  if ! python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+      "$DOWNLOAD_CACHE/makehuman_system_assets_cc0.zip" "$MPFB_EXT_DIR/data"; then
+    echo "ERROR: the assets pack did not land in MPFB's data folder." >&2
+    add_warning "The assets pack did not land in MPFB's data folder - re-run the installer."
+    return 1
+  fi
+  if [ ! -d "$MPFB_EXT_DIR/data/skins" ]; then
+    echo "ERROR: the assets pack did not land in MPFB's data folder." >&2
+    add_warning "The assets pack did not land in MPFB's data folder - re-run the installer."
+    return 1
+  fi
+  MPFB_STATUS="MPFB $MPFB_VERSION + system assets (Blender $BLENDER_CFG_VER)"
+  echo "Character Studio installed: $MPFB_STATUS."
+  return 0
 }
 
 # --- The install body (runs in the worker subprocess) ----------------------
@@ -242,22 +422,22 @@ do_install() {
   # PySide6 about 80 MB, Blender about 360 MB, the image engine
   # source about 700 MB, the image model about 2.1 GB, Character
   # Studio about 311 MB, Ollama about 1.5 GB, the local model about
-  # 2.5 GB — up to about 7.7 GB in total. Anything already installed
-  # is skipped, so a re-run downloads far less — or nothing at all.
-  echo "This install downloads everything SKULLPT needs — up to about 7.7 GB"
+  # 2.5 GB - up to about 7.7 GB in total. Anything already installed
+  # is skipped, so a re-run downloads far less - or nothing at all.
+  echo "This install downloads everything SKULLPT needs - up to about 7.7 GB"
   echo "in total on a fresh machine. Anything already installed is skipped,"
-  echo "so a re-run downloads far less — or nothing at all."
+  echo "so a re-run downloads far less - or nothing at all."
   # --- 1. Python -----------------------------------------------------------
   step 5 "Checking Python"
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "ERROR: python3 not found — SKULLPT needs Python 3.10 or newer." >&2
-    gui_fail "Python was not found — SKULLPT needs Python 3.10 or newer."
+    echo "ERROR: python3 not found - SKULLPT needs Python 3.10 or newer." >&2
+    gui_fail "Python was not found - SKULLPT needs Python 3.10 or newer."
     return 1
   fi
   PY_VER="$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
   if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
-    echo "ERROR: Python $PY_VER is too old — the shell needs 3.10 or newer." >&2
-    gui_fail "Python $PY_VER is too old — SKULLPT needs 3.10 or newer."
+    echo "ERROR: Python $PY_VER is too old - the shell needs 3.10 or newer." >&2
+    gui_fail "Python $PY_VER is too old - SKULLPT needs 3.10 or newer."
     return 1
   fi
   echo "python3: $PY_VER OK (the shell core is standard library only)"
@@ -268,13 +448,12 @@ do_install() {
   # The Bench is a Qt window, so it needs PySide6. Mint's Python is
   # externally managed: installing packages outside a venv fails
   # outright, so the shell keeps a private virtualenv in this folder.
-  # The core shell stays standard-library only — only the Bench window
+  # The core shell stays standard-library only - only the Bench window
   # runs from the venv.
   step 15 "Setting up the Bench window"
   VENV_PY=".venv/bin/python"
   QT_STATUS="NOT FOUND"
   QT_FIX="re-run the installer"
-  WARNING=""
   VENV_FAILED=0
   if ! ensure_venv; then
     VENV_FAILED=1
@@ -283,21 +462,23 @@ do_install() {
     if ! "$VENV_PY" -c "import PySide6" 2>/dev/null; then
       echo "Installing PySide6-Essentials into .venv (one time, may take a minute)..."
       if ! "$VENV_PY" -m pip install PySide6-Essentials; then
-        echo "PySide6: install FAILED — check the network, then re-run the installer."
-        echo "         (The CLI still works — only the Bench window needs PySide6.)"
+        echo "PySide6: install FAILED - check the network, then re-run the installer."
+        echo "         (The CLI still works - only the Bench window needs PySide6.)"
         QT_FIX="check the network, then re-run the installer"
-        WARNING="PySide6 could not be installed — check the network, then re-run the installer."
+        add_warning "PySide6 could not be installed - check the network, then re-run the installer."
       fi
     fi
     if "$VENV_PY" -c "import PySide6" 2>/dev/null; then
       QT_VER="$("$VENV_PY" -c "import PySide6; print(PySide6.__version__)" 2>/dev/null || echo '?')"
       QT_STATUS="$QT_VER in .venv"
-      echo "PySide6: $QT_VER OK (in .venv — the Bench window can open)"
+      echo "PySide6: $QT_VER OK (in .venv - the Bench window can open)"
     else
-      echo "PySide6: NOT FOUND — the Bench window needs it (the CLI still works)."
-      if [ -z "$WARNING" ]; then
-        WARNING="PySide6 is not installed — re-run the installer."
-      fi
+      echo "PySide6: NOT FOUND - the Bench window needs it (the CLI still works)."
+      # No duplicate when the pip failure above already warned.
+      case "$WARNING" in
+        *PySide6*) ;;
+        *) add_warning "PySide6 is not installed - re-run the installer." ;;
+      esac
     fi
   fi
 
@@ -317,23 +498,33 @@ do_install() {
     if [ -n "$FOUND_VER" ] \
        && [ "$(printf '%s\n%s\n' "$BLENDER_VERSION" "$FOUND_VER" | sort -V | head -1)" = "$BLENDER_VERSION" ]; then
       if [ "$FOUND_VER" = "$BLENDER_VERSION" ]; then
-        echo "Blender $BLENDER_VERSION is already installed — leaving it alone."
+        echo "Blender $BLENDER_VERSION is already installed - leaving it alone."
       else
-        echo "Blender $FOUND_VER is already installed — newer than the pinned $BLENDER_VERSION, so leaving it alone."
+        echo "Blender $FOUND_VER is already installed - newer than the pinned $BLENDER_VERSION, so leaving it alone."
       fi
     else
       step 22 "Installing Blender"
-      echo "Installing Blender $BLENDER_VERSION to /opt/blender (this needs admin permission — a password window will appear)..."
+      echo "Installing Blender $BLENDER_VERSION to /opt/blender (this needs admin permission - a password window will appear)..."
       mkdir -p "$DOWNLOAD_CACHE"
       if ! download_verified "$BLENDER_URL" "$DOWNLOAD_CACHE/$BLENDER_TARBALL" \
           "$BLENDER_SHA256" "Blender $BLENDER_VERSION"; then
-        gui_fail "Blender could not be downloaded — check the network, then re-run the installer."
+        gui_fail "Blender could not be downloaded - check the network, then re-run the installer."
         return 1
       fi
       TMPD="$(mktemp -d)"
-      tar -xf "$DOWNLOAD_CACHE/$BLENDER_TARBALL" -C "$TMPD"
+      if ! tar -xf "$DOWNLOAD_CACHE/$BLENDER_TARBALL" -C "$TMPD"; then
+        rm -rf "$TMPD"
+        echo "ERROR: Blender could not be unpacked - the download may be corrupted." >&2
+        gui_fail "Blender could not be unpacked - the download may be corrupted. Re-run the installer."
+        return 1
+      fi
       EXTRACTED="$TMPD/blender-${BLENDER_VERSION}-linux-x64"
-      pkexec sh -c 'rm -rf /opt/blender && mv "$1" /opt/blender && ln -sf /opt/blender/blender /usr/local/bin/blender' _ "$EXTRACTED"
+      if ! pkexec sh -c 'rm -rf /opt/blender && mv "$1" /opt/blender && ln -sf /opt/blender/blender /usr/local/bin/blender' _ "$EXTRACTED"; then
+        rm -rf "$TMPD"
+        echo "ERROR: Blender could not be installed - the install was declined or failed." >&2
+        gui_fail "Blender could not be installed - the install was declined or failed. Re-run the installer and allow it when asked."
+        return 1
+      fi
       rm -rf "$TMPD"
       BLENDER_BIN="/opt/blender/blender"
       echo "Blender installed."
@@ -342,9 +533,9 @@ do_install() {
 
   if [ -n "$BLENDER_BIN" ]; then
     BLENDER_VER="$("$BLENDER_BIN" --version 2>/dev/null | head -1 || echo 'version unknown')"
-    echo "blender: $BLENDER_BIN — $BLENDER_VER"
+    echo "blender: $BLENDER_BIN - $BLENDER_VER"
   else
-    echo "blender: NOT FOUND — scene builds will fail until Blender exists."
+    echo "blender: NOT FOUND - scene builds will fail until Blender exists."
     echo "         Re-run the installer to install it."
   fi
 
@@ -361,54 +552,51 @@ do_install() {
           MISSING_TOOLS="$MISSING_TOOLS $tool"
         fi
       done
+      # Image generation is optional (v1.9, N55): a missing build
+      # tool or a failed compile warns and the install continues -
+      # the Bench's Setup check is the retry path. Only the model
+      # download still runs, so a later retry does not re-download it.
+      ENGINE_SKIPPED=0
       if [ -n "$MISSING_TOOLS" ]; then
-        echo "The image engine needs some build tools first — asking for permission to install them..."
+        echo "The image engine needs some build tools first - asking for permission to install them..."
         if ! apt_install_via_pkexec git cmake build-essential; then
           echo "ERROR: building the image engine needs git, cmake, and a C++ compiler," >&2
           echo "       and they could not be installed. Re-run the installer and allow it when asked." >&2
-          gui_fail "The image engine needs build tools (git, cmake, a C++ compiler) and they could not be installed."
-          return 1
+          add_warning "The image engine needs build tools (git, cmake, a C++ compiler) and they could not be installed."
+          ENGINE_SKIPPED=1
+        else
+          for tool in git cmake g++; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              echo "ERROR: building the image engine needs $tool, and it is still missing after the install." >&2
+              add_warning "The image engine needs build tools (git, cmake, a C++ compiler) and they could not be installed."
+              ENGINE_SKIPPED=1
+            fi
+          done
         fi
-        for tool in git cmake g++; do
-          if ! command -v "$tool" >/dev/null 2>&1; then
-            echo "ERROR: building the image engine needs $tool, and it is still missing after the install." >&2
-            gui_fail "The image engine needs build tools (git, cmake, a C++ compiler) and they could not be installed."
-            return 1
-          fi
-        done
       fi
-      echo "Building the image engine (stable-diffusion.cpp) from source..."
-      echo "(one-time compile — several minutes on a small machine)"
-      step 34 "Building the image engine"
-      TMPD="$(mktemp -d)"
-      git clone --depth 1 --recursive "$SD_REPO" "$TMPD/sd"
-      cmake -S "$TMPD/sd" -B "$TMPD/sd/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
-      # Build parallelism is capped on small machines: a full -j$(nproc)
-      # compile can eat the whole 8 GB and thrash. 8 GB or less gets
-      # -j2; bigger machines use all their cores.
-      MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-      if [ "${MEM_KB:-0}" -le 8388608 ]; then
-        BUILD_JOBS=2
-      else
-        BUILD_JOBS="$(nproc)"
+      if [ "$ENGINE_SKIPPED" = "0" ]; then
+        echo "Building the image engine (stable-diffusion.cpp) from source..."
+        echo "(one-time compile - several minutes on a small machine)"
+        step 34 "Building the image engine"
+        if build_image_engine; then
+          SD_BIN="/opt/sd.cpp/bin/sd-cli"
+          echo "Image engine built: $SD_BIN"
+        else
+          add_warning "The image engine could not be built - the Bench's Setup check can try again."
+        fi
       fi
-      cmake --build "$TMPD/sd/build" -j"$BUILD_JOBS" >/dev/null
-      pkexec sh -c 'rm -rf /opt/sd.cpp && mkdir -p /opt/sd.cpp/bin && cp "$1/bin/"* /opt/sd.cpp/bin/ && ln -sf /opt/sd.cpp/bin/sd-cli /usr/local/bin/sd-cli' _ "$TMPD/sd/build"
-      rm -rf "$TMPD"
-      SD_BIN="/opt/sd.cpp/bin/sd-cli"
-      echo "Image engine built: $SD_BIN"
     fi
     if [ -f "$SD_MODEL_HOME/$SD_MODEL_FILE" ] || [ -z "$(find_sd_model)" ]; then
-      # A pinned model already on disk is verified — a partial or
+      # A pinned model already on disk is verified - a partial or
       # corrupt file from an interrupted run is resumed, not trusted.
-      # (When some other .gguf is already there and the pinned file is
-      # not, the download is skipped as before.)
+      # (A guidance model in the same folder does not count - only
+      # the exact model file does, so the download runs when it is
+      # missing.)
       step 42 "Downloading the image model"
       mkdir -p "$SD_MODEL_HOME"
       if ! download_verified "$SD_MODEL_URL" "$SD_MODEL_HOME/$SD_MODEL_FILE" \
           "$SD_MODEL_SHA256" "the image model ($SD_MODEL_FILE, about 2.1 GB)"; then
-        gui_fail "The image model could not be downloaded — check the network, then re-run the installer."
-        return 1
+        add_warning "The image model could not be downloaded - check the network, then re-run the installer."
       fi
     fi
   fi
@@ -418,13 +606,13 @@ do_install() {
   if [ -n "$SD_BIN" ]; then
     echo "sd-cli: $SD_BIN"
   else
-    echo "sd-cli: NOT FOUND — image generation will refuse until the engine exists."
+    echo "sd-cli: NOT FOUND - image generation will refuse until the engine exists."
     echo "        Re-run the installer to install it."
   fi
   if [ -n "$SD_MODEL" ]; then
     echo "image model: $SD_MODEL"
   else
-    echo "image model: NOT FOUND — re-run the installer to download it (about 2.1 GB)."
+    echo "image model: NOT FOUND - re-run the installer to download it (about 2.1 GB)."
   fi
 
   # --- 3c. Character Studio (MPFB2 + system assets pack) ----------------------
@@ -432,7 +620,7 @@ do_install() {
   # status is checked whether or not the flag was set, so the report
   # always says what is there.
   step 50 "Checking Character Studio"
-  MPFB_STATUS="not installed (Character Studio — re-run the installer)"
+  MPFB_STATUS="not installed (Character Studio - re-run the installer)"
   MPFB_EXT_DIR=""
   if [ -n "$BLENDER_BIN" ]; then
     BLENDER_CFG_VER="$("$BLENDER_BIN" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
@@ -445,69 +633,18 @@ do_install() {
   fi
   if [ "$WITH_CHARACTER" = "1" ]; then
     if [ "$MPFB_STATUS" = "installed (Blender $BLENDER_CFG_VER)" ]; then
-      echo "Character Studio is already installed ($MPFB_STATUS) — leaving it alone."
+      echo "Character Studio is already installed ($MPFB_STATUS) - leaving it alone."
     else
-    if [ -z "$BLENDER_BIN" ]; then
-      echo "ERROR: Character Studio needs Blender, and Blender was not found." >&2
-      gui_fail "Character Studio needs Blender first — install Blender, then re-run the installer."
-      return 1
-    fi
-    if [ -z "$BLENDER_CFG_VER" ]; then
-      echo "ERROR: could not read Blender's version, so the extension folder is unknown." >&2
-      gui_fail "Character Studio could not read Blender's version — re-run the installer."
-      return 1
-    fi
-    step 52 "Installing Character Studio"
-    echo "Character Studio downloads two files: MPFB $MPFB_VERSION (about 44 MB)"
-    echo "and the MakeHuman system assets pack (about 268 MB). Together about 311 MB."
-    mkdir -p "$DOWNLOAD_CACHE"
-    if ! download_verified "$MPFB_URL" "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" \
-        "$MPFB_SHA256" "MPFB $MPFB_VERSION (about 44 MB)"; then
-      gui_fail "MPFB could not be downloaded — check the network, then re-run the installer."
-      return 1
-    fi
-    if ! download_verified "$ASSETS_URL" "$DOWNLOAD_CACHE/makehuman_system_assets_cc0.zip" \
-        "$ASSETS_SHA256" "the MakeHuman system assets pack (about 268 MB)" \
-        "$ASSETS_URL_FALLBACK"; then
-      gui_fail "The system assets pack could not be downloaded — check the network, then re-run the installer."
-      return 1
-    fi
-    # Install the extension with Blender's own command; when that
-    # fails, unzip it into the user extensions folder by hand
-    # (Blender scans that folder at startup). Unzipping uses
-    # Python's zipfile, so no extra program is needed.
-    if "$BLENDER_BIN" --background --command extension install-file \
-        -r user_default "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" >/dev/null 2>&1; then
-      echo "MPFB $MPFB_VERSION installed into Blender $BLENDER_CFG_VER."
-    else
-      echo "Blender's extension install did not work — installing MPFB by hand..."
-      mkdir -p "$MPFB_EXT_DIR"
-      python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
-        "$DOWNLOAD_CACHE/mpfb-$MPFB_VERSION.zip" "$MPFB_EXT_DIR"
-    fi
-    if [ ! -f "$MPFB_EXT_DIR/__init__.py" ]; then
-      echo "ERROR: MPFB did not land in Blender's extension folder." >&2
-      gui_fail "MPFB did not land in Blender's extension folder — re-run the installer."
-      return 1
-    fi
-    # The assets pack unzips into MPFB's data folder, next to the
-    # extension's own data — that is where MPFB looks for skins.
-    python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
-      "$DOWNLOAD_CACHE/makehuman_system_assets_cc0.zip" "$MPFB_EXT_DIR/data"
-    if [ ! -d "$MPFB_EXT_DIR/data/skins" ]; then
-      echo "ERROR: the assets pack did not land in MPFB's data folder." >&2
-      gui_fail "The assets pack did not land in MPFB's data folder — re-run the installer."
-      return 1
-    fi
-    MPFB_STATUS="MPFB $MPFB_VERSION + system assets (Blender $BLENDER_CFG_VER)"
-    echo "Character Studio installed: $MPFB_STATUS."
+      # Optional (v1.9, N55): a failed Character Studio install warns
+      # and the install continues - the Bench's Setup check retries it.
+      install_character_studio || true
     fi
   fi
 
   # --- 3d. Ollama + the local model (qwen3:4b) --------------------------------
   # The fallback seat needs the Ollama server answering on
   # 127.0.0.1:11434 with the model pulled. Ollama has no .deb: the
-  # official install script (run with pkexec — it installs to /usr
+  # official install script (run with pkexec - it installs to /usr
   # and sets up the systemd service) is the supported route. An
   # Ollama failure is NOT fatal: the install completes and the
   # Bench's Setup check offers to fetch the local model.
@@ -517,22 +654,22 @@ do_install() {
   step 60 "Checking Ollama"
   if [ -z "$OLLAMA_BIN" ] && [ "$WITH_OLLAMA" = "1" ]; then
     step 62 "Installing Ollama"
-    echo "Installing Ollama (about 1.5 GB — the installer downloads the official package; this needs admin permission — a password window will appear)..."
+    echo "Installing Ollama (about 1.5 GB - the installer downloads the official package; this needs admin permission - a password window will appear)..."
     mkdir -p "$DOWNLOAD_CACHE"
     if curl -fSL -C - "$OLLAMA_INSTALL_URL" -o "$DOWNLOAD_CACHE/ollama-install.sh"; then
       if pkexec sh "$DOWNLOAD_CACHE/ollama-install.sh"; then
         OLLAMA_BIN="$(command -v ollama || true)"
       else
-        echo "Ollama: the install was declined or failed — the local model will not be available."
+        echo "Ollama: the install was declined or failed - the local model will not be available."
       fi
     else
-      echo "Ollama: the install script could not be downloaded — check the network."
+      echo "Ollama: the install script could not be downloaded - check the network."
     fi
   fi
   if [ -n "$OLLAMA_BIN" ]; then
     OLLAMA_STATUS="installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -1 || echo 'version unknown'))"
     # The install script starts the service, but an existing install
-    # may have it stopped — start it (a declined prompt is fine, the
+    # may have it stopped - start it (a declined prompt is fine, the
     # Setup check can try again).
     if ! ollama_server_up; then
       if command -v systemctl >/dev/null 2>&1; then
@@ -552,7 +689,7 @@ do_install() {
       echo "Ollama: the local model ($OLLAMA_MODEL) is ready."
     elif [ "$WITH_OLLAMA" = "1" ] && [ -n "$OLLAMA_BIN" ]; then
       step 66 "Pulling the local model"
-      echo "Pulling the local model ($OLLAMA_MODEL, about 2.5 GB) — this takes a few minutes..."
+      echo "Pulling the local model ($OLLAMA_MODEL, about 2.5 GB) - this takes a few minutes..."
       if "$OLLAMA_BIN" pull "$OLLAMA_MODEL"; then
         if ollama_model_present; then
           OLLAMA_MODEL_STATUS="pulled"
@@ -560,26 +697,22 @@ do_install() {
         fi
       fi
       if [ "$OLLAMA_MODEL_STATUS" != "pulled" ]; then
-        echo "The local model could not be pulled — the Bench's Setup check will offer to fetch it."
-        if [ -z "$WARNING" ]; then
-          WARNING="The local model (Ollama) is missing — the Bench's Setup check can fetch it."
-        fi
+        echo "The local model could not be pulled - the Bench's Setup check will offer to fetch it."
+        add_warning "The local model (Ollama) is missing - the Bench's Setup check can fetch it."
       fi
     fi
   else
-    echo "Ollama: the server is not answering — the local model will not be available."
-    if [ -z "$WARNING" ]; then
-      WARNING="Ollama is not running — the Bench's Setup check can fetch it."
-    fi
+    echo "Ollama: the server is not answering - the local model will not be available."
+    add_warning "Ollama is not running - the Bench's Setup check can fetch it."
   fi
 
   # --- 4. Verify -------------------------------------------------------------
   step 70 "Running the test suite"
   echo "Running the shell's test suite (fast suite; the Blender end-to-end"
-  echo "builds are skipped here — they run when Blender work is tested)..."
+  echo "builds are skipped here - they run when Blender work is tested)..."
   # With a display, the venv python runs the suite so the Qt window tests
   # prove the Bench for real; without one, system python runs the core
-  # suite (the Qt tests skip cleanly there — they need a display).
+  # suite (the Qt tests skip cleanly there - they need a display).
   TEST_PY=python3
   if [ -x "$VENV_PY" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     TEST_PY="$VENV_PY"
@@ -588,7 +721,7 @@ do_install() {
   # tests segfault at interpreter exit *after* printing OK (a known
   # PySide6 teardown quirk), so the result is judged by the summary line.
   # If mktemp fails (a broken TMPDIR), fall back to a file in the
-  # install folder — a missing temp file must never fail the install.
+  # install folder - a missing temp file must never fail the install.
   TEST_LOG="$(mktemp 2>/dev/null || echo "$PWD/.test-output.log")"
   DESIGNSHELL_SKIP_E2E=1 "$TEST_PY" -m unittest discover -s tests >"$TEST_LOG" 2>&1 || true
   tail -3 "$TEST_LOG"
@@ -599,7 +732,7 @@ do_install() {
     # log only shows the last three lines, and "see above" is no help
     # in the GUI installer. The install still completes either way.
     cp "$TEST_LOG" "$PWD/test-output.log" 2>/dev/null || true
-    echo "(test suite reported a problem — details are in test-output.log in the SKULLPT folder; the install continues)"
+    echo "(test suite reported a problem - details are in test-output.log in the SKULLPT folder; the install continues)"
   fi
   rm -f "$TEST_LOG"
 
@@ -616,39 +749,47 @@ do_install() {
   if [ -n "$BLENDER_BIN" ]; then
     echo "blender   ${BLENDER_VER:-found} at $BLENDER_BIN (pinned LTS: $BLENDER_VERSION)"
   else
-    echo "blender   MISSING (pinned LTS: $BLENDER_VERSION — re-run the installer)"
+    echo "blender   MISSING (pinned LTS: $BLENDER_VERSION - re-run the installer)"
   fi
   if [ -n "$SD_BIN" ]; then
     echo "sd-cli    $SD_BIN (image engine: stable-diffusion.cpp)"
   else
-    echo "sd-cli    MISSING (image engine — re-run the installer)"
+    echo "sd-cli    MISSING (image engine - re-run the installer)"
   fi
   if [ -n "$SD_MODEL" ]; then
     echo "img model $SD_MODEL"
   else
-    echo "img model MISSING (the image model — re-run the installer)"
+    echo "img model MISSING (the image model - re-run the installer)"
   fi
   echo "char stud $MPFB_STATUS"
   if [ "$OLLAMA_MODEL_STATUS" = "pulled" ]; then
-    echo "ollama    $OLLAMA_STATUS — local model $OLLAMA_MODEL ready"
+    echo "ollama    $OLLAMA_STATUS - local model $OLLAMA_MODEL ready"
   elif [ -n "$OLLAMA_BIN" ]; then
-    echo "ollama    $OLLAMA_STATUS — local model NOT PULLED (the Bench's Setup check can fetch it)"
+    echo "ollama    $OLLAMA_STATUS - local model NOT PULLED (the Bench's Setup check can fetch it)"
   else
-    echo "ollama    MISSING (the local model server — the Bench's Setup check can fetch it)"
+    echo "ollama    MISSING (the local model server - the Bench's Setup check can fetch it)"
   fi
-  echo "core      stdlib only — no pip packages in the system Python"
+  echo "core      stdlib only - no pip packages in the system Python"
 
   # --- 6. Desktop launcher + `skullpt` command -------------------------------
-  # A failed launcher must never fail the install, so this runs as a
-  # function whose failure only prints a note.
+  # A failed launcher must never fail the install, but it must not
+  # report success either (v1.9, N11): it warns, so the wrapper shows
+  # the warning dialog instead of claiming the launcher exists.
+  LAUNCHER_OK=0
   if make_launcher; then
+    LAUNCHER_OK=1
     echo "launcher  SKULLPT on your Desktop and in the app menu"
     echo "command   skullpt (works from any folder)"
   else
-    echo "launcher  NOT CREATED — re-run the installer to try again"
+    echo "launcher  NOT CREATED - re-run the installer to try again"
+    add_warning "The desktop launcher could not be created - re-run the installer to try again."
   fi
   echo ""
-  echo "Done. Start it from the SKULLPT launcher on your Desktop or in the app menu."
+  if [ "$LAUNCHER_OK" = "1" ]; then
+    echo "Done. Start it from the SKULLPT launcher on your Desktop or in the app menu."
+  else
+    echo "Done. Re-run the installer to create the desktop launcher."
+  fi
   if [ -n "$WARNING" ]; then
     gui_warn "$WARNING"
   fi
@@ -668,7 +809,7 @@ ensure_venv() {
   rm -rf .venv
   echo "Creating the Bench window's private folder (.venv)..."
   # If mktemp fails (a broken TMPDIR), fall back to a file in the
-  # install folder — a missing temp file must never fail the venv.
+  # install folder - a missing temp file must never fail the venv.
   local venv_err
   venv_err="$(mktemp 2>/dev/null || echo "$PWD/.venv-error.log")"
   if python3 -m venv .venv 2>"$venv_err"; then
@@ -677,26 +818,26 @@ ensure_venv() {
   fi
   if grep -qi "ensurepip\|python3.*-venv" "$venv_err"; then
     rm -f "$venv_err"
-    echo "SKULLPT needs one system package to make its private folder — asking for permission to install it..."
+    echo "SKULLPT needs one system package to make its private folder - asking for permission to install it..."
     if apt_install_via_pkexec "$VENV_PKG"; then
       rm -rf .venv
       if python3 -m venv .venv 2>/dev/null; then
         return 0
       fi
     fi
-    echo "PySide6: CANNOT INSTALL — SKULLPT needs one system package to"
+    echo "PySide6: CANNOT INSTALL - SKULLPT needs one system package to"
     echo "         install, and the install could not add it. Re-run the"
     echo "         installer and allow it when asked. (The CLI still"
-    echo "         works — only the Bench window needs the venv.)"
+    echo "         works - only the Bench window needs the venv.)"
     QT_FIX="re-run the installer and allow it when asked"
-    WARNING="SKULLPT needs one system package to install — re-run the installer and allow it when asked."
+    add_warning "SKULLPT needs one system package to install - re-run the installer and allow it when asked."
     return 1
   fi
-  echo "PySide6: CANNOT INSTALL — the private folder could not be created."
+  echo "PySide6: CANNOT INSTALL - the private folder could not be created."
   echo "         See install.log in this folder for details. (The CLI"
-  echo "         still works — only the Bench window needs the venv.)"
+  echo "         still works - only the Bench window needs the venv.)"
   QT_FIX="see install.log in the SKULLPT folder"
-  WARNING="The Bench window's private folder could not be created — see install.log in the SKULLPT folder for details."
+  add_warning "The Bench window's private folder could not be created - see install.log in the SKULLPT folder for details."
   rm -f "$venv_err"
   return 1
 }
@@ -725,14 +866,14 @@ find_sd_model() {
   if [ -n "${DESIGNSHELL_SD_MODEL:-}" ] && [ -f "${DESIGNSHELL_SD_MODEL}" ]; then
     echo "$DESIGNSHELL_SD_MODEL"; return
   fi
+  # Only the exact model file counts - a guidance model in the same
+  # folder (ControlNet, IP-Adapter) is not the main model.
   if [ -f "$SD_MODEL_HOME/$SD_MODEL_FILE" ]; then echo "$SD_MODEL_HOME/$SD_MODEL_FILE"; return; fi
-  local first
-  first="$(ls "$SD_MODEL_HOME"/*.gguf 2>/dev/null | head -1 || true)"
-  echo "$first"
+  echo ""
 }
 
 # The Ollama server answers on 127.0.0.1:11434 by default; the base
-# URL is overridable (DESIGNSHELL_OLLAMA_BASE — the same variable the
+# URL is overridable (DESIGNSHELL_OLLAMA_BASE - the same variable the
 # shell's ollama module reads) so the check can be pointed at a test
 # server. The version check reads the body, not just the exit code:
 # a server that answers without a version is not a working Ollama.
@@ -755,13 +896,13 @@ make_launcher() {
   fi
   apps_dir="$HOME/.local/share/applications"
   mkdir -p "$apps_dir" "$HOME/.local/bin" "$desktop_dir"
-  # The absolute path goes straight into Exec — no nested quotes (GLib's
+  # The absolute path goes straight into Exec - no nested quotes (GLib's
   # desktop parser rejects them and the whole file fails).
   cat > "$desktop_dir/SKULLPT.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=SKULLPT
-Comment=SKULLPT — native Linux design and asset workshop
+Comment=SKULLPT - native Linux design and asset workshop
 Exec="$install_dir/run.sh"
 Icon=$install_dir/skullpt-icon.png
 Terminal=false
@@ -775,9 +916,13 @@ EOF
 # --- Entry -----------------------------------------------------------------
 # The install body runs in a worker subprocess so its output can be
 # logged to install.log and, in GUI mode, fed to the progress dialog.
-# The worker keeps its own `set -e` semantics; the wrapper below only
-# reports the outcome.
+# NOTE: the `if do_install` condition below suppresses errexit inside
+# do_install (bash does not apply -e to a command in a condition), so
+# every step inside do_install checks its own failures explicitly
+# (v1.9, N11) - nothing may rely on set -e to catch it. The EXIT trap
+# is the safety net for what the checks miss (v1.9, N55).
 if [ "$WORKER" = "1" ]; then
+  trap _worker_abort_trap EXIT
   if do_install; then
     exit 0
   else
@@ -803,10 +948,10 @@ fi
 
 if [ "$GUI_MODE" = "1" ] && { [ -z "$DIALOG_CMD" ] || [ "$HAS_DISPLAY" = "0" ]; }; then
   # GUI was asked for but cannot run (no dialog tool, or no display):
-  # fall back to the terminal installer. Degraded path — the install
+  # fall back to the terminal installer. Degraded path - the install
   # still works and is still logged; there is just no progress window.
   GUI_MODE=0
-  echo "No dialog tool found (looked for xenity, zenity, yad) or no display — installing in the terminal instead." | tee "$LOG"
+  echo "No dialog tool found (looked for xenity, zenity, yad) or no display - installing in the terminal instead." | tee "$LOG"
 fi
 
 PASSTHROUGH=()
@@ -818,7 +963,7 @@ PASSTHROUGH=()
 if [ "$GUI_MODE" = "1" ]; then
   echo "== SKULLPT install =="
   set +e
-  SKULLPT_GUI_MODE=1 bash "$SCRIPT_PATH" --_run-worker "${PASSTHROUGH[@]}" 2>&1 | tee "$LOG" | "$DIALOG_CMD" --progress --title="Installing SKULLPT" --text="Installing everything SKULLPT needs — up to about 7.7 GB of downloads. Things already installed are skipped." --percentage=0 --auto-close --no-cancel --width=400
+  SKULLPT_GUI_MODE=1 bash "$SCRIPT_PATH" --_run-worker "${PASSTHROUGH[@]}" 2>&1 | tee "$LOG" | "$DIALOG_CMD" --progress --title="Installing SKULLPT" --text="Installing everything SKULLPT needs - up to about 7.7 GB of downloads. Things already installed are skipped." --percentage=0 --auto-close --no-cancel --width=400
   _statuses=("${PIPESTATUS[@]}")
   set -e
   worker_status=${_statuses[0]}
@@ -832,7 +977,7 @@ if [ "$GUI_MODE" = "1" ]; then
   fi
   if [ -n "$warn_line" ]; then
     reason="${warn_line#INSTALL-WARNING: }"
-    "$DIALOG_CMD" --warning --title="SKULLPT installed — with a problem" --text="$reason" --width=400 || true
+    "$DIALOG_CMD" --warning --title="SKULLPT installed - with a problem" --text="$reason" --width=400 || true
     exit 0
   fi
   "$DIALOG_CMD" --info --title="SKULLPT installed" --text="SKULLPT is installed. The launcher is on your Desktop and in the app menu." --width=400 || true

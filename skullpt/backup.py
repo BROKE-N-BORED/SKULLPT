@@ -1,9 +1,9 @@
-"""Workspace backup — the whole workshop into one zip (v1.6, T29).
+"""Workspace backup - the whole workshop into one zip (v1.6, T29).
 
 `backup_workspace` zips a workspace's jobs, library, images, intake,
 meshes, settings and chat transcript into a single file, with a
 manifest saying what is inside, when it was made, and which workspace
-it came from. Restoring is an unzip — the backup IS a workspace, so
+it came from. Restoring is an unzip - the backup IS a workspace, so
 an unzipped backup opens as one.
 
 The HF token file is NEVER in a backup: it is a secret, and a backup
@@ -72,7 +72,7 @@ def backup_workspace(workspace: str | Path, dest: str | Path | None = None) -> d
             "made": stamp(),
             "files": sorted(files),
             "note": ("The key files (hf_token.key, gemini_key.key, "
-                     "groq_key.key) are never in a backup — they are "
+                     "groq_key.key) are never in a backup - they are "
                      "secrets. Re-save your keys in Settings after "
                      "restoring."),
         }
@@ -80,5 +80,5 @@ def backup_workspace(workspace: str | Path, dest: str | Path | None = None) -> d
     size = dest.stat().st_size
     return {"ok": True, "path": str(dest), "files": len(files), "bytes": size,
             "note": ("Backed up " + str(len(files)) + " files. Your keys "
-                     "are not in the backup — re-save them in Settings "
+                     "are not in the backup - re-save them in Settings "
                      "after restoring.")}

@@ -1,4 +1,4 @@
-"""The Critic seat — vision checks looks, after machines check facts.
+"""The Critic seat - vision checks looks, after machines check facts.
 
 A critic receives the description's rubric and the preview file list, and
 returns structured fixes: [{"part": id-or-null, "issue": str, "fix": str}].
@@ -9,10 +9,10 @@ can verify from the description itself) and honestly marks the rest as
 "needs vision". Since v0.6 the GeminiCritic makes a real vision call via
 skullpt.live: it sends the render PNGs plus the rubric and asks for
 structured fixes, each optionally carrying ONE machine-appliable
-parameter patch. Since v1.6 (T23) it judges EVERY render in one call —
-different camera angles of the same build — and records which images
+parameter patch. Since v1.6 (T23) it judges EVERY render in one call -
+different camera angles of the same build - and records which images
 it judged, instead of looking at only the first PNG. It still refuses
-clearly when no key is configured or no render exists — a sandbox pass
+clearly when no key is configured or no render exists - a sandbox pass
 must never be sold as a vision verdict.
 """
 from __future__ import annotations
@@ -52,7 +52,7 @@ class OfflineCritic:
             fixes.append({"part": None, "issue": f"rubric item needs vision review: {item}",
                           "fix": "configure the Gemini critic seat for a visual verdict"})
         return {"critic": self.name, "vision": False, "fixes": fixes,
-                "note": "offline critic: deterministic checks only — no visual verdict claimed"}
+                "note": "offline critic: deterministic checks only - no visual verdict claimed"}
 
 
 class GeminiCritic:
@@ -72,7 +72,7 @@ class GeminiCritic:
 
         if not live.key_available(self.seat, self.workspace):
             raise CriticNotConfigured(
-                "Gemini critic needs a Gemini key — paste one in the "
+                "Gemini critic needs a Gemini key - paste one in the "
                 "Bench Settings window")
         # Every render, not just the first (T23): the build's cameras
         # are different angles of the same object, and a flaw visible
@@ -84,7 +84,7 @@ class GeminiCritic:
                 image_paths.append(candidate)
         if not image_paths:
             raise CriticNotConfigured(
-                "Gemini critic needs a render PNG to look at — none was produced")
+                "Gemini critic needs a render PNG to look at - none was produced")
         count = len(image_paths)
         views = (f"{count} renders of the same build, from different "
                  "camera angles") if count > 1 else "one render"
@@ -97,7 +97,7 @@ class GeminiCritic:
             "Reply with ONLY a JSON object: {\"fixes\": [{\"part\": part-id-or-null, "
             "\"issue\": \"what is wrong, briefly\", \"fix\": \"what to change\", "
             "\"patch\": {\"field\": value} or null}]}. A patch may set ONE of "
-            "position_cm, size_cm, material, bevel_cm, radius_cm on that part — "
+            "position_cm, size_cm, material, bevel_cm, radius_cm on that part - "
             "parameter changes only. If the renders satisfy the rubric, "
             "return {\"fixes\": []}.")
         render_bytes = [p.read_bytes() for p in image_paths]
@@ -106,9 +106,9 @@ class GeminiCritic:
                 "You are the vision critic of a design workshop. "
                 f"{count + 1} images are attached: the FIRST is the reference "
                 "picture the user chose for this job; the rest are "
-                f"{views}. Judge the renders against the reference first — "
+                f"{views}. Judge the renders against the reference first - "
                 "do they show the same object, proportions, materials and "
-                "colours? — and also against this rubric:\n"
+                "colours? - and also against this rubric:\n"
                 f"{rubric}\n\nThe description's parts (centimetres, z-up):\n{parts}\n\n"
                 + reply_spec)
             text = live.gemini_text(self.seat, prompt, image_png=reference_png,

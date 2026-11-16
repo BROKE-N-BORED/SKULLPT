@@ -682,16 +682,17 @@ class QtCharacterWindowTests(_QtCase):
         self._windows.append(opened)
         return opened
 
-    def test_rail_has_seven_buttons(self):
+    def test_rail_has_eight_buttons(self):
         window = self._bench()
         # The menu bar carries its own tool button (empty tooltip);
-        # the rail's buttons are the ones with tooltips.
+        # the rail's buttons are the ones with tooltips. v1.9 (N19)
+        # adds Recipes between Library and Render.
         tips = sorted(btn.toolTip()
                       for btn in window.findChildren(QtWidgets.QToolButton)
                       if btn.toolTip())
         self.assertEqual(tips, ["Character Studio", "How to Use",
-                                "Images", "Jobs", "Library", "Render",
-                                "Settings"])
+                                "Images", "Jobs", "Library", "Recipes",
+                                "Render", "Settings"])
 
     def test_character_window_opens_with_its_controls(self):
         from skullpt import qtwindows

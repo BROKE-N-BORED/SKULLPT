@@ -1,11 +1,11 @@
 """Machine fact-checks: constraints from the Description File, verified for free.
 
-These are the checks a vision model should never be trusted with alone —
+These are the checks a vision model should never be trusted with alone -
 facts, not vibes: is the part on the ground, does it sit ON the thing it
 claims to sit on, is it inside its container, does its label fit its box,
 is the triangle budget respected. Floating/disconnected parts are the #1
 geometric failure of generated 3D, so `on_ground` / `sits_on` exist here
-from day one even though the first exporters are 2D — scene exporters will
+from day one even though the first exporters are 2D - scene exporters will
 feed real part geometry (position_cm / size_cm) into exactly these checks.
 
 Part geometry convention (all in cm, z-up):

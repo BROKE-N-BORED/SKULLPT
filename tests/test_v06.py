@@ -96,26 +96,15 @@ class ViewerShapeTests(unittest.TestCase):
         self.assertEqual(by_id["picket_8"]["shape"], "box")
         self.assertIn("leg_a_mirrored", by_id)
 
-    def test_page_draws_real_shapes_and_script_parses(self):
-        page = viewer.render_page(self.desc, live=True)
-        self.assertIn("shapeFaces", page)
-        self.assertIn("prismFaces", page)
-        node = None
-        try:
-            node = subprocess.run(["node", "--version"], capture_output=True).returncode == 0
-        except OSError:
-            node = False
-        if node:
-            import re
-            script = re.search(r"<script>(.*)</script>", page, re.S).group(1)
-            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
-                fh.write(script)
-                path = fh.name
-            try:
-                res = subprocess.run(["node", "--check", path], capture_output=True, text=True)
-                self.assertEqual(res.returncode, 0, res.stderr)
-            finally:
-                os.unlink(path)
+    def test_shape_data_reaches_the_viewport(self):
+        # v1.9 (N10): the HTML page is gone; the Qt viewport draws on
+        # scene_data, so the shape data must ride along in the boxes.
+        by_id = {b["id"]: b for b in self.data["boxes"]}
+        self.assertIsInstance(by_id["vase"]["profile"], list)
+        self.assertGreater(len(by_id["vase"]["profile"]), 1)
+        self.assertIsInstance(by_id["handle"]["path"], list)
+        self.assertGreater(len(by_id["handle"]["path"]), 1)
+        self.assertIsNotNone(by_id["handle"]["radius"])
 
 
 class GateTests(unittest.TestCase):

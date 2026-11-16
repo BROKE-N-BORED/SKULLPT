@@ -11,12 +11,12 @@ lights from the style), runs Blender headless, and collects the outputs:
     <slug>.render.py        the exact render script (kept, auditable)
 
 Fail-loud contract: if Blender is not installed, this raises with a plain
-message and the job fails — it never pretends a scene was built.
+message and the job fails - it never pretends a scene was built.
 
 Two phases (v1.6, P3): the BUILD script makes the scene (geometry,
 materials, stats, LODs, collision, GLB, .blend) and the RENDER script
 opens the saved .blend and renders the cameras. A render-engine
-fallback re-runs renders only — the build is not repeated.
+fallback re-runs renders only - the build is not repeated.
 
 Rendering tries EEVEE first (fast) and falls back to Cycles CPU when the
 EEVEE renders do not land (headless machines without a GPU context),
@@ -25,7 +25,7 @@ tiny EEVEE probe (v1.6, P4) decides whether EEVEE can run at all on
 this machine, so a dead EEVEE never burns its full timeout.
 
 A job that carries a real mesh (cloud-mesh GLB, or an ingested .glb /
-.obj / .fbx / .stl — v1.6, T21/T30) imports that mesh into the build
+.obj / .fbx / .stl - v1.6, T21/T30) imports that mesh into the build
 instead of rebuilding its stand-in boxes: the ingested boxes measured
 the mesh, the build uses the mesh itself.
 """
@@ -35,6 +35,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from .expand import expand_parts
@@ -98,7 +99,7 @@ def resolve_material(part: dict) -> tuple[str, float, float]:
     return _color_for(part.get("id", ""), part.get("type", "")), 0.0, 0.85
 
 
-# Procedural surface textures, generated inside Blender from noise — no
+# Procedural surface textures, generated inside Blender from noise - no
 # image files, so they cost no disk and run on a small PC. A part's
 # `texture` field wins; otherwise the material implies one.
 TEXTURE_BY_MATERIAL = {
@@ -204,7 +205,7 @@ def _resolve_mesh_file(desc: dict, out_dir: Path):
     job, its "cloud_mesh" record (T21). The file may be named relative to
     the job folder (cloud GLB, ingested copy), to the workspace
     (workspace/meshes/...) or absolute; the first existing candidate
-    wins. A missing file is NOT silent — this raises with a plain
+    wins. A missing file is NOT silent - this raises with a plain
     message naming it. Returns None when the job has no mesh at all
     (a built-from-parts job).
     """
@@ -219,19 +220,24 @@ def _resolve_mesh_file(desc: dict, out_dir: Path):
         return None
     if not isinstance(scale, (int, float)) or scale <= 0:
         scale = 1.0
-    candidates = [Path(name)]
-    if not candidates[0].is_absolute():
-        # out_dir is <workspace>/jobs/<slug>/output: parent is the job
-        # folder, parent.parent.parent is the workspace root.
-        candidates.append(out_dir.parent / name)
-        candidates.append(out_dir.parent.parent.parent / name)
+    # out_dir is <workspace>/jobs/<slug>/output: parent is the job
+    # folder, parent.parent.parent is the workspace root. The job
+    # folder wins (v1.9, N7); the launch directory is never a
+    # candidate - a stray same-named file there must not shadow the
+    # job's own mesh.
+    path = Path(name)
+    if path.is_absolute():
+        candidates = [path]
+    else:
+        candidates = [out_dir.parent / name,
+                      out_dir.parent.parent.parent / name]
     for cand in candidates:
         if cand.exists():
             return cand, fmt, float(scale)
     raise RuntimeError(
         f"The mesh file for this job is missing: {name}. "
         "The mesh was recorded when the job was made, but the file is "
-        "no longer there — re-ingest the asset or rebuild the job from "
+        "no longer there - re-ingest the asset or rebuild the job from "
         "its description.")
 
 
@@ -274,22 +280,29 @@ print("DS_PROBE_OK")
 '''
 
 
-def probe_engine(exe: str, timeout: int = 60) -> str:
+def probe_engine(exe: str, timeout: int = 60, cancel=None) -> str:
     """Ask Blender whether EEVEE can render headless on this machine
     (v1.6, P4): one cube, one 64 px render, 60 seconds. Returns
     "BLENDER_EEVEE_NEXT" when the probe render lands, "CYCLES" when
-    it does not — a failed probe is information, not an error, so it
-    never raises; the full run simply starts with Cycles."""
+    it does not - a failed probe is information, not an error, so it
+    never raises; the full run simply starts with Cycles. A set
+    `cancel` event is the one exception: it kills the probe and
+    raises governor.Cancelled, so a cancelled build never silently
+    starts a full Cycles render (v1.9, N8)."""
+    from . import governor, subproc
+
     try:
         with tempfile.TemporaryDirectory(prefix="skullpt-eevee-probe-") as tmp:
             script = Path(tmp) / "probe.py"
             script.write_text(_PROBE_SCRIPT)
-            proc = subprocess.run(
+            rc, out = subproc.run_cancellable(
                 [exe, "--background", "--python", str(script), "--", tmp],
-                capture_output=True, text=True, timeout=timeout)
-            if proc.returncode == 0 and "DS_PROBE_OK" in proc.stdout \
+                timeout=timeout, cancel=cancel)
+            if rc == 0 and "DS_PROBE_OK" in out \
                     and (Path(tmp) / "probe.png").exists():
                 return "BLENDER_EEVEE_NEXT"
+    except governor.Cancelled:
+        raise
     except (OSError, subprocess.TimeoutExpired):
         pass
     return "CYCLES"
@@ -335,7 +348,7 @@ def make_material(part):
     bsdf.inputs["Metallic"].default_value = part["metallic"]
     texture = part.get("texture")
     if texture:
-        # Procedural surface from noise, in object coordinates — no image
+        # Procedural surface from noise, in object coordinates - no image
         # files, no UV dependence, cheap on a small PC.
         coord = nt.nodes.new("ShaderNodeTexCoord")
         noise = nt.nodes.new("ShaderNodeTexNoise")
@@ -532,7 +545,13 @@ if D.get("mesh_file"):
     if fmt == "glb":
         bpy.ops.import_scene.gltf(filepath=D["mesh_file"])
     elif fmt == "obj":
-        bpy.ops.import_scene.obj(filepath=D["mesh_file"])
+        # bpy.ops.import_scene.obj was removed in Blender 4.0; the
+        # operator moved to bpy.ops.wm.obj_import. The hasattr check
+        # keeps the script working on older Blender too.
+        if hasattr(bpy.ops.wm, "obj_import"):
+            bpy.ops.wm.obj_import(filepath=D["mesh_file"])
+        else:
+            bpy.ops.import_scene.obj(filepath=D["mesh_file"])
     elif fmt == "stl":
         if hasattr(bpy.ops.wm, "stl_import"):
             bpy.ops.wm.stl_import(filepath=D["mesh_file"])
@@ -697,21 +716,29 @@ def _landed(out_dir: Path, names: list[str]) -> list[str]:
             if (out_dir / n).exists() and (out_dir / n).stat().st_size > 0]
 
 
-def _run_blender(exe: str, script_path: Path, engine: str, timeout: int = 1200) -> str:
+def _run_blender(exe: str, script_path: Path, engine: str, timeout: int = 1200,
+                 cancel=None, on_line=None) -> str:
     """Run Blender once. A timeout is a result, not an explosion: EEVEE can
     hang forever on a headless machine with no GL context, and the caller
-    needs the chance to fall back to Cycles instead of dying with it."""
+    needs the chance to fall back to Cycles instead of dying with it.
+    `cancel`, when given, is a threading.Event - a set event kills the
+    Blender process and raises governor.Cancelled (v1.9, N8). `on_line`,
+    when given, is called with each output line as it arrives (v1.9, N9)."""
+    from . import subproc
+
     env = dict(os.environ)
     env["DS_ENGINE"] = engine
+    # Blender's embedded Python block-buffers a piped stdout; without
+    # this the lines arrive in bursts instead of live.
+    env["PYTHONUNBUFFERED"] = "1"
     try:
-        proc = subprocess.run(
+        _rc, out = subproc.run_cancellable(
             [exe, "--background", "--factory-startup", "--python", str(script_path)],
-            capture_output=True, text=True, timeout=timeout, env=env)
-        return (proc.stdout or "") + "\n" + (proc.stderr or "")
+            timeout=timeout, cancel=cancel, on_line=on_line, env=env)
+        return out
     except subprocess.TimeoutExpired as exc:
-        out = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        err = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return out + "\n" + err + f"\nDS_TIMEOUT after {timeout}s ({engine})"
+        out = exc.output if isinstance(exc.output, str) else ""
+        return out + f"\nDS_TIMEOUT after {timeout}s ({engine})"
 
 
 def _build_outputs(desc: dict, slug: str) -> list[str]:
@@ -730,18 +757,71 @@ def _render_outputs(desc: dict, slug: str) -> list[str]:
             for cam in list(data["cameras"]) + [{"name": "Iso (auto)"}]]
 
 
+class _BlenderStream:
+    """Turns Blender's stdout into Bench progress (v1.9, N9).
+
+    The build phase has no countable milestones, so its lines move
+    the text while the fraction sits near the start of the export
+    stage. The render phase counts Blender's "Saved:" lines against
+    the renders this job expects, so the fraction advances as each
+    render lands. Lines are throttled (Blender prints a "Fra:" line
+    per tile, far faster than any eye) except "Saved:" lines, which
+    always go through - they are the real milestones. The fraction
+    never goes backwards, so a Cycles fallback re-run does not rewind
+    the bar. The progress callback takes (stage, detail, fraction)
+    with fraction relative to the export stage, 0.0 to 1.0.
+    """
+
+    def __init__(self, progress, expected_renders: int):
+        self._progress = progress
+        self._expected = max(1, expected_renders)
+        self._saved = 0
+        self._best = 0.0
+        self._last_sent = 0.0
+
+    def build_line(self, line: str) -> None:
+        self._send(line, 0.1)
+
+    def render_line(self, line: str) -> None:
+        saved = "Saved:" in line
+        if saved:
+            self._saved += 1
+        frac = 0.25 + 0.75 * (self._saved / self._expected)
+        self._send(line, frac, force=saved)
+
+    def _send(self, line: str, fraction: float, force: bool = False) -> None:
+        if self._progress is None:
+            return
+        text = line.strip()
+        if not text:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_sent < 0.5:
+            return
+        self._last_sent = now
+        self._best = max(self._best, min(1.0, fraction))
+        self._progress("export", text[:120], self._best)
+
+
 def export_blender_with_build_script(desc: dict, out_dir: Path,
-                                     build_script_fn, kind_word: str) -> list[str]:
+                                     build_script_fn, kind_word: str,
+                                     cancel=None, progress=None) -> list[str]:
     """The shared two-phase Blender run (v1.7, T26): the scene exporter
     and the character exporter differ only in the build script they
-    run and the word their error messages use — everything else
+    run and the word their error messages use - everything else
     (stale clearing, EEVEE probe, Cycles fallback, engine memory,
     build note) is the same run. `build_script_fn` takes
     (desc, out_dir, slug) and returns the build script text;
     `kind_word` is "scene" or "character".
 
+    `cancel`, when given, is a threading.Event - a set event kills
+    the Blender process at once and raises governor.Cancelled
+    (v1.9, N8). `progress`, when given, is called with
+    (stage, detail, fraction) as Blender's output streams in
+    (v1.9, N9).
+
     Raises RuntimeError with a plain message when Blender is missing
-    or the run produces nothing — the builder records it as a failed
+    or the run produces nothing - the builder records it as a failed
     job.
     """
     exe = find_blender()
@@ -760,23 +840,26 @@ def export_blender_with_build_script(desc: dict, out_dir: Path,
 
     expected = _expected_outputs(desc, slug)
     # Freshness: a previous build's files in this folder must never be
-    # mistaken for this run's outputs — clear the expected names first,
+    # mistaken for this run's outputs - clear the expected names first,
     # so "landed" always means "landed in THIS run".
     for name in expected:
         stale = out_dir / name
         if stale.exists():
             stale.unlink()
 
+    stream = _BlenderStream(progress, len(_render_outputs(desc, slug)))
+
     # Phase one: build. The build script ignores DS_ENGINE, but the
     # runner needs a value; EEVEE is the name it has always carried.
-    build_log = _run_blender(exe, build_path, "BLENDER_EEVEE_NEXT", timeout=1200)
+    build_log = _run_blender(exe, build_path, "BLENDER_EEVEE_NEXT", timeout=1200,
+                             cancel=cancel, on_line=stream.build_line)
     build_expected = _build_outputs(desc, slug)
     build_landed = _landed(out_dir, build_expected)
     missing_build = [n for n in build_expected if n not in build_landed]
     if missing_build:
         tail = "\n".join(build_log.strip().splitlines()[-8:])
         raise RuntimeError(
-            f"Blender ran but the {kind_word} did not build — these outputs "
+            f"Blender ran but the {kind_word} did not build - these outputs "
             f"did not land: {missing_build}. "
             f"Last lines from Blender:\n{tail}")
 
@@ -790,21 +873,23 @@ def export_blender_with_build_script(desc: dict, out_dir: Path,
     elif engine_setting == "eevee":
         engine_used = "BLENDER_EEVEE_NEXT"
     else:
-        engine_used = probe_engine(exe)
+        engine_used = probe_engine(exe, cancel=cancel)
         probe_note = ("EEVEE probe: "
                       + ("EEVEE renders on this machine" if engine_used == "BLENDER_EEVEE_NEXT"
                          else "EEVEE cannot render here, Cycles chosen") + ". ")
     timeout = 600 if engine_used == "BLENDER_EEVEE_NEXT" else 1500
-    render_log = _run_blender(exe, render_path, engine_used, timeout=timeout)
+    render_log = _run_blender(exe, render_path, engine_used, timeout=timeout,
+                              cancel=cancel, on_line=stream.render_line)
     render_expected = _render_outputs(desc, slug)
     render_landed = _landed(out_dir, render_expected)
     if len(render_landed) < len(render_expected) and engine_used == "BLENDER_EEVEE_NEXT":
         # EEVEE needs a GPU/GL context some headless machines cannot
-        # give (or hangs waiting for one). Cycles on CPU always can —
+        # give (or hangs waiting for one). Cycles on CPU always can -
         # slower, but the renders are real. Only the render phase
         # re-runs; the build stands (P3).
         engine_used = "CYCLES"
-        render_log = _run_blender(exe, render_path, engine_used, timeout=1500)
+        render_log = _run_blender(exe, render_path, engine_used, timeout=1500,
+                                  cancel=cancel, on_line=stream.render_line)
         render_landed = _landed(out_dir, render_expected)
     landed = _landed(out_dir, expected)
     missing = [n for n in expected if n not in landed]
@@ -830,7 +915,8 @@ def export_blender_with_build_script(desc: dict, out_dir: Path,
     return sorted(landed + [build_path.name, render_path.name, f"{slug}.build-note.txt"])
 
 
-def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
+def export_blender_scene(desc: dict, out_dir: Path,
+                         cancel=None, progress=None) -> list[str]:
     """Exporter entry point: (desc, out_dir) -> output file names.
 
     Two phases (P3): the build script runs once (geometry, stats,
@@ -840,10 +926,15 @@ def export_blender_scene(desc: dict, out_dir: Path) -> list[str]:
     Cycles; "auto" (the default) runs the EEVEE probe (P4) first so
     a headless machine that cannot do EEVEE goes straight to Cycles
     instead of burning the EEVEE timeout. A render fallback re-runs
-    renders only — the build is never repeated.
+    renders only - the build is never repeated.
+
+    `cancel` kills the Blender process at once (v1.9, N8);
+    `progress` streams Blender's output as (stage, detail, fraction)
+    (v1.9, N9).
 
     Raises RuntimeError with a plain message when Blender is missing
-    or the run produces nothing — the builder records it as a failed
+    or the run produces nothing - the builder records it as a failed
     job.
     """
-    return export_blender_with_build_script(desc, out_dir, generate_script, "scene")
+    return export_blender_with_build_script(desc, out_dir, generate_script, "scene",
+                                            cancel=cancel, progress=progress)

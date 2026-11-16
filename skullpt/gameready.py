@@ -1,4 +1,4 @@
-"""The game-ready gate — could this asset actually go into a game?
+"""The game-ready gate - could this asset actually go into a game?
 
 Runs when a description sets "game_ready": true. The Blender exporter
 writes a stats file (real triangle counts + UV presence, measured on the
@@ -49,7 +49,7 @@ def run_gate(desc: dict, out_dir: str | Path, outputs: list[str]) -> dict:
                                  else "no triangle count to judge"})
     else:
         checks.append({"check": "triangle_budget", "ok": True,
-                       "detail": "no max_tris budget set — count not judged"})
+                       "detail": "no max_tris budget set - count not judged"})
 
     if stats:
         no_uv = [name for name, s in stats.get("parts", {}).items() if not s.get("uv")]

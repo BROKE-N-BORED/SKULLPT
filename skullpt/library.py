@@ -1,4 +1,4 @@
-"""The Asset Library — the shell's memory, and its future integration surface.
+"""The Asset Library - the shell's memory, and its future integration surface.
 
 Every approved job is filed as one folder:
 

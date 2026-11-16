@@ -1,4 +1,4 @@
-"""Repeat + mirror expansion — one written part, many placed parts.
+"""Repeat + mirror expansion - one written part, many placed parts.
 
 A part may carry:
   "repeat": {"count": N, "step_cm": [dx, dy, dz]}

@@ -224,9 +224,10 @@ class _StagedInstall(unittest.TestCase):
         for name in dialogs:
             (bin_dir / name).write_text(STUB_DIALOG)
             (bin_dir / name).chmod(0o755)
-        # A model file (any .gguf counts — the pinned download is
-        # skipped when another model is already there) and the MPFB
-        # extension with its skins, so Character Studio skips too.
+        # A model file, so the pinned download is skipped: v1.9 (N5)
+        # only the exact model file counts as present, so the stand-in
+        # is pointed at with DESIGNSHELL_SD_MODEL below (the supported
+        # override). MPFB with its skins, so Character Studio skips too.
         model_home = home / "design-shell-models"
         model_home.mkdir()
         (model_home / "other-model.gguf").write_bytes(b"fake-model")
@@ -256,6 +257,9 @@ class _StagedInstall(unittest.TestCase):
         env["OLLAMA_LOG"] = str(tmp / "ollama.log")
         env["RUN_SH_MARKER"] = str(tmp / "run-sh-launched")
         env["ZENITY_QUESTION_EXIT"] = "1"  # "No" unless a test says yes
+        # v1.9 (N5): only the exact model file counts as present, so a
+        # staged stand-in no longer skips the download by itself.
+        env["DESIGNSHELL_SD_MODEL"] = str(model_home / "other-model.gguf")
         paths = {
             "dialog_log": dialog_dir / "dialog.log",
             "progress_input": dialog_dir / "progress-input.txt",
@@ -384,7 +388,7 @@ class GuiInstallerTests(_StagedInstall):
             warnings = [c for c in calls if "--warning" in c]
             self.assertEqual(len(warnings), 1, calls)
             self.assertIn(
-                "SKULLPT needs one system package to install — "
+                "SKULLPT needs one system package to install - "
                 "re-run the installer and allow it when asked.",
                 warnings[0])
             # No success dialog and no open-it-now question: the Bench

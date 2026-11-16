@@ -1,4 +1,4 @@
-"""Exporters — one Description File, many outputs.
+"""Exporters - one Description File, many outputs.
 
 Skeleton v0.1 ships two reference exporters proving the pattern:
 - web_ui: a standalone preview page + component CSS + tokens CSS
@@ -6,6 +6,11 @@ Skeleton v0.1 ships two reference exporters proving the pattern:
 
 Studios to come plug in the same way (blender_scene, unreal_level, ...):
 an exporter is a function (desc, out_dir) -> list of output file names.
+Every exporter also accepts optional `cancel` (a threading.Event) and
+`progress` (called with (stage, detail, fraction)) keyword arguments
+(v1.9, N8/N9): the Blender exporters kill their subprocess on cancel
+and stream its output; the instant exporters take the arguments and
+ignore them, so the builder calls every exporter the same way.
 """
 from __future__ import annotations
 
@@ -19,8 +24,12 @@ def _esc(text: object) -> str:
     return html.escape(str(text), quote=True)
 
 
-def export_web_ui(desc: dict, out_dir: Path) -> list[str]:
-    """Render parts with the Recipe Library into a previewable web component."""
+def export_web_ui(desc: dict, out_dir: Path,
+                  cancel=None, progress=None) -> list[str]:
+    """Render parts with the Recipe Library into a previewable web component.
+
+    Instant (no subprocess), so `cancel`/`progress` are accepted and
+    ignored - the builder calls every exporter the same way."""
     body_parts: list[str] = []
     panel_id = None
     for part in desc["parts"]:
@@ -68,8 +77,12 @@ def export_web_ui(desc: dict, out_dir: Path) -> list[str]:
     return sorted(files)
 
 
-def export_svg_mock(desc: dict, out_dir: Path) -> list[str]:
-    """A flat SVG mock: panel + a labelled row per part. Also the thumbnail."""
+def export_svg_mock(desc: dict, out_dir: Path,
+                    cancel=None, progress=None) -> list[str]:
+    """A flat SVG mock: panel + a labelled row per part. Also the thumbnail.
+
+    Instant (no subprocess), so `cancel`/`progress` are accepted and
+    ignored - the builder calls every exporter the same way."""
     style = desc.get("style") or {}
     bg = str(style.get("surface", "#1c1a17"))
     fg = str(style.get("text", "#f2ede4"))

@@ -1,16 +1,16 @@
-"""Seats — which brain does which job. Models are connectors, never core.
+"""Seats - which brain does which job. Models are connectors, never core.
 
 Four seats, all wired (v1.6): Gemini plans and sees, Groq repairs
 drafts that fail validation, local Ollama is the offline fallback when
 Gemini cannot be reached. A key comes from the environment first, then
 from the workspace's key file (v1.8: Settings saves Gemini and Groq
-keys there, owner-only, gitignored — the same precedence the HF token
+keys there, owner-only, gitignored - the same precedence the HF token
 has always had). A key is never stored anywhere else, and never logged.
 
 Seats removed in v1.5 (they were advertised but had no caller and no
-live wiring — the config promised a six-brain workshop and two seats
-did all the work): drafter (Groq — no code path ever called it) and
-heavy_coder (EXAONE — no live wiring exists at all). The repairer seat
+live wiring - the config promised a six-brain workshop and two seats
+did all the work): drafter (Groq - no code path ever called it) and
+heavy_coder (EXAONE - no live wiring exists at all). The repairer seat
 came back in v1.6 with the planner repair loop (T22). `load_seats`
 still accepts user-defined roles from seats.json, so nothing breaks
 for anyone who configured them; they just stop being promised by

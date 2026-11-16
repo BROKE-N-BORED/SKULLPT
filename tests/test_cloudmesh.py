@@ -278,7 +278,7 @@ class FlowTests(MockGradioCase):
         with self.assertRaises(cloudmesh.CloudMeshError) as cm:
             cloudmesh.cloud_mesh(self.ws, self.photo)
         self.assertIn("huggingface.co", str(cm.exception))
-        self.assertIn("HF_TOKEN", str(cm.exception))
+        self.assertIn("Settings", str(cm.exception))
         self.assertEqual(_MockGradio.requests, 0)
         self.assertEqual(list((self.ws / "jobs").iterdir()), [])
 
