@@ -125,8 +125,8 @@ def bake_job(job: Job, workspace: Path, resolution: int | None = None,
                           "recipe)" if len(skipped) > 1 else ""))
         else:
             problem = ("nothing in this job can be baked: no part has "
-                       "an object material - plain colours and glass "
-                       "have no recipe to bake")
+                       "a material with a recipe - plain colours and "
+                       "glass have no recipe to bake")
         return {"ok": False, "problems": [problem]}
     tier = settings_mod.resolve_render_settings(workspace, desc)["tier"]
     if resolution is None:
@@ -138,6 +138,13 @@ def bake_job(job: Job, workspace: Path, resolution: int | None = None,
     out_dir = job.output_dir
     blend = out_dir / f"{slug}.blend"
     if not blend.exists():
+        # A job whose kind never has a 3D model (a UI component, a
+        # website, a graphic) is not "unbuilt" - it has nothing to
+        # bake at all, and saying "build it first" would be a lie
+        # (v1.14, A8).
+        if desc.get("kind") in ("ui_component", "website", "graphic"):
+            return {"ok": False, "problems": [
+                "this job has no 3D model to bake - only 3D jobs bake"]}
         return {"ok": False, "problems": [
             "build the job first - baking needs the built .blend file"]}
     exe = exe or blender_export.find_blender()

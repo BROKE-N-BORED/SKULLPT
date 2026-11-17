@@ -472,6 +472,31 @@ def dump(desc: dict, path: str | Path) -> None:
     Path(path).write_text(json.dumps(desc, indent=2) + "\n", encoding="utf-8")
 
 
+def plain_summary(desc: dict, max_summary_chars: int = 240) -> str:
+    """The job card's summary: plain English only, no raw parameters.
+
+    The name and kind, the description's own summary (cut at a word
+    boundary when it runs long), and the parts by name only. The full
+    technical summary is still summarize() - the Bench shows it in
+    the Details view, never on the card (v1.14, A3)."""
+    lines = [f"{desc['name']}  [{desc['kind']}]"]
+    summary = (desc.get("summary") or "").strip()
+    if summary:
+        if len(summary) > max_summary_chars:
+            cut = summary[:max_summary_chars].rsplit(" ", 1)[0]
+            summary = (cut or summary[:max_summary_chars]) + "..."
+        lines.append(summary)
+    parts = desc.get("parts") or []
+    if parts:
+        names = [p.get("id", "?") for p in parts]
+        shown = ", ".join(names[:6])
+        if len(names) > 6:
+            shown += f" and {len(names) - 6} more"
+        noun = "part" if len(parts) == 1 else "parts"
+        lines.append(f"{len(parts)} {noun}: {shown}")
+    return "\n".join(lines)
+
+
 def summarize(desc: dict) -> str:
     """Render a plain-English summary - this is what the user approves."""
     lines = [f"{desc['name']}  [{desc['kind']}]"]

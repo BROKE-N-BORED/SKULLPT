@@ -14,7 +14,10 @@ colors:
   hairline: "#2e2e33"
   amber-hover: "#f6ad35"
   amber-pressed: "#e19920"
-  amber-disabled: "#7d5921"
+  # No amber-disabled token (v1.14, A6): a disabled primary button
+  # goes fully grey (canvas-soft background, muted text), the same
+  # as every other disabled button - the old amber mix still looked
+  # amber while disabled, so users pressed dead buttons.
 
 typography:
   ui:
@@ -104,7 +107,8 @@ warmth are the identity.
 | amber | `#f5a623` | Primary actions, approved state, selection |
 | amber-hover | `#f6ad35` | Primary button hover (amber lightened 8%) |
 | amber-pressed | `#e19920` | Primary button pressed (amber darkened 8%) |
-| amber-disabled | `#7d5921` | Primary button disabled (amber mixed 55% toward canvas) |
+| disabled primary | canvas-soft bg, muted text | A disabled primary button goes fully grey (v1.14, A6) - no amber while disabled |
+| checked button | amber bg, near-black text | A checked (toggle-on) button reads amber (v1.14, A15) |
 | near-black | `#1a1a1f` | Text on amber |
 
 Palette logic is Warp-derived: warm dark, never neutral gray or
@@ -185,7 +189,10 @@ in `skullpt/fonts/OFL-Inter.txt` and `OFL-JetBrainsMono.txt`).
   render, and could-not-read tiles; selected-job strip at the
   bottom; chat panel on the right.
 - Render: viewport takes the left two thirds; parts list, part
-  editor, and renders strip on the right third.
+  editor, and renders strip on the right third, which scrolls
+  (v1.14, A1): the panel holds more than fits on the screen, and
+  its content is sized to fit its viewport width, so nothing
+  slides off the right edge.
 - Character Studio: status note on top; character-job picker and
   new-character row; a scrolling form of 11 macro sliders (0-100%
   with live value labels), a skin picker with a 96px thumbnail,

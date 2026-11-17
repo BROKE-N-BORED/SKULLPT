@@ -196,7 +196,6 @@ def build_stylesheet() -> str:
     amber = AMBER()
     amber_hover = lighten(amber, 0.08)
     amber_pressed = darken(amber, 0.08)
-    amber_disabled = mix(amber, CANVAS, 0.55)
     soft_hover = lighten(CANVAS_SOFT, 0.06)
     return f"""
 QMainWindow, QDialog, QWidget {{
@@ -222,6 +221,7 @@ QPushButton {{
 QPushButton:hover {{ background: {soft_hover}; }}
 QPushButton:pressed {{ background: {CANVAS}; }}
 QPushButton:disabled {{ color: {MUTED}; border-color: {CANVAS_SOFT}; }}
+QPushButton:checked {{ background: {amber}; color: {NEAR_BLACK}; border: 1px solid {amber}; font-weight: 600; }}
 QPushButton:focus {{ border: 1px solid {amber}; }}
 QPushButton#primary {{
     background: {amber};
@@ -231,7 +231,7 @@ QPushButton#primary {{
 }}
 QPushButton#primary:hover {{ background: {amber_hover}; border-color: {amber_hover}; }}
 QPushButton#primary:pressed {{ background: {amber_pressed}; border-color: {amber_pressed}; }}
-QPushButton#primary:disabled {{ background: {amber_disabled}; border-color: {amber_disabled}; color: {MUTED}; }}
+QPushButton#primary:disabled {{ background: {CANVAS_SOFT}; border-color: {CANVAS_SOFT}; color: {MUTED}; }}
 QPushButton#ghost {{
     background: transparent;
     border: 1px solid transparent;

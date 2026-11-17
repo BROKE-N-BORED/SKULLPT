@@ -308,6 +308,30 @@ def _resolve_guidance(workspace: str | Path, batch: dict,
     return flags, guidance
 
 
+def plain_error(error: str | None) -> str:
+    """A failed candidate's raw engine output as plain words (v1.14,
+    A4/A5): the known failure shapes get a sentence a user can act
+    on; anything else shows the engine's own last line, trimmed."""
+    text = (error or "").strip()
+    if not text:
+        return "the image engine gave no reason"
+    low = text.lower()
+    if "timed out after" in low:
+        return "it took too long and was stopped"
+    if "glibc" in low:
+        return ("the image engine needs a newer system library "
+                "than this machine has")
+    if "no such file or directory" in low or "not found" in low:
+        return "the image engine could not be started"
+    if "out of memory" in low or "cannot allocate memory" in low:
+        return "the machine ran out of memory"
+    if "permission denied" in low:
+        return "the image engine could not be started"
+    last = [line for line in text.splitlines() if line.strip()]
+    line = last[-1].strip() if last else text
+    return line if len(line) <= 200 else line[:197] + "..."
+
+
 def generate(workspace: str | Path, batch_dir: str | Path,
              count: int | None = None, timeout_s: int = PER_IMAGE_TIMEOUT_S,
              cancel=None, progress=None, guidance: dict | None = None) -> dict:

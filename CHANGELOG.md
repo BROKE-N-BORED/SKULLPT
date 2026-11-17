@@ -1,5 +1,127 @@
 # SKULLPT — Changelog
 
+## v1.14 - 2026-11-17 - The user-audit fix round (A1-A19)
+
+The 2026-11-16 hands-on user audit ran the shipped v1.13 as a
+user at 1366x768 and found 35 findings; this version fixes the
+two P0s and all seventeen P1s. The audit report is
+SKULLPT-user-audit-2026-11-16.md; the task list is
+SKULLPT-task-list-2026-11-17.md. The P2 items (A20-A34) and the
+Bench demo button (A35) are v1.15.
+
+- A1: the Render window's right panel scrolls. With a job loaded
+  it holds more than fits on the screen, and without a scroll
+  area Qt squeezed the input rows below their font height, so
+  the part editor and render settings were half-clipped and
+  unreadable. Every other window already scrolled; Render did
+  not. The scroll area also exposed a second defect the plain
+  layout had hidden: a scroll area never squeezes content below
+  its minimum width, so the panel's unwrapped note labels (the
+  bake note was 872 px), the long displacement checkbox text,
+  the wide engine/tier combos and the six-wide thumbnail row
+  forced the panel wider than the window, sliding the Dial
+  button and the buttons' own text off the right edge. All of
+  it is fixed at the source: the notes wrap, the displacement
+  cost moved to a tooltip, the combos size to a short minimum
+  (the full text still shows in the dropdown), the position/size
+  spins cap at 64 px, and the thumbnails sit in a three-across
+  grid. The panel now fits its viewport at 1366x768 with the
+  Dial button fully inside the window.
+- A2: the Engines tile pins its content to the top. The tile
+  stretches to the grid row's height, and the centred status
+  label used to drift below the visible area, so the tile looked
+  empty. The label is top-aligned now, with a stretch below the
+  Open Settings button. (The skipped-jobs tile gets the same
+  treatment.)
+- A3: job cards show the plain summary only. The raw parts list
+  (positions, sizes, mirror settings, colour codes) used to
+  print verbatim after the summary, defeating the plan gate and
+  making the cards tall enough to stretch the whole grid row.
+  The card shows the name, the description's own summary (cut at
+  a word boundary) and the parts by name only; the full
+  description is one click away on the new Details button,
+  which opens a read-only dialog. The selected-job strip shows
+  the same plain summary, whole (A14).
+- A4: image rounds report back in the chat. The chat turn used
+  to discard the run id, so after "Generating 3 candidates..."
+  the chat went silent forever, even when all three failed
+  within seconds. The run id travels back with the reply now,
+  the Bench tracks it, and when the round finishes the chat
+  hears one plain line: how many pictures landed, and why not
+  when none did. Rerolls and vary rounds report the same way,
+  and a reroll counts only its own round's candidates.
+- A5: a failed picture shows why, in plain words, and Keep and
+  Reject go grey on pictures that do not exist. The batch record
+  held the engine's error but the card showed only "State:
+  failed"; the reason now comes from imagegen.plain_error, which
+  turns the known failure shapes (glibc too old, timed out,
+  engine would not start, out of memory) into sentences a user
+  can act on. Clicking Keep on a missing file no longer pops an
+  error with a full internal path, either.
+- A6: a disabled primary button goes fully grey. The old
+  disabled-amber mix (amber 55% toward canvas) still looked
+  amber, so users pressed dead buttons. Disabled #primary now
+  uses the same canvas-soft background and muted text as every
+  other disabled button; the amber-disabled token is gone from
+  the design tokens.
+- A7: the Images window is no longer a dead end when empty. It
+  has a Generate images row (describe a picture, press the
+  button or Enter) and the empty text points at it and at the
+  chat. A batch started here is a normal Bench action, so the
+  chat hears when it lands (A4).
+- A8: Bake is offered only when it can run. The button stays
+  greyed out until the job is built and holds a material with a
+  recipe, and hovering over it says why: a UI-component, website
+  or graphic job "has no 3D model to bake", an unbuilt 3D job
+  needs building first. The command-line bake refusal says the
+  same for jobs whose kind never has a 3D model, instead of
+  lying that the job needs building.
+- A9: the bake refusal says "a material with a recipe" instead
+  of "an object material". The dial calls them materials; that
+  is the only word the user has ever seen.
+- A10: the part editor is blank and grey with no part selected.
+  It used to show made-up defaults (Position 0.0, Material
+  "black_metal") with an amber Save button, implying a part
+  existed to edit. The fields clear and disable together, and
+  the note still says "Select a part to edit it."
+- A11: the Dial button sits fully inside the window with a job
+  loaded. Fixed by the A1 panel-width work above (the scroll
+  area alone made it worse, not better) and guarded by a pixel
+  test that checks the button's global rect against the
+  window's.
+- A12: with no job loaded, the render controls show the
+  workspace defaults (Balanced, 640 px, 24 samples), not the
+  first item in each list (Draft, 128 px, 1 sample). The save
+  button stays disabled until a job is loaded, because there is
+  nothing to save the settings to.
+- A13: the chat takes a third of the Jobs window's width, not a
+  quarter, and the hint itself is shorter ("make / picture of /
+  approve / build / file / status", 306 px in the shipped font),
+  so all six verbs show in the 352 px input. The first version
+  of this fix measured the hint in the test font and still cut
+  "status" to "st..." in the shipped font; verification caught
+  it and the test now measures with the real font plus a margin
+  for the frame.
+- A14: the selected-job strip shows the whole plain summary. The
+  48 px height cap is gone (the card summary is bounded by
+  construction, so the strip cannot grow without limit), and
+  hovering shows the description's own summary.
+- A15: the dial's mode button names the mode it is in: "Simple"
+  in Simple mode, "Advanced" in Advanced. It used to read
+  "Advanced" in both modes, with nothing showing which was
+  active. The stylesheet gains a QPushButton:checked rule, so
+  the checked state reads amber too.
+- A16: Save character is greyed out with no character job. The
+  button was already disabled in that state; only its
+  amber-while-disabled styling lied about it, which A6 fixes
+  globally.
+- A17/A18/A19: the Help index lists all seven windows (Character
+  Studio and Recipes were missing), no longer promises starting
+  from a description file (there is no such button; it points at
+  the From example button instead), and the Render settings
+  section lists the material quality tier (Draft / Balanced /
+  Final).
+
 ## v1.13 - 2026-11-16 - The material system, phase 3 and final (M12-M14)
 
 The PolyOrganic-inspired material system, final phase: PBR pack

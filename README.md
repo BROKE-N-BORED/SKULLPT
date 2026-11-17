@@ -1,4 +1,4 @@
-# SKULLPT - v1.13
+# SKULLPT - v1.14
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -92,7 +92,12 @@ family uses it) into the job's output folder, with the maps carried
 into the Unreal package; quality tiers (Draft / Balanced / Final)
 for materials, per job or as a workspace default; and true
 displacement as an opt-in per material, CPU-gated (it turns off
-with a plain note when the machine cannot afford it). Glass does
+with a plain note when the machine cannot afford it). v1.14 is the
+user-audit fix round (A1-A19): the Render window's right panel
+scrolls, the Engines tile pins its content to the top, job cards
+show the plain summary with the full description one click away
+(Details), image rounds report back in the chat, disabled buttons
+look disabled, and the Help covers every window. Glass does
 not bake - its look comes from light passing through it, not from
 surface maps - and the bake report says so.
 The core shell (install, demo, build loop, library filing) was

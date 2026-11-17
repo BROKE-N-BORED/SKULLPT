@@ -236,7 +236,11 @@ class JobCard(QtWidgets.QFrame):
         top.addWidget(self._title, 1)
         layout.addLayout(top)
 
-        self._summary = QtWidgets.QLabel(job.get("summary") or "")
+        # The plain summary only (v1.14, A3): the raw parts list used
+        # to print here verbatim, which defeated the plan gate and
+        # made the card tall enough to stretch the whole grid row.
+        self._summary = QtWidgets.QLabel(
+            job.get("card_summary") or job.get("summary") or "")
         self._summary.setObjectName("muted")
         self._summary.setWordWrap(True)
         layout.addWidget(self._summary)
@@ -257,7 +261,8 @@ class JobCard(QtWidgets.QFrame):
         """Refresh the card in place (T17): same widget, new state."""
         self.pill.set_state(job["state"])
         self._title.setText(job["title"])
-        self._summary.setText(job.get("summary") or "")
+        self._summary.setText(
+            job.get("card_summary") or job.get("summary") or "")
         text, action = _GATE_BUTTONS.get(job["state"], ("Open", "open"))
         self._gate_action = action
         self._gate_btn.setText(text)
@@ -939,10 +944,15 @@ class MaterialDial(QtWidgets.QWidget):
         body.addWidget(self._preset_row)
 
         buttons = QtWidgets.QHBoxLayout()
-        self._advanced_btn = QtWidgets.QPushButton("Advanced")
+        # The button names the mode you are in (v1.14, A15): it used
+        # to read "Advanced" in both modes, with nothing showing
+        # which was active. The checked state is amber too, from the
+        # stylesheet's QPushButton:checked rule.
+        self._advanced_btn = QtWidgets.QPushButton()
         self._advanced_btn.setCheckable(True)
         self._advanced_btn.setChecked(
             settings_mod.dial_advanced(workspace))
+        self._update_advanced_btn()
         self._advanced_btn.toggled.connect(self._on_advanced_toggled)
         buttons.addWidget(self._advanced_btn)
         surprise_btn = QtWidgets.QPushButton("Surprise")
@@ -1046,9 +1056,15 @@ class MaterialDial(QtWidgets.QWidget):
         self._results.setVisible(False)
 
     # -- buttons ----------------------------------------------------
+    def _update_advanced_btn(self) -> None:
+        """The mode button names the mode it is in."""
+        self._advanced_btn.setText(
+            "Advanced" if self._advanced_btn.isChecked() else "Simple")
+
     def _on_advanced_toggled(self, checked: bool) -> None:
         settings_mod.set_dial_advanced(self._workspace, checked)
         self._face.set_advanced(checked)
+        self._update_advanced_btn()
 
     def _surprise(self) -> None:
         self._face.set_spec(materials_mod.surprise_spec())
@@ -1135,11 +1151,18 @@ class RenderWindow(_GeometryWindow):
         left.addLayout(camera_row)
         main.addLayout(left, 3)
 
-        right = QtWidgets.QVBoxLayout()
+        # The right panel scrolls (v1.14, A1): with a job loaded it
+        # holds more than fits on his screen, and without a scroll
+        # area Qt squeezed the input rows below their font height so
+        # their text was half-clipped and unreadable. Every other
+        # window already scrolled; Render did not.
+        right_holder = QtWidgets.QWidget()
+        right = QtWidgets.QVBoxLayout(right_holder)
         parts_title = QtWidgets.QLabel("Parts")
         parts_title.setObjectName("heading")
         right.addWidget(parts_title)
         self._parts_list = QtWidgets.QListWidget()
+        self._parts_list.setMinimumHeight(96)
         self._parts_list.itemClicked.connect(self._on_list_part)
         right.addWidget(self._parts_list, 1)
 
@@ -1161,6 +1184,12 @@ class RenderWindow(_GeometryWindow):
                 spin.setRange(-10000.0, 10000.0)
                 spin.setDecimals(1)
                 spin.setSingleStep(1.0)
+                # Narrow by design (v1.14, A1/A11): three spins share
+                # one row of a ~330 px panel, and a scroll area never
+                # squeezes content below its minimum width - without
+                # this cap the panel ran wider than the window and the
+                # Dial button slid off the right edge.
+                spin.setMinimumWidth(64)
                 spins.append(spin)
                 row.addWidget(spin)
             form.addRow(label, row)
@@ -1180,9 +1209,12 @@ class RenderWindow(_GeometryWindow):
         form.addRow("", self._material_crumb)
         # True displacement (v1.13, M14): only for object materials
         # (a string material has no bump chain to displace with).
-        # Off by default; the label says what it costs.
-        self._displacement_check = QtWidgets.QCheckBox(
-            "True displacement (16x triangles, needs more RAM)")
+        # Off by default; the cost lives in the tooltip, because the
+        # full text (341 px) used to force the whole panel wider than
+        # the window (v1.14, A1/A11).
+        self._displacement_check = QtWidgets.QCheckBox("True displacement")
+        self._displacement_check.setToolTip(
+            "16x triangles, needs more RAM")
         self._displacement_check.setVisible(False)
         form.addRow("", self._displacement_check)
         self._bevel_spin = QtWidgets.QDoubleSpinBox()
@@ -1199,8 +1231,14 @@ class RenderWindow(_GeometryWindow):
         self._save_part_btn.setEnabled(False)
         self._save_part_btn.clicked.connect(self._save_part)
         right.addWidget(self._save_part_btn)
-        right.addWidget(QtWidgets.QLabel(
-            "Saving sends the job back for approval."))
+        # The note labels wrap (v1.14, A1/A11): an unwrapped label's
+        # minimum width is its whole text, and the bake note (872 px)
+        # used to force the panel wider than the window, hiding the
+        # Dial button and the buttons' own text off the right edge.
+        save_note = QtWidgets.QLabel(
+            "Saving sends the job back for approval.")
+        save_note.setWordWrap(True)
+        right.addWidget(save_note)
         self._preview_label = QtWidgets.QLabel()
         self._preview_label.setAlignment(QtCore.Qt.AlignCenter)
         self._preview_label.setWordWrap(True)
@@ -1209,13 +1247,22 @@ class RenderWindow(_GeometryWindow):
         renders_title = QtWidgets.QLabel("Renders")
         renders_title.setObjectName("heading")
         right.addWidget(renders_title)
-        self._renders_row = QtWidgets.QHBoxLayout()
+        # A grid, three across (v1.14, A1/A11): six 96 px thumbnails
+        # in one row would force the panel 600 px wide.
+        self._renders_row = QtWidgets.QGridLayout()
         right.addLayout(self._renders_row)
         render_title = QtWidgets.QLabel("Render settings")
         render_title.setObjectName("heading")
         right.addWidget(render_title)
         render_form = QtWidgets.QFormLayout()
         self._engine_combo = QtWidgets.QComboBox()
+        # Narrow by design (v1.14, A1/A11): a combo's minimum width
+        # is its longest item, and "Auto (try EEVEE, fall back to
+        # Cycles)" (258 px) used to force the panel wider than the
+        # window. The full text still shows in the dropdown.
+        self._engine_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._engine_combo.setMinimumContentsLength(12)
         self._engine_combo.addItem("Auto (try EEVEE, fall back to Cycles)", "auto")
         self._engine_combo.addItem("EEVEE (fast, needs a GPU context)", "eevee")
         self._engine_combo.addItem("Cycles (slow, always works)", "cycles")
@@ -1231,6 +1278,9 @@ class RenderWindow(_GeometryWindow):
         self._denoise_check = QtWidgets.QCheckBox("Denoise (Cycles only)")
         render_form.addRow("", self._denoise_check)
         self._tier_combo = QtWidgets.QComboBox()
+        self._tier_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._tier_combo.setMinimumContentsLength(12)
         self._tier_combo.addItem("Draft (fewer nodes, fast)", "draft")
         self._tier_combo.addItem("Balanced (the full recipe)", "balanced")
         self._tier_combo.addItem("Final (extra detail, 1024 bakes)", "final")
@@ -1240,21 +1290,36 @@ class RenderWindow(_GeometryWindow):
         self._save_render_btn.setEnabled(False)
         self._save_render_btn.clicked.connect(self._save_render_settings)
         right.addWidget(self._save_render_btn)
-        right.addWidget(QtWidgets.QLabel(
+        settings_note = QtWidgets.QLabel(
             "These are this job's own settings. Changing them does not "
-            "send the job back for approval."))
+            "send the job back for approval.")
+        settings_note.setWordWrap(True)
+        right.addWidget(settings_note)
         self._bake_btn = QtWidgets.QPushButton("Bake PBR maps")
         self._bake_btn.setEnabled(False)
         self._bake_btn.clicked.connect(self._bake_maps)
         right.addWidget(self._bake_btn)
-        right.addWidget(QtWidgets.QLabel(
+        bake_note = QtWidgets.QLabel(
             "Bakes each material into colour, roughness, normal and "
             "height maps in the job's output folder. The job must be "
-            "built first. Glass does not bake."))
+            "built first. Glass does not bake.")
+        bake_note.setWordWrap(True)
+        right.addWidget(bake_note)
         right.addStretch(1)
-        main.addLayout(right, 1)
+        self._right_scroll = QtWidgets.QScrollArea()
+        self._right_scroll.setWidgetResizable(True)
+        self._right_scroll.setWidget(right_holder)
+        self._right_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff)
+        self._right_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        main.addWidget(self._right_scroll, 1)
 
         self._update_legend()
+        # Nothing is selected yet, so the editor starts blank and
+        # grey (v1.14, A10) and the render controls show the
+        # workspace defaults (v1.14, A12).
+        self._clear_editor()
+        self._load_render_settings()
         restore_geometry(self, self.GEOMETRY_KEY)
         if self.width() < 720:
             self.resize(1024, 640)
@@ -1283,10 +1348,7 @@ class RenderWindow(_GeometryWindow):
         self._selected_part = None
         self._viewport.set_selected_part(None)
         self._parts_list.clear()
-        self._save_part_btn.setEnabled(False)
-        self._save_render_btn.setEnabled(False)
-        self._bake_btn.setEnabled(False)
-        self._editor_note.setText("Select a part to edit it.")
+        self._clear_editor()
         self._clear_renders()
         while self._camera_buttons.count():
             item = self._camera_buttons.takeAt(0)
@@ -1296,6 +1358,7 @@ class RenderWindow(_GeometryWindow):
             self._viewport.set_scene(None)
             self._update_legend()
             self._tri_label.setText("Triangles: -")
+            self._load_render_settings()
             return
         try:
             job = Job(self._workspace / "jobs" / job_name)
@@ -1304,6 +1367,7 @@ class RenderWindow(_GeometryWindow):
             self._viewport.set_scene(None)
             self._legend.setText(f"Could not read this job: {exc}")
             self._tri_label.setText("Triangles: -")
+            self._load_render_settings()
             return
         # The viewport searches the job folder first, then the
         # workspace, for the description's mesh file (v1.10, N52):
@@ -1334,6 +1398,31 @@ class RenderWindow(_GeometryWindow):
             self._viewport.update()
             if selected is not None:
                 self._select_part(selected)
+
+    def _set_editor_enabled(self, enabled: bool) -> None:
+        """The part editor's inputs, on or off together."""
+        for spin in (*self._pos_spins, *self._size_spins,
+                     self._bevel_spin, self._radius_spin):
+            spin.setEnabled(enabled)
+        self._material_combo.setEnabled(enabled)
+        self._displacement_check.setEnabled(enabled)
+        self._dial_btn.setEnabled(enabled)
+        self._save_part_btn.setEnabled(enabled)
+
+    def _clear_editor(self) -> None:
+        """Nothing selected, nothing to edit (v1.14, A10): the fields
+        go blank and grey instead of showing made-up defaults that
+        look like a part exists."""
+        for spin in (*self._pos_spins, *self._size_spins,
+                     self._bevel_spin, self._radius_spin):
+            spin.setValue(0.0)
+        self._material_combo.setCurrentIndex(-1)
+        self._material_crumb.setVisible(False)
+        self._displacement_check.setVisible(False)
+        self._displacement_check.setChecked(False)
+        self._preview_label.setVisible(False)
+        self._editor_note.setText("Select a part to edit it.")
+        self._set_editor_enabled(False)
 
     def _update_legend(self) -> None:
         step = self._viewport.grid_step()
@@ -1371,6 +1460,7 @@ class RenderWindow(_GeometryWindow):
         if not job.output_dir.exists():
             return
         pngs = sorted(job.output_dir.glob("*.png"))[:6]
+        shown = 0
         for path in pngs:
             pixmap = QtGui.QPixmap(str(path))
             if pixmap.isNull():
@@ -1383,7 +1473,8 @@ class RenderWindow(_GeometryWindow):
             label.clicked.connect(
                 lambda p: QtGui.QDesktopServices.openUrl(
                     QtCore.QUrl.fromLocalFile(p)))
-            self._renders_row.addWidget(label)
+            self._renders_row.addWidget(label, shown // 3, shown % 3)
+            shown += 1
 
     def _goto_camera(self, camera: dict) -> None:
         position = camera.get("position_cm")
@@ -1441,11 +1532,7 @@ class RenderWindow(_GeometryWindow):
             # The viewport mannequin (v1.7, T26): a stand-in, not a
             # part: the human is edited in the Character Studio
             # window, not here.
-            self._save_part_btn.setEnabled(False)
-            self._dial_btn.setEnabled(False)
-            self._material_crumb.setVisible(False)
-            self._displacement_check.setVisible(False)
-            self._preview_label.setVisible(False)
+            self._clear_editor()
             self._editor_note.setText(
                 "This is the human. Edit it in the Character Studio window.")
             return
@@ -1453,13 +1540,10 @@ class RenderWindow(_GeometryWindow):
         part = next((p for p in self._desc.get("parts", [])
                      if p.get("id") == base_id), None)
         if part is None:
-            self._save_part_btn.setEnabled(False)
-            self._dial_btn.setEnabled(False)
-            self._material_crumb.setVisible(False)
-            self._displacement_check.setVisible(False)
-            self._preview_label.setVisible(False)
+            self._clear_editor()
             self._editor_note.setText("Could not find this part to edit.")
             return
+        self._set_editor_enabled(True)
         if base_id != part_id:
             self._editor_note.setText(
                 f"This is a copy of {base_id}. Editing changes the "
@@ -1710,10 +1794,12 @@ class RenderWindow(_GeometryWindow):
 
     def _load_render_settings(self) -> None:
         """Fill the render controls with this job's effective settings
-        (its own block, else the workspace defaults)."""
-        if self._desc is None:
-            return
-        resolved = settings_mod.resolve_render_settings(self._workspace, self._desc)
+        (its own block, else the workspace defaults). With no job
+        loaded the controls show the workspace defaults, not the
+        first item in each list (v1.14, A12) - and the buttons stay
+        disabled, because there is nothing to save them to."""
+        resolved = settings_mod.resolve_render_settings(
+            self._workspace, self._desc or {})
         index = self._engine_combo.findData(resolved["engine"])
         self._engine_combo.setCurrentIndex(max(0, index))
         self._res_spin.setValue(resolved["resolution_px"])
@@ -1721,8 +1807,42 @@ class RenderWindow(_GeometryWindow):
         self._denoise_check.setChecked(resolved["denoise"])
         tier_index = self._tier_combo.findData(resolved["tier"])
         self._tier_combo.setCurrentIndex(max(0, tier_index))
-        self._save_render_btn.setEnabled(True)
+        self._save_render_btn.setEnabled(self._job_name is not None)
+        self._update_bake_button()
+
+    def _update_bake_button(self) -> None:
+        """Bake is offered only when it can run (v1.14, A8): the job
+        must be built (its .blend exists) and hold at least one
+        material with a recipe. Otherwise the button stays greyed
+        out, and hovering over it says why."""
+        from . import bake as bake_mod
+
+        if self._job_name is None or self._desc is None:
+            self._bake_btn.setEnabled(False)
+            self._bake_btn.setToolTip(
+                "Open a built 3D job to bake its maps.")
+            return
+        bakeable, _skipped = bake_mod.bakeable_parts(self._desc)
+        if not bakeable:
+            self._bake_btn.setEnabled(False)
+            self._bake_btn.setToolTip(
+                "Nothing in this job can be baked - no part has a "
+                "material with a recipe.")
+            return
+        job = Job(self._workspace / "jobs" / self._job_name)
+        blend = job.output_dir / f"{self._job_name}.blend"
+        if not blend.exists():
+            self._bake_btn.setEnabled(False)
+            if self._desc.get("kind") in ("ui_component", "website",
+                                          "graphic"):
+                self._bake_btn.setToolTip(
+                    "This job has no 3D model to bake.")
+            else:
+                self._bake_btn.setToolTip(
+                    "Build the job first - baking needs the built file.")
+            return
         self._bake_btn.setEnabled(True)
+        self._bake_btn.setToolTip("")
 
     def _save_render_settings(self) -> None:
         if self._job_name is None:
@@ -2146,15 +2266,33 @@ class _CandidateCard(QtWidgets.QFrame):
         status_label = QtWidgets.QLabel(f"State: {status}")
         status_label.setObjectName("small")
         layout.addWidget(status_label)
+        if status == "failed":
+            # The reason, in plain words (v1.14, A5): the batch
+            # record holds the engine's error, but the card used to
+            # show only "State: failed".
+            reason = QtWidgets.QLabel(
+                "Why: " + imagegen.plain_error(candidate.get("error")))
+            reason.setObjectName("small")
+            reason.setWordWrap(True)
+            layout.addWidget(reason)
         buttons = QtWidgets.QHBoxLayout()
+        # Keep and Reject only work on a picture that exists (v1.14,
+        # A5): a failed candidate has no file, and offering Keep on
+        # it used to pop an error with a full internal file path.
+        usable = (status != "failed"
+                  and (batch_dir / candidate["file"]).exists())
         keep_btn = QtWidgets.QPushButton("Keep")
         keep_btn.setObjectName("primary")
+        keep_btn.setEnabled(usable)
         keep_btn.clicked.connect(lambda: self.decided.emit(self._file, "keep"))
         buttons.addWidget(keep_btn)
+        self._keep_btn = keep_btn
         reject_btn = QtWidgets.QPushButton("Reject")
+        reject_btn.setEnabled(usable)
         reject_btn.clicked.connect(
             lambda: self.decided.emit(self._file, "reject"))
         buttons.addWidget(reject_btn)
+        self._reject_btn = reject_btn
         layout.addLayout(buttons)
         vary_btn = QtWidgets.QPushButton("Vary this picture")
         vary_btn.setEnabled(status == "kept")
@@ -2199,6 +2337,22 @@ class ImagesWindow(_GeometryWindow):
         self._prompt_label = QtWidgets.QLabel("Pick a batch to see its pictures.")
         self._prompt_label.setWordWrap(True)
         right.addWidget(self._prompt_label)
+        # Pictures can start here (v1.14, A7): the empty window used
+        # to be a dead end - pictures only came from the chat, and
+        # nothing here said so.
+        gen_row = QtWidgets.QHBoxLayout()
+        self._gen_prompt = QtWidgets.QLineEdit()
+        self._gen_prompt.setPlaceholderText(
+            "Describe a picture, e.g. a wooden stool")
+        self._gen_prompt.textChanged.connect(
+            lambda text: self._gen_btn.setEnabled(bool(text.strip())))
+        self._gen_prompt.returnPressed.connect(self._generate)
+        gen_row.addWidget(self._gen_prompt, 1)
+        self._gen_btn = QtWidgets.QPushButton("Generate images")
+        self._gen_btn.setEnabled(False)
+        self._gen_btn.clicked.connect(self._generate)
+        gen_row.addWidget(self._gen_btn)
+        right.addLayout(gen_row)
         self._scroll = QtWidgets.QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._grid_holder = QtWidgets.QWidget()
@@ -2236,8 +2390,23 @@ class ImagesWindow(_GeometryWindow):
                     return
         self._batch_dir = None
         self._reroll_btn.setEnabled(False)
-        self._prompt_label.setText("Pick a batch to see its pictures.")
+        if self._batch_list.count() == 0:
+            self._prompt_label.setText(
+                "No batches yet. Describe a picture above and press "
+                "Generate images, or ask in the chat on the Jobs window.")
+        else:
+            self._prompt_label.setText("Pick a batch to see its pictures.")
         self._clear_grid()
+
+    def _generate(self) -> None:
+        """Start a batch from this window (v1.14, A7). The run is a
+        normal Bench action, so the chat hears when it lands."""
+        prompt = self._gen_prompt.text().strip()
+        if not prompt:
+            return
+        self._gen_prompt.clear()
+        self._bench.do_action("images", {"prompt": prompt})
+        Toast.show_toast(self, "Generating 3 pictures. They land in a new batch.")
 
     def _clear_grid(self) -> None:
         while self._grid.count():
@@ -2289,7 +2458,12 @@ class ImagesWindow(_GeometryWindow):
             imagegen.decide(self._workspace, self._batch_dir,
                             filename, decision)
         except Exception as exc:
-            QtWidgets.QMessageBox.warning(self, "Could not decide", str(exc))
+            message = str(exc)
+            if "candidate file missing" in message:
+                # Plain words, not the internal path (v1.14, A5).
+                message = ("That picture's file is gone, so there is "
+                           "nothing to keep or reject.")
+            QtWidgets.QMessageBox.warning(self, "Could not decide", message)
             return
         Toast.show_toast(self, f"{filename} kept." if decision == "keep"
                    else f"{filename} rejected and deleted.")
@@ -3257,9 +3431,12 @@ you approve it, and only then does anything build.</p>
 <h3>The windows</h3>
 <p><b>Jobs</b> is home: your jobs as cards, the chat panel, and the
 status bar. <b>Render</b> shows the selected job as a 3D scene you
-can orbit, and lets you pick a part and edit it. <b>Images</b> is
-where you keep or reject generated pictures. <b>Library</b> holds
-everything you have filed. <b>Settings</b> shows which engines are
+can orbit, and lets you pick a part and edit it. <b>Character
+Studio</b> shapes a human with sliders, a skin and a rig.
+<b>Images</b> is where you keep or reject generated pictures.
+<b>Library</b> holds everything you have filed. <b>Recipes</b>
+keeps the recipes your filed jobs graduate into, so you can start
+a new job from one. <b>Settings</b> shows which engines are
 ready and holds your keys (Gemini, Groq, Hugging Face).</p>
 <h3>Setup</h3>
 <p>The first time SKULLPT opens, the Setup check lists anything
@@ -3270,8 +3447,8 @@ sees. The Setup check can be opened any time from File, then Setup
 check, or from the button in Settings.</p>
 <h3>The five steps</h3>
 <ol>
-<li><b>Make.</b> Type "make a wooden shop panel" in the chat, or open
-the Render window and start from a description file.</li>
+<li><b>Make.</b> Type "make a wooden shop panel" in the chat, or
+start from a bundled example with the From example button.</li>
 <li><b>Approve.</b> Read the plain-English summary on the job card.
 Nothing builds until you approve it. This is the plan gate.</li>
 <li><b>Build.</b> Press Build. SKULLPT exports the Blender file, the
@@ -3301,9 +3478,10 @@ instead of rebuilding from boxes.</p>
 <h3>Render settings</h3>
 <p>Settings holds the render defaults: engine (Auto tries EEVEE and
 falls back to Cycles when EEVEE cannot run on this machine),
-resolution, Cycles samples, and denoise. A job can set its own in the
-Render window. Changing render settings never sends a job back for
-approval.</p>
+resolution, Cycles samples, denoise, and the material quality tier
+(Draft, Balanced, Final - how much detail the material recipes
+wire). A job can set its own in the Render window. Changing render
+settings never sends a job back for approval.</p>
 <h3>Materials and the dial</h3>
 <p>A part's material can be a flat preset (wood, metal, glass) or a
 real procedural material: pick a part in the Render window, press
@@ -3551,3 +3729,32 @@ def _format_build_report(workspace: Path, job_name: str) -> str:
         lines.append("Problems:")
         lines.extend(f"  - {problem}" for problem in problems)
     return "\n".join(lines) + "\n"
+
+
+# ----------------------------------------------------- description dialog
+
+class DescriptionDialog(QtWidgets.QDialog):
+    """The full description, opened on purpose (v1.14, A3/A14): the
+    job card shows the plain summary; this is where the parts,
+    numbers, constraints and budget live."""
+
+    def __init__(self, workspace: Path, job_name: str, parent=None):
+        super().__init__(parent)
+        from . import description as desc_mod
+
+        self.setWindowTitle(f"SKULLPT - Details for {job_name}")
+        self.setMinimumSize(520, 380)
+        layout = QtWidgets.QVBoxLayout(self)
+        self._text = QtWidgets.QTextEdit()
+        self._text.setObjectName("mono")
+        self._text.setReadOnly(True)
+        try:
+            desc = Job(Path(workspace) / "jobs" / job_name).load_description()
+            self._text.setPlainText(desc_mod.summarize(desc))
+        except Exception as exc:
+            self._text.setPlainText(
+                f"Could not read this job's description: {exc}")
+        layout.addWidget(self._text, 1)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)

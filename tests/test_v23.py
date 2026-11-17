@@ -87,13 +87,13 @@ def _mat_desc(tier: str | None = None, displacement: bool = False) -> dict:
 
 
 class VersionTests(unittest.TestCase):
-    """v1.13 everywhere."""
+    """v1.14 everywhere."""
 
     def test_version_is_113(self):
-        self.assertEqual(__version__, "1.13")
-        self.assertIn("v1.13", (ROOT / "README.md").read_text())
-        self.assertIn("## v1.13", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.13", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.14")
+        self.assertIn("v1.14", (ROOT / "README.md").read_text())
+        self.assertIn("## v1.14", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.14", (ROOT / "DESIGN.md").read_text())
 
 
 # ---------------------------------------------------------------- M13: tiers
@@ -714,7 +714,9 @@ class QtTierTests(_QtCase):
         self._windows.append(window)
         window.set_job(job.dir.name)
         self._app.processEvents()
-        self.assertTrue(window._bake_btn.isEnabled())
+        # v1.14 (A8): Bake stays greyed out until the job is built -
+        # this job has no .blend yet, so the button is disabled.
+        self.assertFalse(window._bake_btn.isEnabled())
         window._tier_combo.setCurrentIndex(
             window._tier_combo.findData("final"))
         window._save_render_settings()

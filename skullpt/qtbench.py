@@ -1100,7 +1100,10 @@ if QT_AVAILABLE:
             main.addWidget(self._scroll, 1)
             self._build_tiles()
             main.addLayout(self._build_detail_strip())
-            outer.addLayout(main, 3)
+            # The chat takes a third of the width (v1.14, A13), not a
+            # quarter: at 1366 px the input is 352 px wide, and the
+            # full chat hint (317 px) fits instead of clipping.
+            outer.addLayout(main, 2)
 
             # Chat panel.
             outer.addLayout(self._build_chat(), 1)
@@ -1119,10 +1122,16 @@ if QT_AVAILABLE:
             self._engine_tile_text = QtWidgets.QLabel()
             self._engine_tile_text.setObjectName("muted")
             self._engine_tile_text.setWordWrap(True)
+            # Pinned to the top (v1.14, A2): the tile stretches to
+            # the grid row's height, and a centred label with no
+            # stretch below it used to drift out of sight.
+            self._engine_tile_text.setAlignment(
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
             tile_layout.addWidget(self._engine_tile_text)
             settings_btn = QtWidgets.QPushButton("Open Settings")
             settings_btn.clicked.connect(lambda: self._open_window("settings"))
             tile_layout.addWidget(settings_btn)
+            tile_layout.addStretch(1)
 
             self._renders_tile = QtWidgets.QFrame()
             self._renders_tile.setObjectName("card")
@@ -1147,7 +1156,10 @@ if QT_AVAILABLE:
             self._skipped_tile_text = QtWidgets.QLabel()
             self._skipped_tile_text.setObjectName("muted")
             self._skipped_tile_text.setWordWrap(True)
+            self._skipped_tile_text.setAlignment(
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
             skipped_layout.addWidget(self._skipped_tile_text)
+            skipped_layout.addStretch(1)
 
         def _build_detail_strip(self) -> QtWidgets.QLayout:
             from .qtwindows import StagePill
@@ -1169,7 +1181,9 @@ if QT_AVAILABLE:
                 "Pick a job card above, or draft a new job.")
             self._job_summary.setObjectName("muted")
             self._job_summary.setWordWrap(True)
-            self._job_summary.setMaximumHeight(48)
+            # No height cap (v1.14, A14): the strip shows the whole
+            # plain summary - the card summary is bounded by
+            # construction, so this cannot grow without limit.
             layout.addWidget(self._job_summary)
             self._verdict = QtWidgets.QLabel("")
             self._verdict.setWordWrap(True)
@@ -1186,11 +1200,16 @@ if QT_AVAILABLE:
             self._retry_btn.clicked.connect(lambda: self._do_action("retry"))
             self._report_btn = QtWidgets.QPushButton("Build report")
             self._report_btn.clicked.connect(self._show_build_report)
+            self._details_btn = QtWidgets.QPushButton("Details")
+            self._details_btn.setToolTip(
+                "Read the full description, with every part and number.")
+            self._details_btn.clicked.connect(self._show_description)
             btn_row.addWidget(self._approve_btn)
             btn_row.addWidget(self._build_btn)
             btn_row.addWidget(self._file_btn)
             btn_row.addWidget(self._retry_btn)
             btn_row.addWidget(self._report_btn)
+            btn_row.addWidget(self._details_btn)
             btn_row.addStretch(1)
             self._duplicate_btn = QtWidgets.QPushButton("Duplicate")
             self._duplicate_btn.clicked.connect(self._duplicate_job)
@@ -1218,8 +1237,11 @@ if QT_AVAILABLE:
             layout.addLayout(self._action_row)
             row = QtWidgets.QHBoxLayout()
             self._chat_input = QtWidgets.QLineEdit()
+            # Short enough to show whole at 1366 px (v1.14, A13):
+            # the "..." forms did not fit once the frame and text
+            # margins were counted, and "status" was cut to "st...".
             self._chat_input.setPlaceholderText(
-                "make ... / picture of ... / approve / build / file / status")
+                "make / picture of / approve / build / file / status")
             self._chat_input.returnPressed.connect(self._send_chat)
             row.addWidget(self._chat_input, 1)
             send_btn = QtWidgets.QPushButton("Send")
@@ -1517,6 +1539,7 @@ if QT_AVAILABLE:
                 self._file_btn.setEnabled(False)
                 self._retry_btn.setEnabled(False)
                 self._report_btn.setEnabled(False)
+                self._details_btn.setEnabled(False)
                 self._duplicate_btn.setEnabled(False)
                 self._rename_btn.setEnabled(False)
                 self._delete_btn.setEnabled(False)
@@ -1524,14 +1547,19 @@ if QT_AVAILABLE:
             self._detail_pill.setVisible(True)
             self._detail_pill.set_state(job["state"])
             self._job_title.setText(job["title"])
-            summary = job.get("summary") or ""
-            self._job_summary.setText(
-                summary if len(summary) <= 300 else summary[:300] + "...")
+            # The plain summary, whole (v1.14, A3/A14): no mid-word
+            # cut. The full description is one click away (Details),
+            # and hovering shows the description's own summary.
+            summary = (job.get("card_summary")
+                       or job.get("summary") or "")
+            self._job_summary.setText(summary)
+            self._job_summary.setToolTip(job.get("desc_summary") or summary)
             self._approve_btn.setEnabled(job["state"] == "awaiting_approval")
             self._build_btn.setEnabled(job["state"] == "approved")
             self._file_btn.setEnabled(job["state"] == "awaiting_review")
             self._retry_btn.setEnabled(job["state"] == "failed")
             self._report_btn.setEnabled(job.get("report") is not None)
+            self._details_btn.setEnabled(True)
             self._duplicate_btn.setEnabled(True)
             self._rename_btn.setEnabled(job["state"] not in ("building", "checking"))
             self._delete_btn.setEnabled(job["state"] not in ("building", "checking"))
@@ -1796,6 +1824,12 @@ if QT_AVAILABLE:
             elif kind == "chat":
                 self._refresh_chat_log()
                 self._show_chat_actions(result.get("actions", []))
+                # A chat turn can start a background run of its own
+                # (an image round, v1.14 A4): track it, so the poller
+                # reports it when it finishes instead of going silent.
+                if result.get("run"):
+                    self._pending_runs[result["run"]] = (
+                        result.get("run_label") or "images")
             elif run["detail"]:
                 self._log("Bench", f"{label}: done - {run['detail']}")
             else:
@@ -1944,6 +1978,15 @@ if QT_AVAILABLE:
 
             if self._selected:
                 BuildReportDialog(self.workspace, self._selected,
+                                  self).exec()
+
+        def _show_description(self) -> None:
+            """The full description, on purpose (v1.14, A3): the card
+            shows the plain summary; this is where the numbers live."""
+            from .qtwindows import DescriptionDialog
+
+            if self._selected:
+                DescriptionDialog(self.workspace, self._selected,
                                   self).exec()
 
         def _show_debug_report(self) -> None:

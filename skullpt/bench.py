@@ -425,6 +425,10 @@ def _workspace_state_files(workspace: Path) -> dict:
                 "kind": desc.get("kind", ""),
                 "state": job.state,
                 "summary": desc_mod.summarize(desc),
+                # The card shows the plain summary only (v1.14, A3);
+                # the full summary lives in the Details view.
+                "card_summary": desc_mod.plain_summary(desc),
+                "desc_summary": desc.get("summary") or "",
                 "outputs": outputs,
                 "renders": [o for o in outputs if o.endswith(".png")],
                 "has_reference": bool(ref.get("stored_at")
@@ -511,6 +515,39 @@ def _job(workspace: Path, name: str) -> Job:
     if not job_dir.is_dir() or job_dir.parent != workspace / "jobs":
         raise ValueError(f"no job named {name!r}")
     return Job(job_dir)
+
+
+def _image_outcome_text(candidates: list[dict]) -> str:
+    """One plain line for an image round's result (v1.14, A4): how
+    many pictures landed, and why not when none did. A "pending"
+    candidate landed and waits for a decision; "failed" never did."""
+    landed = sum(1 for c in candidates if c.get("status") == "pending")
+    failed = [c for c in candidates if c.get("status") == "failed"]
+    total = len(candidates)
+    if not total:
+        return "no pictures were made"
+    if not failed:
+        noun = "picture" if landed == 1 else "pictures"
+        return f"{landed} {noun} landed - see them in the Images window"
+    if landed:
+        return (f"{landed} of {total} pictures landed "
+                f"({len(failed)} failed)")
+    reason = imagegen.plain_error(failed[0].get("error"))
+    noun = "picture" if total == 1 else "pictures"
+    return f"no pictures landed - all {total} {noun} failed: {reason}"
+
+
+def _image_round_outcome(workspace: Path, bdir: Path, cancel,
+                         on_progress) -> dict:
+    """Run one image round and report its outcome as the run's
+    detail, so the chat hears what happened (v1.14, A4). Only this
+    round's candidates count - a reroll's batch already holds older
+    ones."""
+    before = len(imagegen.load_batch(bdir).get("candidates", []))
+    batch = imagegen.generate(workspace, bdir, cancel=cancel,
+                              progress=on_progress)
+    return {"detail": _image_outcome_text(batch["candidates"][before:]),
+            "batch": batch["slug"]}
 
 
 def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
@@ -750,8 +787,8 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
         def do_images(cancel, report):
             def on_progress(done, total, text):
                 report(done / total if total else None, text)
-            return imagegen.generate(workspace, bdir, cancel=cancel,
-                                     progress=on_progress)
+            return _image_round_outcome(workspace, bdir, cancel,
+                                        on_progress)
 
         run = _start_run("images", batch["slug"], do_images,
                          queue=f"heavy:{workspace}")
@@ -776,8 +813,8 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
         def do_reroll(cancel, report):
             def on_progress(done, total, text):
                 report(done / total if total else None, text)
-            return imagegen.generate(workspace, bdir, cancel=cancel,
-                                     progress=on_progress)
+            return _image_round_outcome(workspace, bdir, cancel,
+                                        on_progress)
 
         run = _start_run("images", slug, do_reroll, queue=f"heavy:{workspace}")
         return {"ok": True, "run": run, "detail": "generating another round"}
@@ -796,9 +833,11 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
         def do_vary(cancel, report):
             def on_progress(done, total, text):
                 report(done / total if total else None, text)
-            return imagegen.vary(workspace, bdir, filename, prompt=prompt,
-                                 strength=strength, cancel=cancel,
-                                 progress=on_progress)
+            batch = imagegen.vary(workspace, bdir, filename, prompt=prompt,
+                                  strength=strength, cancel=cancel,
+                                  progress=on_progress)
+            return {"detail": _image_outcome_text(batch["candidates"]),
+                    "batch": batch["slug"]}
 
         run = _start_run("images", slug, do_vary, queue=f"heavy:{workspace}")
         return {"ok": True, "run": run,
@@ -1181,10 +1220,13 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None,
                cancel=None) -> dict:
     """One chat turn: commands route to the same act() the buttons use;
     open conversation goes to the planner seat when its key is set, and
-    says so plainly when it is not. Returns {reply, actions}. `cancel`,
-    when given, is a threading.Event passed to the seat calls, so
-    cancelling a chat turn actually stops it (v1.10, N50) - a
-    cancellation raises SeatCancelled instead of becoming a reply."""
+    says so plainly when it is not. Returns {reply, actions} - plus
+    {run, run_label} when the turn started a background run (an image
+    round), so the Bench can report that run when it finishes instead
+    of going silent (v1.14, A4). `cancel`, when given, is a
+    threading.Event passed to the seat calls, so cancelling a chat
+    turn actually stops it (v1.10, N50) - a cancellation raises
+    SeatCancelled instead of becoming a reply."""
     import re
 
     from . import live
@@ -1261,9 +1303,14 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None,
         try:
             result = act(workspace, "images",
                          {"prompt": prompt.strip(), "job": selected})
+            # The run id travels back with the reply (v1.14, A4): the
+            # Bench registers it and reports the round when it
+            # finishes - the chat used to go silent here.
             return {"reply": f"Generating 3 candidates for \"{prompt.strip()}\" - "
                              "they'll appear in the Reference images section as they land.",
-                    "actions": actions}
+                    "actions": actions,
+                    "run": result.get("run"),
+                    "run_label": f"images for \"{prompt.strip()}\""}
         except Exception as exc:
             return {"reply": str(exc), "actions": actions}
 

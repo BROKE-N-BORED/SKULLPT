@@ -735,6 +735,12 @@ class QtWindowSplitTests(_QtCase):
     size cap, no auto-select, and the first-run panel."""
 
     def test_jobs_window_fits_the_screen(self):
+        # The default size, not a saved one: a drive at 1366x768
+        # saves a bigger geometry, and a fresh window restores it
+        # (v1.14: this test failed on the saved 1364 px geometry
+        # left by the audit drives).
+        QtCore.QSettings("BrokeNBored", "SKULLPT").remove(
+            "JobsWindow/geometry")
         window = self._bench()
         self.assertLessEqual(window.width(), 1280)
         self.assertLessEqual(window.height(), 720)
