@@ -8,6 +8,7 @@ Each window does one job (U1). Every window remembers its geometry
 """
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
 import threading
@@ -413,7 +414,14 @@ class DialFace(QtWidgets.QWidget):
         self.specSettled.emit(self.spec())
 
     def set_page(self, index: int) -> None:
-        self._page = max(0, min(len(_DIAL_PAGES) - 1, index))
+        new_page = max(0, min(len(_DIAL_PAGES) - 1, index))
+        if new_page != self._page:
+            # The center shows the active knob (v1.15, A32): a knob
+            # from the old page would linger in the middle of the new
+            # one, as if it belonged there. A fresh page starts with
+            # no knob selected.
+            self._active_knob = None
+        self._page = new_page
         self.update()
 
     @property
@@ -1195,6 +1203,10 @@ class RenderWindow(_GeometryWindow):
             form.addRow(label, row)
         material_row = QtWidgets.QHBoxLayout()
         self._material_combo = QtWidgets.QComboBox()
+        # Editable (v1.15, A31): a material-spec part's breadcrumb
+        # shows in the combo itself (via setEditText, which leaves
+        # the index at -1, so saving never writes it as a preset).
+        self._material_combo.setEditable(True)
         self._material_combo.addItems(sorted(MATERIALS))
         material_row.addWidget(self._material_combo, 1)
         self._dial_btn = QtWidgets.QPushButton("Dial")
@@ -1417,6 +1429,7 @@ class RenderWindow(_GeometryWindow):
                      self._bevel_spin, self._radius_spin):
             spin.setValue(0.0)
         self._material_combo.setCurrentIndex(-1)
+        self._material_combo.setEditText("")
         self._material_crumb.setVisible(False)
         self._displacement_check.setVisible(False)
         self._displacement_check.setChecked(False)
@@ -1558,10 +1571,14 @@ class RenderWindow(_GeometryWindow):
             spin.setValue(float(value))
         material = part.get("material")
         if isinstance(material, dict):
-            # An object material (v1.11, M1): the combo holds preset
-            # names only, so it stays blank (N4) and the breadcrumb
-            # label carries the material instead.
+            # An object material (v1.11, M1): the combo shows the
+            # breadcrumb as its edit text (v1.15, A31) - the box
+            # used to sit blank, as if the part had no material.
+            # The index stays -1, so saving never writes the
+            # breadcrumb as a preset. The crumb below still shows.
             self._material_combo.setCurrentIndex(-1)
+            self._material_combo.setEditText(
+                materials_mod.breadcrumb(material))
             self._material_crumb.setText(
                 materials_mod.breadcrumb(material))
             self._material_crumb.setVisible(True)
@@ -1579,6 +1596,7 @@ class RenderWindow(_GeometryWindow):
                 # the combo blank rather than forcing the first preset
                 # (v1.9, N4) - saving keeps the material as it is.
                 self._material_combo.setCurrentIndex(-1)
+                self._material_combo.setEditText("")
                 self._editor_note.setText(
                     self._editor_note.text()
                     + f" Material {material} is custom and stays as it is"
@@ -1590,6 +1608,7 @@ class RenderWindow(_GeometryWindow):
         else:
             # No material at all (v1.11, M5): the empty state.
             self._material_combo.setCurrentIndex(-1)
+            self._material_combo.setEditText("")
             self._material_crumb.setText(
                 "No material here - open the dial to start.")
             self._material_crumb.setVisible(True)
@@ -1611,9 +1630,18 @@ class RenderWindow(_GeometryWindow):
         }
         # Material: only when a preset is selected. A blank combo
         # means the part's material is custom (hex/unknown) - it is
-        # left exactly as it is (v1.9, N4).
+        # left exactly as it is (v1.9, N4). The combo is editable
+        # (v1.15, A31), and on an editable combo typing a preset
+        # name shows the text but leaves the index at -1 - so a
+        # typed name that matches a preset counts as picking it,
+        # or a typed preset would silently not save. The breadcrumb
+        # a material-spec part shows never matches a preset name.
         if self._material_combo.currentIndex() >= 0:
             fields["material"] = self._material_combo.currentText()
+        else:
+            typed = self._material_combo.currentText().strip()
+            if typed and self._material_combo.findText(typed) >= 0:
+                fields["material"] = typed
         # Bevel/radius: only where they apply. A part that never had
         # one keeps not having one; a part that had one can still be
         # set back to zero (v1.9, N4).
@@ -2245,6 +2273,10 @@ class _CandidateCard(QtWidgets.QFrame):
     def __init__(self, batch_dir: Path, candidate: dict, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
+        # One height for every card (v1.15, A33): a failed card's
+        # reason used to stretch its card (and its whole row) far
+        # taller than the others. Content aligns to the top.
+        self.setFixedHeight(400)
         self._file = candidate["file"]
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -2269,9 +2301,14 @@ class _CandidateCard(QtWidgets.QFrame):
         if status == "failed":
             # The reason, in plain words (v1.14, A5): the batch
             # record holds the engine's error, but the card used to
-            # show only "State: failed".
-            reason = QtWidgets.QLabel(
-                "Why: " + imagegen.plain_error(candidate.get("error")))
+            # show only "State: failed". Capped at 100 characters
+            # (v1.15, A33) so a long reason cannot overflow the
+            # fixed card height; the known plain errors are all far
+            # shorter than that.
+            text = imagegen.plain_error(candidate.get("error"))
+            if len(text) > 100:
+                text = text[:97] + "..."
+            reason = QtWidgets.QLabel("Why: " + text)
             reason.setObjectName("small")
             reason.setWordWrap(True)
             layout.addWidget(reason)
@@ -2300,6 +2337,9 @@ class _CandidateCard(QtWidgets.QFrame):
                             "into a new batch.")
         vary_btn.clicked.connect(lambda: self.vary.emit(self._file))
         layout.addWidget(vary_btn)
+        # Top-aligned content (v1.15, A33): the stretch takes the
+        # slack in the fixed height instead of spreading the rows.
+        layout.addStretch(1)
 
 
 class ImagesWindow(_GeometryWindow):
@@ -2415,6 +2455,10 @@ class ImagesWindow(_GeometryWindow):
             if widget is not None:
                 widget.hide()
                 widget.deleteLater()
+        # Drop the bottom stretch row (v1.15, A33) so a fresh batch
+        # starts from a clean grid.
+        if self._grid.rowCount() > 0:
+            self._grid.setRowStretch(self._grid.rowCount() - 1, 0)
 
     def _on_batch(self, item) -> None:
         self._show_batch(item.data(QtCore.Qt.UserRole))
@@ -2441,6 +2485,11 @@ class ImagesWindow(_GeometryWindow):
             if col >= 3:
                 col = 0
                 row += 1
+        # Pin the rows to the top (v1.15, A33): the stretch row after
+        # the last card row takes the slack, so a short batch does
+        # not spread its cards down the window.
+        if self._grid.count():
+            self._grid.setRowStretch(self._grid.rowCount(), 1)
 
     def _decide(self, filename: str, decision: str) -> None:
         if self._batch_dir is None:
@@ -2572,11 +2621,27 @@ class LibraryWindow(_GeometryWindow):
             manifest = {}
         files = manifest.get("files", [])
         recipes = manifest.get("recipes", [])
+        # A plain date, not a timestamp (v1.15, A28): the filed
+        # stamp is ISO ("2026-11-17T00:19:08+0000"), which reads as
+        # machine noise. An unparseable stamp shows as-is.
+        filed = manifest.get("filed", "-")
+        if filed and filed != "-":
+            try:
+                filed = datetime.datetime.fromisoformat(
+                    str(filed)).strftime("%d %b %Y")
+            except ValueError:
+                pass
+        # Only the files a user cares about (v1.15, A28): the
+        # internal workings (.blender.py, .render.py, .stats.json,
+        # .build-note.txt) are not listed.
+        visible = [f for f in files if Path(f).suffix.lower() in
+                   {".glb", ".blend", ".png", ".jpg", ".jpeg",
+                    ".obj", ".stl", ".fbx", ".gltf"}]
         self._detail.setText(
             f"{manifest.get('name', slug)}\n"
             f"Kind: {manifest.get('kind', '-')}\n"
-            f"Filed: {manifest.get('filed', '-')}\n"
-            f"Files: {', '.join(files) if files else 'none'}\n"
+            f"Filed: {filed}\n"
+            f"Files: {', '.join(visible) if visible else 'none'}\n"
             f"Recipes: {', '.join(recipes) if recipes else 'none'}")
         self._open_btn.setEnabled((entry_dir / "description.json").exists())
 
@@ -2697,9 +2762,10 @@ class RecipesWindow(_GeometryWindow):
             data = {}
         template = data.get("template") or {}
         parts = template.get("parts") or []
+        # The summary reads in full (v1.15, A29): it used to stop
+        # at 200 characters, mid-sentence, with no way to see the
+        # rest. The detail label word-wraps, so nothing is lost.
         summary = str(template.get("summary", "")).strip()
-        if len(summary) > 200:
-            summary = summary[:197] + "..."
         lines = [
             f"{data.get('name', recipe_file)}",
             f"Kind: {data.get('kind', '-')}",
@@ -2726,6 +2792,12 @@ class RecipesWindow(_GeometryWindow):
         self._bench.refresh()
         self._bench.select_job(job.dir.name)
         Toast.show_toast(self, f"Started {job.dir.name} from the recipe.")
+        # The chat logs it too (v1.15, A30): a Toast alone vanishes,
+        # and the user never sees the job start. The guard keeps
+        # test doubles (which have no _log) working.
+        log = getattr(self._bench, "_log", None)
+        if log is not None:
+            log("Bench", f"Started {job.dir.name} from the recipe.")
 
 
 # ---------------------------------------------------------- settings window
@@ -3023,6 +3095,11 @@ class SettingsWindow(_GeometryWindow):
             QtWidgets.QMessageBox.warning(self, "Backup failed", str(result))
             return
         Toast.show_toast(self, result["note"])
+        # The chat logs it too (v1.15, A30), the same as the
+        # File-menu backup: a Toast alone vanishes.
+        log = getattr(self._bench, "_log", None)
+        if log is not None:
+            log("Bench", result["note"])
 
     def refresh(self) -> None:
         """Re-read the engine status and the key states."""
@@ -3216,9 +3293,10 @@ class SettingsWindow(_GeometryWindow):
 # -------------------------------------------------------------- setup window
 
 class SetupWindow(_GeometryWindow):
-    """The first-run setup check (v1.8, S4/S5): everything missing, one
-    Fix button each. Fixes run the installer (engines), pull the local
-    model (Ollama), or open Settings (keys). No terminal anywhere."""
+    """The first-run setup check (v1.8, S4/S5): everything missing,
+    one button each (Install, Pull the model, or Add in Settings).
+    Fixes run the installer (engines), pull the local model
+    (Ollama), or open Settings (keys). No terminal anywhere."""
 
     GEOMETRY_KEY = "SetupWindow"
 
@@ -3240,7 +3318,8 @@ class SetupWindow(_GeometryWindow):
 
         intro = QtWidgets.QLabel(
             "Everything SKULLPT needs, in one place. What is missing "
-            "is listed below. Press Fix and the app takes care of it.")
+            "is listed below. Press Install, Pull the model, or Add "
+            "in Settings next to it and the app takes care of it.")
         intro.setWordWrap(True)
         main.addWidget(intro)
 
@@ -3440,10 +3519,11 @@ a new job from one. <b>Settings</b> shows which engines are
 ready and holds your keys (Gemini, Groq, Hugging Face).</p>
 <h3>Setup</h3>
 <p>The first time SKULLPT opens, the Setup check lists anything
-missing: an engine, the local model, or a key, with a Fix button
-for each. Engines install from inside the app; keys are pasted in
-Settings and saved in your workspace only, in files the repo never
-sees. The Setup check can be opened any time from File, then Setup
+missing: an engine, the local model, or a key, with a button next
+to each one (Install, Pull the model, or Add in Settings).
+Engines install from inside the app; keys are pasted in Settings
+and saved in your workspace only, in files the repo never sees.
+The Setup check can be opened any time from File, then Setup
 check, or from the button in Settings.</p>
 <h3>The five steps</h3>
 <ol>
@@ -3549,9 +3629,22 @@ still draft descriptions and show the viewport.</p>
 image batches, and settings. The folder is shown in Settings. File,
 then Back up workspace, to zip the whole workspace into one file
 (your keys are never in a backup). File, then Open workspace,
-switches to another folder right away. Help, then Check for updates,
-asks GitHub whether a newer SKULLPT is out; it never downloads
-anything by itself.</p>
+switches to another folder right away.</p>
+<h3>Updates</h3>
+<p>When SKULLPT opens, it quietly asks GitHub whether a newer
+version is out. Up to date, or the check fails: nothing happens,
+no popup. A newer version: it asks "Update now?" and downloads
+nothing until you say yes. The download is checked against the
+release checksum before anything is installed; a download that
+does not match, or a release with no checksum, is never
+installed. Then it asks whether to restart now. Yes restarts with
+the update applied; No leaves the verified update waiting and it
+applies the next time SKULLPT starts. Only the program's own code
+is replaced - your workspace, your keys, and the private
+environment are never touched - and a backup of the replaced files
+is kept until the new version has launched cleanly. Help, then
+Check for updates, runs the same check by hand. Every release from
+v1.15 on carries a checksum file next to the download.</p>
 <h3>About</h3>
 <p>SKULLPT v__SKULLPT_VERSION__. A standalone Linux design and asset shell, by
 Broke n Bored Studio. Source: github.com/BROKE-N-BORED/SKULLPT</p>

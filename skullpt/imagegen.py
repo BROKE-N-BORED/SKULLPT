@@ -94,6 +94,40 @@ def find_engine() -> Path | None:
     return None
 
 
+_ENGINE_RUN_CACHE: dict = {"path": None, "ok": False, "at": 0.0}
+ENGINE_RUN_CACHE_S = 60.0
+
+
+def engine_runs(path: Path | None = None) -> bool:
+    """True when the image engine actually executes (v1.15, A20).
+
+    Existence is not enough: a binary that cannot run (a missing
+    system library, a bad build) used to read Ready, because the
+    status check only looked for the file. This runs it with
+    --help, which needs no model and exits at once. The answer is
+    cached briefly, so a status refresh never shells out every
+    time; a path change re-checks at once.
+    """
+    if path is None:
+        path = find_engine()
+    if path is None:
+        return False
+    now = time.monotonic()
+    if (_ENGINE_RUN_CACHE["path"] == str(path)
+            and now - _ENGINE_RUN_CACHE["at"] < ENGINE_RUN_CACHE_S):
+        return _ENGINE_RUN_CACHE["ok"]
+    ok = False
+    try:
+        proc = subprocess.run([str(path), "--help"],
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=15)
+        ok = proc.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    _ENGINE_RUN_CACHE.update({"path": str(path), "ok": ok, "at": now})
+    return ok
+
+
 def find_model(workspace: str | Path | None = None) -> Path | None:
     """The model file, or None. Env override wins; then the model home.
 

@@ -265,7 +265,9 @@ def engine_status(workspace: Path) -> dict:
     ollama = ollama_mod.status()
     return {
         "blender": find_blender() is not None,
-        "image_engine": imagegen.find_engine() is not None,
+        # The engine counts only when it runs (v1.15, A20): a binary
+        # that cannot execute used to read Ready on existence alone.
+        "image_engine": imagegen.engine_runs(),
         "image_model": imagegen.find_model(workspace) is not None,
         "gemini_key": gemini_key,
         "groq_key": groq_key,
@@ -682,6 +684,46 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
         if position:
             result["queued"] = True
             result["detail"] = (f"{job.dir.name} is queued at position {position} - "
+                                "it builds when the run ahead of it finishes")
+        return result
+    if action == "demo":
+        # The Bench demo (v1.15, A35): the CLI demo as a Bench
+        # action - a shop panel from the example, approved, built,
+        # and filed into the Library, on the heavy queue like a
+        # build. The job is created up front so the Bench can
+        # select it while the build runs. (desc_mod and Job are the
+        # module-level imports: a local import here would make the
+        # names local to act() and break every other branch.)
+        example = Path(__file__).resolve().parent.parent / "examples" \
+            / "shop-panel.description.json"
+        job = Job.create(workspace / "jobs", desc_mod.load(example))
+        job.approve()
+
+        def do_demo(cancel, report):
+            from .builder import build_job
+            from .library import Library
+            report(0.05, "building the demo panel")
+            report_data = build_job(job, workspace, cancel=cancel)
+            (job.dir / "build-report.json").write_text(
+                json.dumps(report_data, indent=2) + "\n")
+            if not report_data.get("ok"):
+                raise RuntimeError("demo build did not pass: "
+                                   + "; ".join(report_data.get("problems", [])[:3]))
+            thumb = next((o for o in report_data["outputs"]
+                          if o.endswith(".png")), None)
+            if thumb is None:
+                thumb = next((o for o in report_data["outputs"]
+                              if o.endswith(".svg")), None)
+            Library(workspace / "library").file_job(job, report_data,
+                                                    thumbnail=thumb)
+            return f"demo done - {job.dir.name} is in the Library"
+        queue = f"heavy:{workspace}"
+        run_id = _start_run("demo", job.dir.name, do_demo, queue=queue)
+        position = queue_position(queue, run_id)
+        result = {"ok": True, "job": job.dir.name, "run": run_id}
+        if position:
+            result["queued"] = True
+            result["detail"] = (f"the demo is queued at position {position} - "
                                 "it builds when the run ahead of it finishes")
         return result
     if action == "bake":
@@ -1307,7 +1349,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None,
             # Bench registers it and reports the round when it
             # finishes - the chat used to go silent here.
             return {"reply": f"Generating 3 candidates for \"{prompt.strip()}\" - "
-                             "they'll appear in the Reference images section as they land.",
+                             "they'll appear in the Images window as they land.",
                     "actions": actions,
                     "run": result.get("run"),
                     "run_label": f"images for \"{prompt.strip()}\""}

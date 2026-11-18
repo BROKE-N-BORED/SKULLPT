@@ -1,4 +1,4 @@
-# SKULLPT - v1.14
+# SKULLPT - v1.15
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -97,7 +97,12 @@ user-audit fix round (A1-A19): the Render window's right panel
 scrolls, the Engines tile pins its content to the top, job cards
 show the plain summary with the full description one click away
 (Details), image rounds report back in the chat, disabled buttons
-look disabled, and the Help covers every window. Glass does
+look disabled, and the Help covers every window. v1.15 finishes
+the audit list (A20-A35): the engine check runs the engine instead
+of only looking for the file, the status bar shows Ollama and Groq,
+the menu bar uses real menus, the Bench gains a Demo action, and
+updates are silent, verified, and ask first (see Updates below).
+Glass does
 not bake - its look comes from light passing through it, not from
 surface maps - and the bake report says so.
 The core shell (install, demo, build loop, library filing) was
@@ -581,6 +586,38 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.15 — the audit finish + ask-first updates (A20-A35)
+
+- **The audit list is done.** The remaining fifteen P2 findings:
+  the engine check runs the image engine instead of only looking
+  for the file; the status bar shows Ollama and Groq and shortens
+  cleanly when it runs out of room; the example list starts with
+  nothing selected; the Setup header names the buttons that are
+  actually there; refusals say "Gemini" instead of the seat name
+  and never mention an environment variable; the chat points at
+  the Images window; the Library shows plain dates and only the
+  files a user cares about; recipe summaries read in full; recipe
+  starts and backups log in the chat; the part editor shows a
+  material-spec part's material; the dial clears its knob when
+  you change pages; image cards keep a fixed height; the menu bar
+  uses real menus (File, Jobs, Windows, Help); and the Bench
+  gains a Demo action in the Jobs menu.
+- **Updates: silent check, verified pull, ask-first restart.**
+  When the Bench opens, it quietly asks GitHub whether a newer
+  SKULLPT is out (off the UI thread). Up to date, or the check
+  fails: nothing happens, no popup. An update exists: it asks
+  "Update now?" — Yes downloads the release zip and its .sha256
+  sidecar and verifies the checksum before touching anything
+  (a mismatch, or a release with no checksum, installs nothing),
+  then asks whether to restart now. Yes restarts with the update
+  applied; No leaves the verified update staged and it applies
+  the next time SKULLPT starts (re-verified first). Only code
+  files are replaced — the workspace, key files, and .venv are
+  never touched — and a backup of the replaced files is kept
+  until the new version launches cleanly. Help, then Check for
+  updates, runs the same flow by hand. Every release from v1.15
+  on carries a skullpt-vX.Y.zip.sha256 sidecar next to the zip.
 
 ## v1.13 - The material system, phase 3 and final (M12-M14)
 

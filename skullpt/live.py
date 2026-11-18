@@ -97,9 +97,14 @@ def _key_for(seat: dict, workspace=None) -> str:
         stored = tokenfile.load_key_for_env(workspace, env_key)
         if stored:
             return stored
+    # The provider's plain name (v1.15, A26): "seat
+    # gemini/gemini-flash-latest" is jargon a new user has never
+    # heard; "Gemini" alone is all the refusal needs.
+    provider = str(seat.get("provider") or "")
+    name = {"gemini": "Gemini", "groq": "Groq"}.get(
+        provider, provider.capitalize() or "The provider")
     raise SeatNotConfigured(
-        f"seat {seat.get('provider')}/{seat.get('model')} has no key - "
-        "paste one in the Bench Settings window")
+        f"{name} has no key - paste one in the Bench Settings window")
 
 
 def key_available(seat: dict, workspace=None) -> bool:

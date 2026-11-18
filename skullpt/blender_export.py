@@ -2341,7 +2341,8 @@ def export_blender_with_build_script(desc: dict, out_dir: Path,
     if exe is None:
         raise RuntimeError(
             f"Blender was not found on this machine, so no 3D {kind_word} was built. "
-            "Install Blender (or set DESIGNSHELL_BLENDER to its path) and run the build again.")
+            "Install Blender through the installer (the Setup check does it) "
+            "and run the build again.")
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _slug(desc["name"])
     build_script = build_script_fn(desc, out_dir, slug)

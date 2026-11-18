@@ -961,6 +961,38 @@ if QT_AVAILABLE:
             super().wheelEvent(event)
 
 
+    class _ElidedLabel(QtWidgets.QLabel):
+        """A label that shortens cleanly (v1.15, A23): when the full
+        text does not fit, it shows an ellipsis instead of cutting
+        mid-word with no indication. text() still returns the full
+        text; what is painted is the elided form."""
+
+        def __init__(self, text: str = "", parent=None):
+            super().__init__(parent)
+            self._full_text = text
+            super().setText(text)
+
+        def setText(self, text: str) -> None:  # noqa: N802 - Qt naming
+            self._full_text = text
+            self._apply_elided()
+
+        def text(self) -> str:
+            return self._full_text
+
+        def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+            self._apply_elided()
+            super().resizeEvent(event)
+
+        def _apply_elided(self) -> None:
+            width = self.contentsRect().width()
+            if width <= 0:
+                return
+            elided = self.fontMetrics().elidedText(
+                self._full_text, QtCore.Qt.ElideRight, width)
+            if super().text() != elided:
+                super().setText(elided)
+
+
     # ------------------------------------------------------------ main window
 
     class BenchWindow(QtWidgets.QMainWindow):
@@ -1271,23 +1303,26 @@ if QT_AVAILABLE:
             jobs_menu.addAction("Mesh from photo", self._mesh_from_photo)
             jobs_menu.addAction("Open an asset", self._open_asset)
             jobs_menu.addAction("Unreal package", self._unreal_package)
+            # The demo, from the Bench (v1.15, A35): the fastest way
+            # for a new user to see the app work end to end. It used
+            # to exist only on the command line.
+            jobs_menu.addAction("Run the demo", self._run_demo)
             jobs_menu.addSeparator()
             jobs_menu.addAction("Duplicate job", self._duplicate_job)
             jobs_menu.addAction("Rename job", self._rename_job)
             jobs_menu.addAction("Delete job", self._delete_job)
 
-            menu_bar.addAction("Render",
-                               lambda: self._open_window("render"))
-            menu_bar.addAction("Character",
-                               lambda: self._open_window("character"))
-            menu_bar.addAction("Images",
-                               lambda: self._open_window("images"))
-            menu_bar.addAction("Library",
-                               lambda: self._open_window("library"))
-            menu_bar.addAction("Recipes",
-                               lambda: self._open_window("recipes"))
-            menu_bar.addAction("Settings",
-                               lambda: self._open_window("settings"))
+            # Real menus (v1.15, A34, U38): the window openers live
+            # in a Windows menu instead of sitting in the menu bar
+            # as buttons mixed in with the menus.
+            windows_menu = menu_bar.addMenu("Windows")
+            for name, label in (
+                    ("jobs", "Jobs"), ("render", "Render"),
+                    ("character", "Character Studio"),
+                    ("images", "Images"), ("library", "Library"),
+                    ("recipes", "Recipes"), ("settings", "Settings")):
+                windows_menu.addAction(
+                    label, lambda _c=False, n=name: self._open_window(n))
 
             help_menu = menu_bar.addMenu("Help")
             help_menu.addAction("How to Use",
@@ -1299,7 +1334,7 @@ if QT_AVAILABLE:
 
         def _build_status_bar(self) -> None:
             bar = self.statusBar()
-            self._engines_label = QtWidgets.QLabel(str(self.workspace))
+            self._engines_label = _ElidedLabel(str(self.workspace))
             bar.addWidget(self._engines_label, 1)
             self._run_label = QtWidgets.QLabel("Idle")
             bar.addPermanentWidget(self._run_label)
@@ -1396,6 +1431,10 @@ if QT_AVAILABLE:
                     f"could not read workspace: {exc}")
                 return
             engines = state["engines"]
+            # Ollama + Groq join the quick view (v1.15, A22): the
+            # status bar shows everything Settings shows, in the
+            # same order. The label elides cleanly when the text
+            # outgrows the bar (v1.15, A23).
             self._engines_label.setText(
                 "Blender: " + ("ready" if engines["blender"] else "MISSING")
                 + "   Image engine: "
@@ -1404,6 +1443,10 @@ if QT_AVAILABLE:
                 + ("ready" if engines["image_model"] else "MISSING")
                 + "   Gemini key: "
                 + ("set" if engines["gemini_key"] else "not set")
+                + "   Groq key: "
+                + ("set" if engines.get("groq_key") else "not set")
+                + "   Ollama: "
+                + ("ready" if engines.get("ollama") else "not ready")
                 + "   HF token: "
                 + ("set" if engines.get("hf_token") else "not set")
                 + "   Character Studio: "
@@ -1416,6 +1459,10 @@ if QT_AVAILABLE:
             self._example_combo.blockSignals(True)
             self._example_combo.clear()
             self._example_combo.addItems(state["examples"])
+            # Nothing selected by default (v1.15, A24, U6): the combo
+            # used to show the first example on launch, which read
+            # as if the user had picked it.
+            self._example_combo.setCurrentIndex(-1)
             self._example_combo.blockSignals(False)
             jobs = state["jobs"]
             if self._selected and self._selected not in {j["name"] for j in jobs}:
@@ -1727,30 +1774,185 @@ if QT_AVAILABLE:
             self._log("Bench", "Backing up the workspace - running in the "
                                "background.")
 
-        def _check_for_updates(self) -> None:
-            """Ask GitHub whether a newer SKULLPT is out. The check is
-            read-only: nothing is downloaded or installed by it."""
-            from . import __version__, update as update_mod
+        # -------------------------------------------------- ask-first updates
+        # (v1.15): a silent check on launch, an ask-first popup when
+        # an update exists, a checksum-verified pull, and an
+        # ask-first restart. The check and the download run off the
+        # UI thread; every decision is the user's.
 
-            result = update_mod.check_for_update(__version__)
-            if result["error"]:
-                QtWidgets.QMessageBox.warning(
-                    self, "Could not check for updates", result["error"])
+        def _maybe_check_update_silent(self) -> None:
+            """The silent launch check (v1.15): runs once, shortly
+            after the window opens. Up to date, or the check fails:
+            nothing happens, no popup, no noise."""
+            if getattr(self, "_update_check_done", False):
                 return
-            if not result["update_available"]:
-                QtWidgets.QMessageBox.information(
-                    self, "No update",
-                    f"You are on the latest release (v{result['current']}).")
+            self._update_check_done = True
+            self._start_update_check(silent=True)
+
+        def _check_for_updates(self) -> None:
+            """Help, then Check for updates (v1.15): the same flow
+            by hand. Up to date, or the check fails, it says so;
+            an update exists, it offers the pull."""
+            self._start_update_check(silent=False)
+
+        def _start_update_check(self, silent: bool) -> None:
+            from . import __version__, update as update_mod
+            from .qtwindows import _BackgroundCall
+
+            self._update_check_silent = silent
+            if not silent:
+                self._update_progress = QtWidgets.QProgressDialog(
+                    "Checking for updates...", "", 0, 0, self)
+                self._update_progress.setWindowTitle("Checking for updates")
+                self._update_progress.setWindowModality(
+                    QtCore.Qt.WindowModal)
+                self._update_progress.show()
+            call = _BackgroundCall(
+                lambda: update_mod.check_for_update(__version__))
+            call.finished.connect(self._on_update_check_result)
+            self._update_check_call = call
+            call.start()
+
+        def _on_update_check_result(self, result) -> None:
+            from . import __version__
+
+            if getattr(self, "_update_progress", None) is not None:
+                self._update_progress.close()
+                self._update_progress = None
+            silent = getattr(self, "_update_check_silent", True)
+            if isinstance(result, Exception):
+                if not silent:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Could not check for updates",
+                        f"could not reach GitHub ({result})")
                 return
-            answer = QtWidgets.QMessageBox.question(
-                self, "A newer SKULLPT is out",
+            if result.get("error"):
+                if not silent:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Could not check for updates",
+                        result["error"])
+                return
+            if not result.get("update_available"):
+                if not silent:
+                    QtWidgets.QMessageBox.information(
+                        self, "No update",
+                        f"You are on the latest release "
+                        f"(v{result.get('current', __version__)}).")
+                return
+            self._offer_update(result)
+
+        def _offer_update(self, result: dict) -> None:
+            """The ask-first popup (v1.15): nothing downloads until
+            the user says yes. No dismisses for this launch - it
+            asks again next launch, with no skip-version state."""
+            box = QtWidgets.QMessageBox(self)
+            box.setWindowTitle("A newer SKULLPT is out")
+            box.setText(
                 f"SKULLPT v{result['latest']} is out. You are on "
-                f"v{result['current']}. Open the release page?",
+                f"v{result['current']}. Update now?")
+            box.setInformativeText(
+                "The download is checked against the release checksum "
+                "before anything is installed.")
+            update_btn = box.addButton(
+                "Update now", QtWidgets.QMessageBox.AcceptRole)
+            box.addButton("Open release page",
+                          QtWidgets.QMessageBox.ActionRole)
+            box.addButton("Not now", QtWidgets.QMessageBox.RejectRole)
+            box.setDefaultButton(update_btn)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is update_btn:
+                self._start_update_pull(result)
+            elif clicked is not None and clicked.text() == "Open release page":
+                QtGui.QDesktopServices.openUrl(
+                    QtCore.QUrl(result["url"]))
+
+        def _start_update_pull(self, result: dict) -> None:
+            """Download the release zip + sidecar and verify the
+            checksum (v1.15). A mismatch, or a release with no
+            checksum, installs nothing."""
+            from . import updater as updater_mod
+            from .qtwindows import _BackgroundCall
+
+            self._update_progress = QtWidgets.QProgressDialog(
+                f"Downloading SKULLPT v{result['latest']}...",
+                "", 0, 0, self)
+            self._update_progress.setWindowTitle("Updating SKULLPT")
+            self._update_progress.setWindowModality(QtCore.Qt.WindowModal)
+            self._update_progress.show()
+            call = _BackgroundCall(
+                lambda: updater_mod.download_and_stage(
+                    result, updater_mod.install_dir()))
+            call.finished.connect(self._on_update_staged)
+            self._update_pull_call = call
+            call.start()
+
+        def _on_update_staged(self, result) -> None:
+            if getattr(self, "_update_progress", None) is not None:
+                self._update_progress.close()
+                self._update_progress = None
+            if isinstance(result, Exception):
+                QtWidgets.QMessageBox.warning(
+                    self, "The update was not installed", str(result))
+                self._log("Bench", f"Update not installed: {result}")
+                return
+            self._ask_restart(result["version"])
+
+        def _ask_restart(self, version: str) -> None:
+            """The ask-first restart (v1.15): the verified update is
+            staged. Yes restarts with the update applied; No leaves
+            it waiting, and it applies the next time SKULLPT
+            starts (re-verified first)."""
+            answer = QtWidgets.QMessageBox.question(
+                self, "Update ready",
+                f"SKULLPT v{version} is downloaded and verified. "
+                "Restart now to complete the update?",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                 QtWidgets.QMessageBox.Yes)
             if answer == QtWidgets.QMessageBox.Yes:
-                QtGui.QDesktopServices.openUrl(
-                    QtCore.QUrl(result["url"]))
+                self._restart_with_update()
+                return
+            self._log("Bench", f"SKULLPT v{version} is downloaded and "
+                               "waiting. It will apply the next time "
+                               "SKULLPT starts.")
+            QtWidgets.QMessageBox.information(
+                self, "Update waiting",
+                f"SKULLPT v{version} is downloaded and waiting. It "
+                "will apply the next time SKULLPT starts.")
+
+        def _restart_with_update(self) -> None:
+            """Hand off to the updater and quit (v1.15): the updater
+            waits for this process to exit, swaps the staged code
+            in, and relaunches the Bench."""
+            from . import updater as updater_mod
+
+            updater_mod.spawn_updater(updater_mod.install_dir(),
+                                      os.getpid())
+            QtWidgets.QApplication.instance().quit()
+
+        def _announce_update_outcome(self) -> None:
+            """Tell the user what the last update did (v1.15): the
+            new version says plainly that it updated, and a failed
+            swap says so too, with the reason. A staged update that
+            failed re-verification at startup is reported here."""
+            from . import updater as updater_mod
+
+            updated, failed = updater_mod.consume_update_marker(
+                updater_mod.install_dir())
+            pending_error = getattr(self, "_pending_update_error", None)
+            if updated:
+                self._log("Bench", f"Updated to v{updated}.")
+                QtWidgets.QMessageBox.information(
+                    self, "Updated", f"Updated to v{updated}.")
+            if failed:
+                self._log("Bench", f"Update failed: {failed}")
+                QtWidgets.QMessageBox.warning(
+                    self, "The update did not apply", failed)
+            if pending_error:
+                self._pending_update_error = None
+                self._log("Bench", f"Waiting update dropped: {pending_error}")
+                QtWidgets.QMessageBox.warning(
+                    self, "The waiting update was dropped", pending_error)
 
         def _cancel_current_run(self) -> None:
             if self._current_run_id is not None:
@@ -1877,6 +2079,9 @@ if QT_AVAILABLE:
         def _job_from_example(self) -> None:
             name = self._example_combo.currentText()
             if not name:
+                # The list starts blank (v1.15, A24): a press with
+                # nothing picked says so instead of doing nothing.
+                self._log("Bench", "Pick an example from the list first.")
                 return
             result = self.do_action("new-example", {"example": name})
             if result is not None and result.get("job"):
@@ -1913,6 +2118,15 @@ if QT_AVAILABLE:
 
             run_id = bench_mod._start_run("chat", text[:40], do_chat)
             self._pending_runs[run_id] = f"chat {text[:40]}"
+
+        def _run_demo(self) -> None:
+            """Jobs, then Run the demo (v1.15, A35): a shop panel
+            built end to end and filed into the Library, the same
+            demo the command line runs. The build runs in the
+            background; the chat logs when it lands."""
+            self._log("Bench", "Running the demo - a shop panel, built "
+                               "and filed into the Library.")
+            self.do_action("demo", {})
 
         def _mesh_from_photo(self) -> None:
             # Only what validate_photo accepts (v1.10, N38): offering
@@ -2032,7 +2246,12 @@ if QT_AVAILABLE:
 
         # Single instance (T13): one Bench per workspace. A second
         # launch hands off to the running one instead of opening a
-        # second window over the same jobs.
+        # second window over the same jobs. The probe runs BEFORE
+        # the pending-update check (v1.15): a second launch must
+        # never trigger an update swap underneath the running Bench
+        # - the updater only waits for the process that spawned it,
+        # so without this order a double-click while the Bench is
+        # running would swap the code out from under it.
         server_name = ("SKULLPT-" + hashlib.sha256(
             str(workspace.resolve()).encode()).hexdigest()[:16])
         probe = QtNetwork.QLocalSocket()
@@ -2042,6 +2261,21 @@ if QT_AVAILABLE:
             probe.waitForBytesWritten(500)
             return 0
         probe.close()
+        # A waiting update applies at startup (v1.15): the user said
+        # No to restarting last time, so the staged update applies
+        # on this launch instead, before the main window opens. The
+        # updater swaps it in and relaunches the Bench; this process
+        # exits at once. A staged update that fails re-verification
+        # is dropped, and the user is told after the window opens.
+        from . import updater as updater_mod
+
+        pending_error = None
+        pending_result = updater_mod.handle_pending_at_startup(
+            updater_mod.install_dir())
+        if pending_result == "restarting":
+            return 0
+        if pending_result is not None:
+            pending_error = pending_result
         # A crashed Bench leaves its socket behind; clear it first.
         QtNetwork.QLocalServer.removeServer(server_name)
         server = QtNetwork.QLocalServer()
@@ -2067,6 +2301,12 @@ if QT_AVAILABLE:
         # S4: once the window is up, offer the setup check when
         # something required is missing. Once per launch only.
         QtCore.QTimer.singleShot(500, window._maybe_show_setup)
+        # v1.15: report what the last update did (or that a waiting
+        # update was dropped), then run the silent update check.
+        # The check asks nothing when up to date or when it fails.
+        window._pending_update_error = pending_error
+        QtCore.QTimer.singleShot(200, window._announce_update_outcome)
+        QtCore.QTimer.singleShot(1000, window._maybe_check_update_silent)
         return app.exec()
 
 else:

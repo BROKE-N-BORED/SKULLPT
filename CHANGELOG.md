@@ -1,5 +1,128 @@
 # SKULLPT — Changelog
 
+## v1.15 - 2026-11-17 - The audit finish + ask-first updates (A20-A35)
+
+The 2026-11-16 hands-on user audit's remaining fifteen P2
+findings, plus the Bench demo button, plus the standing-order
+updater: a silent update check on launch, an ask-first verified
+pull, and an ask-first restart. The audit report is
+SKULLPT-user-audit-2026-11-16.md; the task list is
+SKULLPT-task-list-2026-11-17.md. With this version the audit
+list is complete.
+
+- Verification fix: the two A35 demo tests raced the background
+  demo build - one read the job while it was still in the
+  'checking' state on the way to building, the other deleted its
+  temp folder while the build was still writing into it. The
+  tests now accept 'checking' as a real state on the way to
+  building, and cancel the run and wait for it to finish before
+  the temp folder is cleaned up. No product change.
+
+- A20: the engine check runs the image engine instead of only
+  looking for the file. A binary that cannot execute (a missing
+  system library, a bad build) used to read Ready. The status
+  check now runs it with --help, which needs no model and exits
+  at once; the answer is cached for a minute so a status refresh
+  never shells out every time.
+- A21: the Blender-missing refusal no longer tells the user to
+  set the DESIGNSHELL_BLENDER environment variable. All four
+  sites (the build, the character build, the .blend measure, the
+  .fbx measure) now say to install Blender through the installer
+  (the Setup check does it). The variable still works for anyone
+  who already uses it; it is just never shown to the user.
+- A22: the status bar shows Ollama and the Groq key. It used to
+  show Blender, the image engine, the image model, the Gemini
+  key, the HF token, and Character Studio, but not the two
+  settings the user most often checks after a first run. The bar
+  now shows everything Settings shows, in the same order.
+- A23: the status bar shortens cleanly. With Ollama and Groq
+  added, the text is longer than the bar at 1366x768, and it
+  used to cut mid-word with no indication. The status label now
+  elides with an ellipsis when it runs out of room, and re-flows
+  when the window is widened.
+- A24: the example list starts with nothing selected. It used
+  to show the first example on launch, which read as if the user
+  had picked it. Pressing From example with nothing picked now
+  logs "Pick an example from the list first" in the chat instead
+  of doing nothing.
+- A25: the Setup header names the buttons that are actually
+  there. It used to say "Press Fix", but no button is called
+  Fix; the buttons are Install, Pull the model, and Add in
+  Settings. The header and the Help section name them now.
+- A26: the no-key refusal names the provider plainly. It used to
+  say "seat gemini/gemini-flash-latest has no key", which is
+  jargon a new user has never heard. It now says "Gemini has no
+  key - paste one in the Bench Settings window" (and "Groq" for
+  the Groq seat).
+- A27: the image-generation reply points at the Images window.
+  It used to say the pictures would appear in the "Reference
+  images section", a leftover from the removed web UI; there is
+  no such section in the app.
+- A28: the Library detail shows a plain date and only the files
+  a user cares about. The filed stamp used to print as a raw
+  timestamp ("2026-11-17T00:19:08+0000"); it now reads "17 Nov
+  2026". The file list used to include the internal workings
+  (.blender.py, .render.py, .stats.json, .build-note.txt); it
+  now lists only models, renders, and pictures (.glb, .blend,
+  .png, .jpg, .obj, .stl, .fbx, .gltf).
+- A29: recipe summaries read in full. The detail used to stop
+  at 200 characters, mid-sentence, with no way to see the rest.
+  The summary now prints whole; the detail label word-wraps.
+- A30: recipe starts and backups log in the chat. Both used to
+  show only a Toast, which vanishes, so the user never saw the
+  job start or the backup land. They now log in the chat as well,
+  the same as the File-menu backup already did.
+- A31: the part editor shows a material-spec part's material in
+  the Material box. The combo used to sit blank for an object
+  material, as if the part had no material at all (the breadcrumb
+  below carried it). The combo is editable now and shows the
+  breadcrumb as its text; the index stays unselected, so saving
+  never writes the breadcrumb as a preset.
+- A32: the material dial clears its knob when you change pages.
+  The centre used to keep showing the old page's knob after a
+  page change, as if it belonged to the new page. A fresh page
+  starts with no knob selected.
+- A33: image cards keep one height. A failed card's reason used
+  to stretch its card (and its whole row) far taller than the
+  others. Cards are fixed at 400 px, content top-aligned, the
+  reason capped at 100 characters, and the grid pins its rows to
+  the top.
+- A34: the menu bar uses real menus. Render, Character, Images,
+  Library, Recipes, and Settings used to sit in the menu bar as
+  buttons mixed in with the File, Jobs, and Help menus. They now
+  live in a Windows menu (with Jobs first), so the bar reads
+  File, Jobs, Windows, Help.
+- A35: the Bench gains a Demo action (Jobs, then Run the demo).
+  The demo used to exist only on the command line. It builds the
+  shop-panel example end to end and files it into the Library,
+  on the heavy queue like a build, with the chat logging when it
+  lands.
+- Updater: silent check on launch, ask-first pull, ask-first
+  restart. When the Bench opens it quietly asks GitHub whether a
+  newer SKULLPT is out, off the UI thread. Up to date, or the
+  check fails: nothing happens, no popup. An update exists: it
+  asks "Update now?" and downloads nothing until the user says
+  yes. Yes downloads the release zip and its .sha256 sidecar and
+  verifies the checksum before touching anything; a mismatch, or
+  a release with no checksum, installs nothing. Then it asks
+  whether to restart now. Yes restarts with the update applied
+  (the updater swaps the staged code in and relaunches the
+  Bench, which says "Updated to vX.Y"); No leaves the verified
+  update staged, and it applies the next time SKULLPT starts,
+  re-verified first. Only code files are replaced - the
+  workspace, key files, and .venv are never touched - and a
+  backup of the replaced files is kept until the new version
+  launches cleanly. If the swap fails, the old install is put
+  back and the user is told why. Help, then Check for updates,
+  runs the same flow by hand (with "open the release page" as a
+  secondary option). Every release from v1.15 on carries a
+  skullpt-vX.Y.zip.sha256 sidecar next to the zip. The
+  single-instance check runs before the pending-update check at
+  startup, so a second launch while the Bench is running hands
+  off to it and never triggers an update swap underneath it
+  (caught in verification: the updater only waits for the process
+  that spawned it).
+
 ## v1.14 - 2026-11-17 - The user-audit fix round (A1-A19)
 
 The 2026-11-16 hands-on user audit ran the shipped v1.13 as a

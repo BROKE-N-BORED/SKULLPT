@@ -82,15 +82,15 @@ class _FakeBench:
 
 
 class VersionTests(unittest.TestCase):
-    """v1.14 everywhere."""
+    """v1.15 everywhere."""
 
     def test_version_is_114(self):
         from skullpt import __version__
 
-        self.assertEqual(__version__, "1.14")
-        self.assertIn("v1.14", (ROOT / "README.md").read_text())
-        self.assertIn("## v1.14", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.14", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.15")
+        self.assertIn("v1.15", (ROOT / "README.md").read_text())
+        self.assertIn("## v1.15", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.15", (ROOT / "DESIGN.md").read_text())
 
 
 # ------------------------------------------------------------------ A3

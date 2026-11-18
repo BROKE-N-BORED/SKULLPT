@@ -331,7 +331,8 @@ def export_blender_character(desc: dict, out_dir: Path,
     if exe is None:
         raise RuntimeError(
             "Blender was not found on this machine, so no 3D character was built. "
-            "Install Blender (or set DESIGNSHELL_BLENDER to its path) and run the build again.")
+            "Install Blender through the installer (the Setup check does it) "
+            "and run the build again.")
     status = find_mpfb(blender_exe=exe)
     if not status["installed"]:
         raise RuntimeError(

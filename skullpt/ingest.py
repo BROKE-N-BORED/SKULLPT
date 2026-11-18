@@ -570,7 +570,8 @@ def ingest_blend(path: str | Path, workspace: str | Path | None = None) -> dict:
     if exe is None:
         raise RuntimeError(
             "Blender was not found, so the .blend file cannot be measured. "
-            "Install Blender (or set DESIGNSHELL_BLENDER) and try again.")
+            "Install Blender through the installer (the Setup check does it) "
+            "and try again.")
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "ingest_dump.py"
         script.write_text(_BLEND_DUMP_SCRIPT, encoding="utf-8")
@@ -642,7 +643,8 @@ def ingest_fbx(path: str | Path, workspace: str | Path | None = None) -> dict:
     if exe is None:
         raise RuntimeError(
             "Blender was not found, so the .fbx file cannot be measured. "
-            "Install Blender (or set DESIGNSHELL_BLENDER) and try again.")
+            "Install Blender through the installer (the Setup check does it) "
+            "and try again.")
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "ingest_fbx.py"
         script.write_text(_FBX_DUMP_SCRIPT, encoding="utf-8")

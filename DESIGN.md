@@ -18,6 +18,9 @@ colors:
   # goes fully grey (canvas-soft background, muted text), the same
   # as every other disabled button - the old amber mix still looked
   # amber while disabled, so users pressed dead buttons.
+  # The status bar elides (v1.15, A23): its text outgrows the bar
+  # at 1366x768, and a mid-word cut with no indication read as a
+  # broken label. The ellipsis is the same muted text, no new token.
 
 typography:
   ui:
@@ -63,7 +66,9 @@ Vary button is a plain secondary button, the workspace/backup/update
 actions are plain menu items and dialogs; v1.11 adds the Material
 Dial below, v1.12 its Life page, v1.13 the material quality combo
 and the Bake PBR maps button as plain form rows and a plain
-secondary button in the Render window). The code follows this file: `skullpt/qtdesign.py`
+secondary button in the Render window; v1.15 the Windows menu, the
+elided status label, and the ask-first update dialogs as plain
+menus and dialogs). The code follows this file: `skullpt/qtdesign.py`
 holds the tokens, including the fixed amber `#f5a623`, and builds
 the one stylesheet `main()` applies. If this file and the code
 disagree, this file wins and the code is wrong.
@@ -202,7 +207,21 @@ in `skullpt/fonts/OFL-Inter.txt` and `OFL-JetBrainsMono.txt`).
   (`#b8b0a0`), at the human's height and build.
 - Base spacing 4px; card padding 10px/8px; window margins 8px.
 - Nothing is selected by default (U6): the Jobs window opens with
-  no job selected, and the detail strip says so plainly.
+  no job selected, and the detail strip says so plainly. The
+  example list starts blank too (v1.15, A24).
+- The menu bar is four real menus (v1.15, A34): File, Jobs,
+  Windows, Help. The window openers live in Windows (Jobs first),
+  never as buttons mixed in with the menus.
+- The status bar shows every engine and key (v1.15, A22), in the
+  same order as Settings, and elides with an ellipsis when the
+  text outgrows the bar instead of cutting mid-word (v1.15, A23).
+- Updates are silent until there is one, and ask-first after
+  that (v1.15): the launch check says nothing when up to date or
+  when it fails; an update asks "Update now?", verifies the
+  release checksum before touching anything, and asks whether
+  to restart now - No stages the verified update for the next
+  launch. Only code files are replaced; the workspace, keys,
+  and .venv are never touched.
 - First run shows a start-here panel (try an example, or type
   "make ..." in the chat) instead of an empty grid.
 

@@ -29,9 +29,15 @@ def _version_tuple(tag: str) -> tuple[int, ...]:
 
 
 def check_for_update(current_version: str) -> dict:
-    """{"current", "latest", "update_available", "url", "error"}.
+    """{"current", "latest", "update_available", "url", "error",
+    "zip_url", "sha256_url"}.
     "error" is a plain-language string when the check could not run;
-    "latest" is None then, and update_available is False."""
+    "latest" is None then, and update_available is False.
+    "zip_url"/"sha256_url" are the release asset downloads (None when
+    the release does not carry that asset): the updater (v1.15)
+    downloads the zip and verifies it against the .sha256 sidecar
+    before anything is installed. Every release from v1.15 on
+    carries the sidecar next to the zip."""
     try:
         req = urllib.request.Request(
             RELEASES_LATEST_URL,
@@ -42,15 +48,28 @@ def check_for_update(current_version: str) -> dict:
     except urllib.error.HTTPError as exc:
         return {"current": current_version, "latest": None,
                 "update_available": False, "url": RELEASE_PAGE_URL,
+                "zip_url": None, "sha256_url": None,
                 "error": f"GitHub answered with an error (HTTP {exc.code})"}
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         return {"current": current_version, "latest": None,
                 "update_available": False, "url": RELEASE_PAGE_URL,
+                "zip_url": None, "sha256_url": None,
                 "error": f"could not reach GitHub ({exc})"}
     tag = str(data.get("tag_name") or "")
     latest = tag.lstrip("vV") or None
     update_available = bool(
         latest and _version_tuple(latest) > _version_tuple(current_version))
     url = str(data.get("html_url") or RELEASE_PAGE_URL)
+    zip_url = None
+    sha256_url = None
+    if latest:
+        zip_name = f"skullpt-v{latest}.zip"
+        sha_name = zip_name + ".sha256"
+        for asset in data.get("assets") or []:
+            if asset.get("name") == zip_name:
+                zip_url = asset.get("browser_download_url")
+            elif asset.get("name") == sha_name:
+                sha256_url = asset.get("browser_download_url")
     return {"current": current_version, "latest": latest,
-            "update_available": update_available, "url": url, "error": None}
+            "update_available": update_available, "url": url, "error": None,
+            "zip_url": zip_url, "sha256_url": sha256_url}

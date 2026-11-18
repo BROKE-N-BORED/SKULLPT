@@ -87,13 +87,13 @@ def _mat_desc(tier: str | None = None, displacement: bool = False) -> dict:
 
 
 class VersionTests(unittest.TestCase):
-    """v1.14 everywhere."""
+    """v1.15 everywhere."""
 
     def test_version_is_113(self):
-        self.assertEqual(__version__, "1.14")
-        self.assertIn("v1.14", (ROOT / "README.md").read_text())
-        self.assertIn("## v1.14", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.14", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.15")
+        self.assertIn("v1.15", (ROOT / "README.md").read_text())
+        self.assertIn("## v1.15", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.15", (ROOT / "DESIGN.md").read_text())
 
 
 # ---------------------------------------------------------------- M13: tiers

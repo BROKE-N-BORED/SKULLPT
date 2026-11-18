@@ -784,11 +784,18 @@ class QtWindowSplitTests(_QtCase):
             self._windows.append(opened)
 
     def test_menu_bar_has_the_windows(self):
+        # v1.15, A34: the window openers live in a Windows menu now,
+        # not as buttons mixed in with the menus in the bar.
         window = self._bench()
         labels = [a.text() for a in window.menuBar().actions()]
-        for expected in ("File", "Jobs", "Render", "Character", "Images",
-                         "Library", "Settings", "Help"):
+        for expected in ("File", "Jobs", "Windows", "Help"):
             self.assertIn(expected, labels)
+        windows = next(a.menu() for a in window.menuBar().actions()
+                       if a.text() == "Windows")
+        entries = [a.text() for a in windows.actions()]
+        for expected in ("Jobs", "Render", "Character Studio", "Images",
+                         "Library", "Recipes", "Settings"):
+            self.assertIn(expected, entries)
 
 
 @unittest.skipUnless(_QT_TESTS, "needs PySide6")
