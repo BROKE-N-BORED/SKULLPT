@@ -166,7 +166,9 @@ class HeavyJobLock:
         free = free_ram_mb()
         if free is not None and free < min_free_mb:
             raise GovernorError(
-                f"only {free} MB RAM free (floor is {min_free_mb} MB) - wait, don't thrash"
+                f"only {free} MB RAM free, and this needs "
+                f"{min_free_mb} MB free to start - wait until other "
+                "programs close, then try again"
             )
 
     def recheck(self) -> None:

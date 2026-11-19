@@ -13,9 +13,9 @@ The flow, in full:
   3. The user is asked whether to restart now. Yes hands off to
      the updater (this module, run as `python -m skullpt.updater`
      in a separate process): it waits for the Bench to exit, swaps
-     the staged code over the install dir, and relaunches the
-     Bench. No leaves the verified update staged; the next launch
-     applies it (re-verified first).
+     the staged code over the install dir, clears the stage, and
+     relaunches the Bench. No leaves the verified update staged;
+     the next launch applies it (re-verified first).
   4. Only code files are replaced. The workspace, the key files,
      and .venv are never touched: they are not in the zip, and the
      swap only writes files the zip contains. A backup of the
@@ -235,7 +235,8 @@ def verify_staged(install: str | Path) -> dict:
 
 
 def drop_pending(install: str | Path) -> None:
-    """Remove the staged update (after a failed re-verify)."""
+    """Remove the staged update: after a failed re-verify, or once
+    an update has applied and the stage is spent."""
     shutil.rmtree(pending_dir(install), ignore_errors=True)
 
 
@@ -266,11 +267,28 @@ def handle_pending_at_startup(install: str | Path) -> str | None:
     """
     if not stage_is_pending(install):
         return None
+    root = Path(install)
+    # Already applied (v1.16, D1): a stage left behind by an update
+    # that already went in is not waiting. The updated marker is
+    # the proof - drop the stage and let the window open, so
+    # consume_update_marker can report the outcome. Without this
+    # check the leftover stage re-applied itself on every launch
+    # and the Bench never opened again.
+    if any(root.glob(UPDATED_MARKER_PREFIX + "*")):
+        drop_pending(install)
+        return None
     try:
-        verify_staged(install)
+        record = verify_staged(install)
     except UpdateError as exc:
         drop_pending(install)
         return str(exc)
+    if record is not None:
+        # The same proof, without the marker: the install already
+        # runs the staged version, so the swap already happened.
+        running = _version_of_init(root / "skullpt" / "__init__.py")
+        if running is not None and record.get("version") == running:
+            drop_pending(install)
+            return None
     spawn_updater(install, os.getpid())
     return "restarting"
 
@@ -435,6 +453,14 @@ def run_update(install: str | Path, wait_pid: int) -> int:
         _restore_backup(root, backup_dir)
         return fail(f"the update could not be recorded ({exc}) - the "
                     "previous version is still in place")
+    # The update has applied (v1.16, D1): the staged package is
+    # spent, so it goes now, before the relaunch. Leaving it behind
+    # made the next launch's startup check treat it as a waiting
+    # update and apply it again, forever - the Bench never opened.
+    # The stage goes even if the relaunch below fails: the update
+    # itself is in, and the user can open the new version from its
+    # desktop icon.
+    drop_pending(root)
     try:
         subprocess.Popen([str(root / "run.sh")], cwd=str(root),
                          start_new_session=True,

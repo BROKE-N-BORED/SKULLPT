@@ -19,7 +19,7 @@ Commands:
   file <workspace> <job>                 file an awaiting-review job into the Library
   search <workspace> <query> [--kind K]  search the Library before making new
   demo <workspace>                       run the bundled example end to end
-  plan <workspace> <words...> [--kind K] draft a description from plain words (planner seat)
+  plan <workspace> <words...> [--kind K] draft a description from plain words (the planner)
   critique <workspace> <job>             run the live vision critic on a job's renders
   ingest <file.glb|.obj|.stl|.fbx|.blend> <out.json>
                                          derive a description FROM an existing asset

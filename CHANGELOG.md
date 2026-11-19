@@ -1,5 +1,77 @@
 # SKULLPT — Changelog
 
+## v1.16 - 2026-11-19 - The second user-audit fix round (D1-D14)
+
+The 2026-11-18 hands-on user audit of v1.15 (1 P0, 1 P1, 12 P2)
+worked as D1-D14. The audit report is
+SKULLPT-user-audit-2026-11-18.md; the task list is
+SKULLPT-task-list-2026-11-19.md. One P0 leads: the in-app
+updater could restart-loop on its own leftovers, so this
+version must reach existing installs by download, not through
+the v1.15 updater.
+
+- D1 (P0): the updater cannot restart-loop. run_update never
+  dropped the staged .pending-update/ after a successful apply,
+  so the relaunched Bench saw the leftover stage, spawned the
+  updater again, and exited - forever. Both layers fixed: a
+  successful apply now drops the stage as part of applying
+  (after the swap and the updated marker, before the relaunch),
+  and startup checks the outcome markers first - an updated
+  marker, or a staged version equal to the running version,
+  means the update already landed: the stage is dropped and the
+  window opens. A genuinely waiting stage still applies at
+  startup exactly as before. Regression tests drive the full
+  cycle: stage, apply, then two simulated launches, both of
+  which must open the window with no updater spawned.
+- D2 (P1): a filed job opens read-only in the Render window.
+  The part editor and the Material Dial are disabled up front
+  with the reason on show ("Filed jobs live in the Library.
+  Duplicate it to change it."), the Bake button's pattern. The
+  eyedropper copy is refused the same way. Before, the editor
+  took changes and bench.act only refused when the dial closed,
+  throwing the work away.
+- D3: the Debug Report reads its engine facts from
+  workspace_state, the same source the status bar renders, so
+  the two cannot disagree; the report says hf_token=missing
+  when no token is saved.
+- D4: a governor-refused image round records its reason on the
+  batch (imagegen.generate is the choke point: images, reroll,
+  and vary all pass through it; a user cancel records nothing).
+  The Images window marks a zero-candidate failed batch
+  "(failed)" in the list and shows the reason in the pane.
+- D5: no visible "seat" wording. The Settings labels and notes,
+  the Setup checklist details, the progress line, and the chat
+  replies now say what the keys do: the Gemini key plans your
+  builds and checks the results; the Groq key fixes drafts that
+  fail a check; the fallback is "the local fallback model".
+  Internal identifiers keep the word; visible text does not.
+- D6: the Render window's render settings are disabled with no
+  job loaded, and the note says these are the workspace
+  defaults and that they change in the Settings window. With a
+  job loaded, the job's own settings and note are unchanged.
+- D7: the Engines tile lists all eight statuses, Ollama and the
+  Groq key included, in the status bar's order.
+- D8: the Library's empty state explains how entries get
+  there (build a job, file it from the Jobs window); a search
+  with no matches says so plainly.
+- D9: the Latest render tile packs its content to the top,
+  like the Engines tile, so the empty state does not stretch.
+- D10: the part editor's value fields show blank, not 0.0,
+  when no part is picked (a blankable spin box: only the
+  display blanks, the value is untouched).
+- D11: the Images batch list is newest first, by the batch's
+  created stamp, in the window and in the workspace state.
+- D12: the Settings "last render engine that worked" line
+  shows a plain date (19 Nov 2026), not an ISO timestamp.
+- D13: governor refusal wording is plain: how much RAM is
+  free, how much must stay free, waiting is the fix. "floor"
+  and "thrash" are gone from the refusal, the status bar's RAM
+  label, and the Debug Report's RAM line.
+- D14: the demo's completion line says it once: the action
+  returns "X is in the Library" and the run line adds its own
+  "demo: done - " in front, instead of the text stacking
+  "demo: done - demo done - X is in the Library".
+
 ## v1.15 - 2026-11-17 - The audit finish + ask-first updates (A20-A35)
 
 The 2026-11-16 hands-on user audit's remaining fifteen P2

@@ -321,13 +321,15 @@ def missing_setup_items(workspace: Path) -> list[dict]:
                           "fix": "pull_model"})
     if not status["gemini_key"]:
         items.append({"key": "gemini_key", "title": "Gemini key",
-                      "detail": "The planner and critic seats need your "
-                                "Gemini key. Paste it in Settings.",
+                      "detail": "Gemini plans your builds and checks "
+                                "the results. It needs your Gemini key. "
+                                "Paste it in Settings.",
                       "fix": "settings"})
     if not status["groq_key"]:
         items.append({"key": "groq_key", "title": "Groq key",
-                      "detail": "The repair seat needs your Groq key. "
-                                "Paste it in Settings.",
+                      "detail": "Groq fixes drafts that fail a check. "
+                                "It needs your Groq key. Paste it in "
+                                "Settings.",
                       "fix": "settings"})
     if not status["hf_token"]:
         items.append({"key": "hf_token", "title": "Hugging Face token",
@@ -456,7 +458,17 @@ def _workspace_state_files(workspace: Path) -> dict:
                 "job": batch.get("job"), "model": batch.get("model"),
                 "reference_file": batch.get("reference_file"),
                 "candidates": batch["candidates"],
+                # A round refused before any picture exists records
+                # its reason on the batch (v1.16, D4); the Images
+                # window shows it instead of a blank pane.
+                "error": batch.get("error"),
+                "created": batch.get("created"),
             })
+    # Newest first (v1.16, D11): the batch list used to follow the
+    # folder names, which sort by prompt words, not by time - the
+    # batch you just made belongs at the top. The created stamp is
+    # ISO text, so it sorts as it reads.
+    batches.sort(key=lambda b: b.get("created") or "", reverse=True)
     library = []
     try:
         library = Library(workspace / "library").search("")
@@ -716,7 +728,10 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
                               if o.endswith(".svg")), None)
             Library(workspace / "library").file_job(job, report_data,
                                                     thumbnail=thumb)
-            return f"demo done - {job.dir.name} is in the Library"
+            # The run's own completion line adds "demo: done - "
+            # in front of this detail (v1.16, D14): saying "done"
+            # here too stacked into "demo: done - demo done - ...".
+            return f"{job.dir.name} is in the Library"
         queue = f"heavy:{workspace}"
         run_id = _start_run("demo", job.dir.name, do_demo, queue=queue)
         position = queue_position(queue, run_id)
@@ -804,10 +819,10 @@ def act(workspace: Path, action: str, payload: dict, cancel=None) -> dict:
         used = live.last_plan_seat()
         if used.get("seat") == "fallback":
             detail += (" (drafted by the local fallback model - "
-                       "the Gemini seat could not be reached)")
+                       "Gemini could not be reached)")
         if used.get("repaired"):
-            detail += (f" (the {used.get('repair_seat')} seat repaired "
-                       "the draft before it was filed)")
+            detail += (" (a repair pass fixed the draft before "
+                       "it was filed)")
         return {"ok": True, "job": job.dir.name, "detail": detail}
     if action == "new-example":
         name = str(payload.get("example", ""))
@@ -1090,12 +1105,16 @@ def debug_report(workspace: Path, job: str | None = None) -> str:
         lines.append(f"PySide6: {PySide6.__version__}")
     except Exception:
         lines.append("PySide6: not installed")
-    engines = engine_status(workspace)
+    # The same engine facts the status bar shows (v1.16, D3): read
+    # through workspace_state, exactly where the Bench reads them,
+    # so the report and the app can never disagree about an engine.
+    state = workspace_state(workspace)
+    engines = state["engines"]
     lines.append("engines: " + ", ".join(
         f"{k}={'ready' if v else 'missing'}" for k, v in engines.items()))
     free = governor.free_ram_mb()
-    lines.append(f"free RAM: {free} MB (floor is "
-                 f"{governor.adaptive_min_free_mb()} MB)")
+    lines.append(f"free RAM: {free} MB "
+                 f"({governor.adaptive_min_free_mb()} MB must stay free)")
     if LAST_STATE_MS is not None:
         lines.append(f"last workspace_state: {LAST_STATE_MS:.1f} ms")
     try:
@@ -1106,7 +1125,6 @@ def debug_report(workspace: Path, job: str | None = None) -> str:
                 f"{stage} {ms:.0f} ms" for stage, ms in timings))
     except Exception:
         pass
-    state = workspace_state(workspace)
     lines.append(f"jobs: {len(state['jobs'])}  batches: "
                  f"{len(state['batches'])}  library: {len(state['library'])}")
     if state.get("skipped"):
@@ -1409,10 +1427,10 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None,
         answer, role, _err = live.text_with_fallback(
             seats, context + "\n\nUser: " + text, workspace=workspace,
             cancel=cancel)
-        reply = answer.strip() or "(the planner seat answered with nothing)"
+        reply = answer.strip() or "(the planner answered with nothing)"
         if role == "fallback":
             reply += (" (answered by the local fallback model - "
-                      "the Gemini seat could not be reached)")
+                      "Gemini could not be reached)")
         return {"reply": reply, "actions": actions}
     except live.SeatCancelled:
         raise
@@ -1423,7 +1441,7 @@ def chat_reply(workspace: Path, message: str, selected: str | None = None,
                              "'mesh <photo path>', 'approve', 'build', 'file', 'retry', 'status'. "
                              "For open conversation I need your Gemini key "
                              "saved in Settings - without it there's no brain "
-                             "on this seat, and I won't fake one.",
+                             "to answer with, and I won't fake one.",
                     "actions": actions}
         return {"reply": str(exc), "actions": actions}
 

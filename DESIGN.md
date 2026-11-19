@@ -21,6 +21,10 @@ colors:
   # The status bar elides (v1.15, A23): its text outgrows the bar
   # at 1366x768, and a mid-word cut with no indication read as a
   # broken label. The ellipsis is the same muted text, no new token.
+  # v1.16 reuses these tokens unchanged: a filed job's read-only
+  # editor is the same disabled grey as every other disabled
+  # control, and the part editor's blank fields are the same
+  # inputs showing nothing, not a new widget.
 
 typography:
   ui:
@@ -68,7 +72,9 @@ Dial below, v1.12 its Life page, v1.13 the material quality combo
 and the Bake PBR maps button as plain form rows and a plain
 secondary button in the Render window; v1.15 the Windows menu, the
 elided status label, and the ask-first update dialogs as plain
-menus and dialogs). The code follows this file: `skullpt/qtdesign.py`
+menus and dialogs; v1.16 the filed job's read-only editor state
+and the top-packed Latest render tile, reusing the same rows,
+buttons, and tiles). The code follows this file: `skullpt/qtdesign.py`
 holds the tokens, including the fixed amber `#f5a623`, and builds
 the one stylesheet `main()` applies. If this file and the code
 disagree, this file wins and the code is wrong.

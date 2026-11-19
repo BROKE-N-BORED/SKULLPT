@@ -380,7 +380,42 @@ def generate(workspace: str | Path, batch_dir: str | Path,
     and with the engine's live output lines in between (v1.9, N9).
     `guidance`, when given, overrides the batch's stored guidance for
     this round (and is stored, so later rounds reuse it).
+
+    A round that never gets going (the RAM governor refuses, the
+    engine or model is missing) records the reason on the batch
+    itself before the error propagates (v1.16, D4): the Images
+    window reads it back, so a batch that failed before any picture
+    exists says why instead of opening to a blank pane. A round
+    that runs clears any older recorded reason. A user cancel is
+    not a failure and records nothing.
     """
+    try:
+        batch = _generate_round(
+            workspace, batch_dir, count=count, timeout_s=timeout_s,
+            cancel=cancel, progress=progress, guidance=guidance)
+    except governor.Cancelled:
+        raise
+    except Exception as exc:
+        try:
+            record = load_batch(batch_dir)
+            record["error"] = str(exc)
+            save_batch(batch_dir, record)
+        except Exception:
+            pass
+        raise
+    if batch.get("error"):
+        batch.pop("error", None)
+        save_batch(batch_dir, batch)
+    return batch
+
+
+def _generate_round(workspace: str | Path, batch_dir: str | Path,
+                    count: int | None = None,
+                    timeout_s: int = PER_IMAGE_TIMEOUT_S,
+                    cancel=None, progress=None,
+                    guidance: dict | None = None) -> dict:
+    """One round of generation, as `generate` describes. Kept apart
+    so `generate` can record a refused round on the batch."""
     batch = load_batch(batch_dir)
     engine = find_engine()
     if engine is None:

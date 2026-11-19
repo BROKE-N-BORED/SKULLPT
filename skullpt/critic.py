@@ -60,7 +60,7 @@ class OfflineCritic:
             if "overflow" in low or "fits" in low:
                 continue  # covered by machine text_fits constraints
             fixes.append({"part": None, "issue": f"rubric item needs vision review: {item}",
-                          "fix": "configure the Gemini critic seat for a visual verdict"})
+                          "fix": "configure the Gemini critic for a visual verdict"})
         return {"critic": self.name, "vision": False, "fixes": fixes,
                 "note": "offline critic: deterministic checks only - no visual verdict claimed"}
 

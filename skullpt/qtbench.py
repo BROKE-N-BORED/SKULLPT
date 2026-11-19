@@ -1172,13 +1172,19 @@ if QT_AVAILABLE:
             renders_layout.addWidget(QtWidgets.QLabel("Latest render"))
             self._renders_tile_image = QtWidgets.QLabel("No renders yet.")
             self._renders_tile_image.setObjectName("muted")
-            self._renders_tile_image.setAlignment(QtCore.Qt.AlignCenter)
+            # Packed to the top (v1.16, D9), like the Engines tile
+            # (A2): the tile stretches to the grid row's height, and
+            # without the stretch below, the empty state's lines
+            # spread across the full height and read as broken.
+            self._renders_tile_image.setAlignment(
+                QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
             renders_layout.addWidget(self._renders_tile_image)
             self._renders_tile_text = QtWidgets.QLabel(
                 "Build a job to see its renders here.")
             self._renders_tile_text.setObjectName("muted")
             self._renders_tile_text.setWordWrap(True)
             renders_layout.addWidget(self._renders_tile_text)
+            renders_layout.addStretch(1)
 
             self._skipped_tile = QtWidgets.QFrame()
             self._skipped_tile.setObjectName("card")
@@ -1454,7 +1460,7 @@ if QT_AVAILABLE:
             free = governor.free_ram_mb()
             floor = governor.adaptive_min_free_mb()
             self._ram_label.setText(
-                f"RAM free: {free} MB (floor {floor} MB)"
+                f"RAM free: {free} MB (needs {floor} MB free)"
                 if free is not None else "RAM free: unknown")
             self._example_combo.blockSignals(True)
             self._example_combo.clear()
@@ -1519,6 +1525,10 @@ if QT_AVAILABLE:
 
         def _update_tiles(self, state: dict, row: int, col: int) -> None:
             engines = state["engines"]
+            # All eight, in the status bar's order (v1.16, D7):
+            # the tile is the "is everything set up?" glance, and
+            # it used to omit Ollama and the Groq key - the two a
+            # new user is most likely to still need.
             bits = [
                 "Blender " + ("ready" if engines["blender"] else "missing"),
                 "Image engine "
@@ -1527,6 +1537,10 @@ if QT_AVAILABLE:
                 + ("ready" if engines["image_model"] else "missing"),
                 "Gemini key "
                 + ("set" if engines["gemini_key"] else "not set"),
+                "Groq key "
+                + ("set" if engines.get("groq_key") else "not set"),
+                "Ollama "
+                + ("ready" if engines.get("ollama") else "not ready"),
                 "HF token "
                 + ("set" if engines.get("hf_token") else "not set"),
                 "Character Studio "
@@ -2058,7 +2072,7 @@ if QT_AVAILABLE:
             self._words.clear()
 
             def do_plan(cancel, report):
-                report(None, "Drafting - asking the planner seat")
+                report(None, "Drafting - asking the planner")
                 return bench_mod.act(self.workspace, "plan",
                                      {"words": words, "kind": "scene"},
                                      cancel=cancel)

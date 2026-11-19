@@ -1,4 +1,4 @@
-# SKULLPT - v1.15
+# SKULLPT - v1.16
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -102,6 +102,11 @@ the audit list (A20-A35): the engine check runs the engine instead
 of only looking for the file, the status bar shows Ollama and Groq,
 the menu bar uses real menus, the Bench gains a Demo action, and
 updates are silent, verified, and ask first (see Updates below).
+v1.16 is the second hands-on audit fix round (D1-D14): the
+updater can no longer restart-loop on its own leftovers, a filed
+job opens read-only in the Render window, a refused image batch
+says why inside the Images window, and the word "seat" is gone
+from every string a user can see.
 Glass does
 not bake - its look comes from light passing through it, not from
 surface maps - and the bake report says so.
@@ -586,6 +591,50 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.16 — the second user-audit fix round (D1-D14)
+
+- **The updater cannot restart-loop (D1).** An applied update
+  now clears its staged copy as part of applying, and startup
+  checks whether an update already landed before treating a
+  staged copy as waiting. A staged update that is genuinely
+  waiting still applies at the next start, exactly as before.
+  Note: v1.16 itself must be installed by download - the v1.15
+  updater carries the loop this fixes.
+- **A filed job opens read-only in Render (D2).** The part
+  editor and the Material Dial are disabled from the start,
+  with the reason on show: "Filed jobs live in the Library.
+  Duplicate it to change it." Before, the editor took changes
+  and only refused when the dial closed, throwing the work away.
+- **A refused image batch says why (D4).** When the RAM
+  governor (or a missing engine or model) stops a round before
+  any picture exists, the batch is marked failed in the Images
+  window and the pane shows the reason, like a failed card does.
+- **The Debug Report agrees with the status bar (D3).** Both
+  now read the same engine facts, and the report says a Hugging
+  Face token is missing when none is saved.
+- **No "seat" wording anywhere a user can see it (D5).** The
+  keys are described by what they do: the Gemini key plans your
+  builds and checks the results; the Groq key fixes drafts that
+  fail a check.
+- **Render settings with no job loaded (D6).** The controls are
+  disabled and the note says these are the workspace defaults
+  and that they change in the Settings window.
+- **The Engines tile lists all eight statuses (D7)**, Ollama
+  and the Groq key included, matching the status bar.
+- **The Library's empty state explains itself (D8):** build a
+  job, file it from the Jobs window, and it lives here.
+- **The Latest render tile packs its content to the top (D9)**,
+  so the empty state no longer stretches across the tile.
+- **The part editor's fields read blank with no part picked
+  (D10)**, not 0.0, as well as disabled.
+- **The Images batch list is newest first (D11).**
+- **The Settings window shows a plain date (D12)** for the last
+  render engine that worked, not a machine timestamp.
+- **Governor refusals speak plainly (D13):** how much RAM is
+  free, how much is needed, and that waiting is the fix - no
+  "floor", no "thrash".
+- **The demo's chat line says it once (D14).**
 
 ## v1.15 — the audit finish + ask-first updates (A20-A35)
 

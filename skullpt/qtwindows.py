@@ -335,6 +335,30 @@ def _base_part_id(expanded_id: str, desc: dict) -> str:
     return expanded_id
 
 
+class _BlankableSpinBox(QtWidgets.QDoubleSpinBox):
+    """A double spin that can show blank instead of a number
+    (v1.16, D10): with no part picked, the part editor's fields
+    read as empty, not as a part full of zeros. Only the display
+    blanks - the value itself is untouched - and filling the
+    editor for a real part unblanks it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._blank = False
+
+    def set_blank(self, blank: bool) -> None:
+        self._blank = blank
+        edit = self.lineEdit()
+        if edit is not None:
+            edit.setText("" if blank else
+                         super().textFromValue(self.value()))
+
+    def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt naming
+        if self._blank:
+            return ""
+        return super().textFromValue(value)
+
+
 class _ClickableLabel(QtWidgets.QLabel):
     """A label that opens a file when clicked."""
 
@@ -1108,6 +1132,7 @@ class RenderWindow(_GeometryWindow):
         self._bench = bench
         self._workspace = Path(workspace)
         self._job_name: str | None = None
+        self._job_filed = False
         self._desc: dict | None = None
         self._selected_part: str | None = None
         # The Material Dial (v1.11, M3): one open at a time, editing
@@ -1188,7 +1213,7 @@ class RenderWindow(_GeometryWindow):
                              ("Size (cm)", self._size_spins)):
             row = QtWidgets.QHBoxLayout()
             for _ in range(3):
-                spin = QtWidgets.QDoubleSpinBox()
+                spin = _BlankableSpinBox()
                 spin.setRange(-10000.0, 10000.0)
                 spin.setDecimals(1)
                 spin.setSingleStep(1.0)
@@ -1229,11 +1254,11 @@ class RenderWindow(_GeometryWindow):
             "16x triangles, needs more RAM")
         self._displacement_check.setVisible(False)
         form.addRow("", self._displacement_check)
-        self._bevel_spin = QtWidgets.QDoubleSpinBox()
+        self._bevel_spin = _BlankableSpinBox()
         self._bevel_spin.setRange(0.0, 100.0)
         self._bevel_spin.setDecimals(1)
         form.addRow("Bevel (cm)", self._bevel_spin)
-        self._radius_spin = QtWidgets.QDoubleSpinBox()
+        self._radius_spin = _BlankableSpinBox()
         self._radius_spin.setRange(0.0, 1000.0)
         self._radius_spin.setDecimals(1)
         form.addRow("Radius (cm)", self._radius_spin)
@@ -1302,11 +1327,11 @@ class RenderWindow(_GeometryWindow):
         self._save_render_btn.setEnabled(False)
         self._save_render_btn.clicked.connect(self._save_render_settings)
         right.addWidget(self._save_render_btn)
-        settings_note = QtWidgets.QLabel(
+        self._settings_note = QtWidgets.QLabel(
             "These are this job's own settings. Changing them does not "
             "send the job back for approval.")
-        settings_note.setWordWrap(True)
-        right.addWidget(settings_note)
+        self._settings_note.setWordWrap(True)
+        right.addWidget(self._settings_note)
         self._bake_btn = QtWidgets.QPushButton("Bake PBR maps")
         self._bake_btn.setEnabled(False)
         self._bake_btn.clicked.connect(self._bake_maps)
@@ -1356,6 +1381,7 @@ class RenderWindow(_GeometryWindow):
         self._preview_token += 1
         self._preview_label.setVisible(False)
         self._job_name = job_name
+        self._job_filed = False
         self._desc = None
         self._selected_part = None
         self._viewport.set_selected_part(None)
@@ -1375,6 +1401,10 @@ class RenderWindow(_GeometryWindow):
         try:
             job = Job(self._workspace / "jobs" / job_name)
             self._desc = job.load_description()
+            # A filed job is finished work (v1.16, D2): the editor
+            # and the dial read it but cannot change it, and say so
+            # up front (see _fill_editor).
+            self._job_filed = job.state == "filed"
         except Exception as exc:
             self._viewport.set_scene(None)
             self._legend.setText(f"Could not read this job: {exc}")
@@ -1424,10 +1454,12 @@ class RenderWindow(_GeometryWindow):
     def _clear_editor(self) -> None:
         """Nothing selected, nothing to edit (v1.14, A10): the fields
         go blank and grey instead of showing made-up defaults that
-        look like a part exists."""
+        look like a part exists. Blank means the display too
+        (v1.16, D10): the spins show nothing, not 0.0."""
         for spin in (*self._pos_spins, *self._size_spins,
                      self._bevel_spin, self._radius_spin):
             spin.setValue(0.0)
+            spin.set_blank(True)
         self._material_combo.setCurrentIndex(-1)
         self._material_combo.setEditText("")
         self._material_crumb.setVisible(False)
@@ -1557,6 +1589,9 @@ class RenderWindow(_GeometryWindow):
             self._editor_note.setText("Could not find this part to edit.")
             return
         self._set_editor_enabled(True)
+        for spin in (*self._pos_spins, *self._size_spins,
+                     self._bevel_spin, self._radius_spin):
+            spin.set_blank(False)
         if base_id != part_id:
             self._editor_note.setText(
                 f"This is a copy of {base_id}. Editing changes the "
@@ -1618,6 +1653,18 @@ class RenderWindow(_GeometryWindow):
         self._bevel_spin.setValue(float(part.get("bevel_cm") or 0.0))
         self._radius_spin.setValue(float(part.get("radius_cm") or 0.0))
         self._save_part_btn.setEnabled(True)
+        if self._job_filed:
+            # Filed jobs are read-only here, from the start (v1.16,
+            # D2): the part's values stay on show, but the editor
+            # and the dial cannot change them, and the reason sits
+            # where the user is looking - the same pattern the Bake
+            # button already uses. Before this, the editor happily
+            # took changes and only refused when the dial closed,
+            # throwing the work away.
+            self._set_editor_enabled(False)
+            self._editor_note.setText(
+                "Filed jobs live in the Library. "
+                "Duplicate it to change it.")
 
     def _save_part(self) -> None:
         if self._job_name is None or self._selected_part is None \
@@ -1678,6 +1725,14 @@ class RenderWindow(_GeometryWindow):
         """Open the Material Dial for the selected part."""
         if self._job_name is None or self._selected_part is None \
                 or self._desc is None:
+            return
+        if self._job_filed:
+            # No dial for a filed job (v1.16, D2): it would take
+            # changes it can never save. The editor note already
+            # says why; the toast repeats it where the user acted.
+            Toast.show_toast(
+                self, "Filed jobs live in the Library. "
+                      "Duplicate it to change it.")
             return
         if self._dial is not None:
             self._dial.raise_()
@@ -1773,6 +1828,13 @@ class RenderWindow(_GeometryWindow):
         the source part instead."""
         if self._job_name is None or self._desc is None:
             return
+        if self._job_filed:
+            # Copying a material onto a filed job is an edit too
+            # (v1.16, D2): refuse up front, with the reason.
+            Toast.show_toast(
+                self, "Filed jobs live in the Library. "
+                      "Duplicate it to change it.")
+            return
         source = _base_part_id(source_id, self._desc)
         if self._selected_part is None or _base_part_id(
                 self._selected_part, self._desc) == source:
@@ -1820,12 +1882,22 @@ class RenderWindow(_GeometryWindow):
             return
         self._preview_label.setPixmap(pixmap)
 
+    def _set_render_controls_enabled(self, enabled: bool) -> None:
+        """The render settings inputs, on or off together."""
+        for widget in (self._engine_combo, self._res_spin,
+                       self._samples_spin, self._denoise_check,
+                       self._tier_combo, self._save_render_btn):
+            widget.setEnabled(enabled)
+
     def _load_render_settings(self) -> None:
         """Fill the render controls with this job's effective settings
         (its own block, else the workspace defaults). With no job
         loaded the controls show the workspace defaults, not the
-        first item in each list (v1.14, A12) - and the buttons stay
-        disabled, because there is nothing to save them to."""
+        first item in each list (v1.14, A12) - and the controls are
+        disabled, with a note saying these are the workspace
+        defaults and where they change (v1.16, D6): enabled controls
+        whose changes silently went nowhere misled exactly the way
+        the old "this job's own settings" note did."""
         resolved = settings_mod.resolve_render_settings(
             self._workspace, self._desc or {})
         index = self._engine_combo.findData(resolved["engine"])
@@ -1835,7 +1907,16 @@ class RenderWindow(_GeometryWindow):
         self._denoise_check.setChecked(resolved["denoise"])
         tier_index = self._tier_combo.findData(resolved["tier"])
         self._tier_combo.setCurrentIndex(max(0, tier_index))
-        self._save_render_btn.setEnabled(self._job_name is not None)
+        has_job = self._job_name is not None
+        self._set_render_controls_enabled(has_job)
+        if has_job:
+            self._settings_note.setText(
+                "These are this job's own settings. Changing them "
+                "does not send the job back for approval.")
+        else:
+            self._settings_note.setText(
+                "These are the workspace defaults. To change them, "
+                "open the Settings window.")
         self._update_bake_button()
 
     def _update_bake_button(self) -> None:
@@ -2411,14 +2492,25 @@ class ImagesWindow(_GeometryWindow):
         current = self._batch_dir.name if self._batch_dir else None
         self._batch_list.clear()
         state = bench_mod.workspace_state(self._workspace)
-        for batch in state.get("batches", []):
+        # Newest first (v1.16, D11): the batch you just made sits at
+        # the top, every time - not wherever its folder name sorts.
+        batches = sorted(state.get("batches", []),
+                         key=lambda b: b.get("created") or "",
+                         reverse=True)
+        for batch in batches:
             # State dicts carry "slug", not "name" (v1.9, N1); kept /
             # pending come from the candidates, not stored counts.
             candidates = batch.get("candidates", [])
             kept = sum(1 for c in candidates if c.get("status") == "kept")
             pending = sum(1 for c in candidates if c.get("status") == "pending")
-            item = QtWidgets.QListWidgetItem(
-                f"{batch['slug']} ({kept} kept, {pending} waiting)")
+            if batch.get("error") and not candidates:
+                # A batch refused before any picture exists says so
+                # in the list (v1.16, D4), not just in an old chat
+                # message.
+                text = f"{batch['slug']} (failed)"
+            else:
+                text = f"{batch['slug']} ({kept} kept, {pending} waiting)"
+            item = QtWidgets.QListWidgetItem(text)
             item.setData(QtCore.Qt.UserRole, batch["slug"])
             self._batch_list.addItem(item)
         if current is not None:
@@ -2474,6 +2566,7 @@ class ImagesWindow(_GeometryWindow):
         self._reroll_btn.setEnabled(True)
         self._clear_grid()
         row = col = 0
+        shown = 0
         for candidate in batch.get("candidates", []):
             if candidate.get("status") == "rejected":
                 continue
@@ -2481,10 +2574,26 @@ class ImagesWindow(_GeometryWindow):
             card.decided.connect(self._decide)
             card.vary.connect(self._vary)
             self._grid.addWidget(card, row, col)
+            shown += 1
             col += 1
             if col >= 3:
                 col = 0
                 row += 1
+        if shown == 0:
+            # Never a blank pane (v1.16, D4): a batch refused before
+            # any picture exists shows the recorded reason, in the
+            # same plain words a failed card uses. A batch with
+            # nothing to show and no recorded failure says that too.
+            note = QtWidgets.QLabel()
+            note.setObjectName("muted")
+            note.setWordWrap(True)
+            if batch.get("error"):
+                note.setText(
+                    "This batch failed before any picture was made.\n"
+                    f"Why: {imagegen.plain_error(batch['error'])}")
+            else:
+                note.setText("No pictures to show in this batch.")
+            self._grid.addWidget(note, 0, 0)
         # Pin the rows to the top (v1.15, A33): the stretch row after
         # the last card row takes the slack, so a short batch does
         # not spread its cards down the window.
@@ -2591,6 +2700,19 @@ class LibraryWindow(_GeometryWindow):
         self._open_btn.setEnabled(False)
         hits = Library(self._workspace / "library").search(
             self._search.text())
+        if not hits:
+            # An empty Library says how entries get here (v1.16,
+            # D8), the way the Recipes window already explains
+            # itself - "Pick an entry" is a dead end when there are
+            # no entries and no hint how there could be.
+            if self._search.text().strip():
+                self._detail.setText("No entries match your search.")
+            else:
+                self._detail.setText(
+                    "Nothing filed yet. Build a job, then file it "
+                    "from the Jobs window, and it will live here.")
+        elif current is None:
+            self._detail.setText("Pick an entry to see it here.")
         for hit in hits:
             item = QtWidgets.QListWidgetItem(
                 f"{hit.get('name', hit.get('slug', ''))}  [{hit.get('kind', '')}]")
@@ -2806,8 +2928,8 @@ _ENGINE_LABELS = {
     "blender": "Blender (builds the 3D files)",
     "image_engine": "Image engine (draws reference pictures)",
     "image_model": "Image model (the picture model file)",
-    "gemini_key": "Gemini key (planner and critic seats)",
-    "groq_key": "Groq key (repair seat)",
+    "gemini_key": "Gemini key (plans and checks your builds)",
+    "groq_key": "Groq key (fixes drafts that fail a check)",
     "ollama": "Ollama (local model, no key needed)",
     "hf_token": "Hugging Face token (photo to mesh)",
     "character_studio": "Character Studio (MPFB2 and its skins)",
@@ -2990,16 +3112,16 @@ class SettingsWindow(_GeometryWindow):
 
         self._add_key_section(
             main, "gemini", "Gemini key",
-            "The Gemini key runs the planner and critic seats. Paste "
-            "the key you already have. It is saved in your workspace "
+            "The Gemini key plans your builds and checks the results. "
+            "Paste the key you already have. It is saved in your workspace "
             "only, in a file the repo never sees. SKULLPT checks the "
             "key works before saving it, and never shows it back.",
             "Paste your Gemini key",
             keycheck.GEMINI_KEY_PAGE)
         self._add_key_section(
             main, "groq", "Groq key",
-            "The Groq key runs the repair seat, which fixes drafts "
-            "that fail validation. Paste the key you already have. "
+            "The Groq key fixes drafts that fail a check. "
+            "Paste the key you already have. "
             "It is saved in your workspace only, in a file the repo "
             "never sees. SKULLPT checks the key works before saving "
             "it, and never shows it back.",
@@ -3128,10 +3250,21 @@ class SettingsWindow(_GeometryWindow):
             self._key_status_text("groq", status))
         last = settings_mod.last_render_engine(self._workspace)
         if last.get("engine"):
+            # A plain date, like the Library shows (v1.16, D12):
+            # the stored stamp is ISO machine text
+            # ("2026-11-19T03:42:23+0000"). An unparseable stamp
+            # shows as-is.
+            at = last.get("at")
+            if at:
+                try:
+                    at = datetime.datetime.fromisoformat(
+                        str(at)).strftime("%d %b %Y")
+                except ValueError:
+                    at = str(at)
             self._last_engine_label.setText(
                 "Last render engine that worked here: "
                 f"{last['engine']}"
-                + (f" ({last['at']})" if last.get("at") else ""))
+                + (f" ({at})" if at else ""))
         else:
             self._last_engine_label.setText(
                 "No render has run yet, so the working engine is not known.")
