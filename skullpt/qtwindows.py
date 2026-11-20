@@ -808,7 +808,7 @@ class DialFace(QtWidgets.QWidget):
         if page == "Saved" and not self._items():
             self._paint_center_text(
                 painter, "No presets yet",
-                "Save one with the Save button.")
+                "Save one with the Save preset button.")
             return
         if page == "Style":
             style = materials_mod.FAMILIES[self._spec["family"]][
@@ -897,7 +897,7 @@ class DialFace(QtWidgets.QWidget):
 
 class MaterialDial(QtWidgets.QWidget):
     """The Material Dial popup (v1.11, M3): the painted face, a
-    search box, and Surprise / Save / Close. Draggable by its
+    search box, and Surprise / Save preset / Close. Draggable by its
     header, minimises to a bar, closes on Close, Escape, or a
     click outside. Close applies the working spec - but only when
     it actually changed (the Render window decides that)."""
@@ -990,7 +990,11 @@ class MaterialDial(QtWidgets.QWidget):
         surprise_btn = QtWidgets.QPushButton("Surprise")
         surprise_btn.clicked.connect(self._surprise)
         buttons.addWidget(surprise_btn)
-        save_btn = QtWidgets.QPushButton("Save")
+        # The button says what it does (v1.17, E2): it saves a
+        # preset for later. Applying the material to the part is
+        # Close - a bare "Save" read like it did that, and trapped
+        # first-timers into work that was never applied.
+        save_btn = QtWidgets.QPushButton("Save preset")
         save_btn.clicked.connect(self._show_preset_row)
         buttons.addWidget(save_btn)
         close2_btn = QtWidgets.QPushButton("Close")
@@ -2827,9 +2831,7 @@ class RecipesWindow(_GeometryWindow):
         middle.addWidget(self._list, 2)
 
         detail = QtWidgets.QVBoxLayout()
-        self._detail = QtWidgets.QLabel(
-            "No recipes yet. File a built job into the Library and its "
-            "recipe graduates here.")
+        self._detail = QtWidgets.QLabel("Pick a recipe to see it here.")
         self._detail.setWordWrap(True)
         detail.addWidget(self._detail)
         self._name = QtWidgets.QLineEdit()
@@ -2866,6 +2868,12 @@ class RecipesWindow(_GeometryWindow):
             self._detail.setText(
                 "No recipes yet. File a built job into the Library and "
                 "its recipe graduates here.")
+        elif current is None:
+            # Recipes exist but none is picked (v1.17, E3): ask for
+            # a pick, the Library window's pattern. The pane used to
+            # keep its startup "No recipes yet" text here, arguing
+            # with the list right next to it.
+            self._detail.setText("Pick a recipe to see it here.")
         if current is not None:
             for row in range(self._list.count()):
                 item = self._list.item(row)
@@ -3710,9 +3718,9 @@ Moss only grows on wood, stone and ground; rust only on metal.
 Simple mode shows only the knobs that matter for each material;
 Advanced shows everything. The preview at the bottom re-renders
 when a knob settles. Surprise rolls a random material and
-records its seed, so it can be made again exactly. Save stores the
-material as a preset for later. Close applies the material to the
-part. A part with no material shows "No material here - open the
+records its seed, so it can be made again exactly. Save preset
+stores the material as a preset for later. Close applies the
+material to the part. A part with no material shows "No material here - open the
 dial to start." Ctrl+click a part to copy its material onto the
 selected part.</p>
 <h3>Material quality</h3>

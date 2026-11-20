@@ -1,4 +1,4 @@
-# SKULLPT - v1.16
+# SKULLPT - v1.17
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -107,6 +107,11 @@ updater can no longer restart-loop on its own leftovers, a filed
 job opens read-only in the Render window, a refused image batch
 says why inside the Images window, and the word "seat" is gone
 from every string a user can see.
+v1.17 is the third hands-on audit fix round (E1-E4), all polish:
+an update restart reopens the workspace you were in, the Material
+Dial's Save button says "Save preset", the Recipes pane no longer
+claims there are no recipes while listing one, and a failed
+update check speaks in plain words.
 Glass does
 not bake - its look comes from light passing through it, not from
 surface maps - and the bake report says so.
@@ -592,6 +597,23 @@ there). The first real mesh happens on a machine with a token.
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
 
+## v1.17 - the third user-audit fix round (E1-E4)
+
+- **An update restart reopens your workspace (E1).** The
+  workspace in use rides through the update hand-off, so the
+  relaunched Bench opens where you were working and the
+  "Updated to vX" note lands in that workspace's chat. Before,
+  the relaunch opened the default workspace and told that one.
+- **The Dial's Save button says "Save preset" (E2).** It saves
+  a preset for later; closing the Dial is what applies the
+  material to the part. The button now says so.
+- **The Recipes pane agrees with its list (E3).** With recipes
+  listed but none picked, the pane asks you to pick one. "No
+  recipes yet" shows only when the list is truly empty.
+- **A failed update check speaks plainly (E4).** "Could not
+  reach GitHub - check your connection and try again", with no
+  raw error text, everywhere the failure can surface.
+
 ## v1.16 — the second user-audit fix round (D1-D14)
 
 - **The updater cannot restart-loop (D1).** An applied update
@@ -786,7 +808,7 @@ there). The first real mesh happens on a machine with a token.
   with its gauge in the centre. Simple shows the four simple knobs,
   Advanced shows them all (remembered per workspace). Search finds
   styles by name; Surprise rolls a random material and records its
-  seed; Save stores a preset. Knob changes recolour the part at
+  seed; Save preset stores the material for later. Knob changes recolour the part at
   once; on release, a small Blender preview renders in the
   background (cached by spec hash) and shows in the part editor.
   Number keys 1-9 pick pages. The dial is draggable and minimises

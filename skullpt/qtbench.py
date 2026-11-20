@@ -1836,9 +1836,12 @@ if QT_AVAILABLE:
             silent = getattr(self, "_update_check_silent", True)
             if isinstance(result, Exception):
                 if not silent:
+                    # Plain words only (v1.17, E4): the raw error
+                    # text stays out of the dialog.
                     QtWidgets.QMessageBox.warning(
                         self, "Could not check for updates",
-                        f"could not reach GitHub ({result})")
+                        "could not reach GitHub - check your "
+                        "connection and try again")
                 return
             if result.get("error"):
                 if not silent:
@@ -1896,7 +1899,8 @@ if QT_AVAILABLE:
             self._update_progress.show()
             call = _BackgroundCall(
                 lambda: updater_mod.download_and_stage(
-                    result, updater_mod.install_dir()))
+                    result, updater_mod.install_dir(),
+                    workspace=self.workspace))
             call.finished.connect(self._on_update_staged)
             self._update_pull_call = call
             call.start()
@@ -1941,7 +1945,7 @@ if QT_AVAILABLE:
             from . import updater as updater_mod
 
             updater_mod.spawn_updater(updater_mod.install_dir(),
-                                      os.getpid())
+                                      os.getpid(), self.workspace)
             QtWidgets.QApplication.instance().quit()
 
         def _announce_update_outcome(self) -> None:
@@ -2285,7 +2289,7 @@ if QT_AVAILABLE:
 
         pending_error = None
         pending_result = updater_mod.handle_pending_at_startup(
-            updater_mod.install_dir())
+            updater_mod.install_dir(), workspace)
         if pending_result == "restarting":
             return 0
         if pending_result is not None:

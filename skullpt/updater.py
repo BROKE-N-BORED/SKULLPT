@@ -16,6 +16,12 @@ The flow, in full:
      the staged code over the install dir, clears the stage, and
      relaunches the Bench. No leaves the verified update staged;
      the next launch applies it (re-verified first).
+     The workspace in use rides along (v1.17, E1): it is recorded
+     in the staged record when the update is pulled, passed to the
+     updater on both hand-offs, written into the updated marker,
+     and given to the relaunch (`run.sh bench <workspace>`), so
+     the Bench reopens where the user was working and the
+     "Updated to vX" note is read by that workspace's Bench.
   4. Only code files are replaced. The workspace, the key files,
      and .venv are never touched: they are not in the zip, and the
      swap only writes files the zip contains. A backup of the
@@ -140,13 +146,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download_and_stage(result: dict, install: str | Path) -> dict:
+def download_and_stage(result: dict, install: str | Path,
+                       workspace: str | Path | None = None) -> dict:
     """Download the release zip + sidecar from a check_for_update
     result, verify the checksum, and stage them in the pending dir.
     Returns {"version", "zip", "sha256"} on success. Raises
     UpdateError (plain words) on any refusal: no zip asset, no
     sidecar, a failed download, or a checksum mismatch. A failed
-    stage leaves no partial files behind."""
+    stage leaves no partial files behind. The workspace in use,
+    when given, is recorded in the pending record (v1.17, E1) so
+    the eventual relaunch can reopen it."""
     version = result.get("latest")
     zip_url = result.get("zip_url")
     sha_url = result.get("sha256_url")
@@ -178,9 +187,12 @@ def download_and_stage(result: dict, install: str | Path) -> dict:
             raise UpdateError(
                 "the download's checksum does not match the release - "
                 "it may be damaged. Nothing was installed.")
+        record = {"version": version, "zip_name": zip_name,
+                  "zip_sha256": actual}
+        if workspace:
+            record["workspace"] = str(workspace)
         (pending / PENDING_FILE).write_text(json.dumps(
-            {"version": version, "zip_name": zip_name,
-             "zip_sha256": actual}, indent=2) + "\n", encoding="utf-8")
+            record, indent=2) + "\n", encoding="utf-8")
     except UpdateError:
         for path in (zip_path, sha_path, pending / PENDING_FILE):
             path.unlink(missing_ok=True)
@@ -242,19 +254,27 @@ def drop_pending(install: str | Path) -> None:
 
 # ------------------------------------------------------------------- handoff
 
-def spawn_updater(install: str | Path, wait_pid: int) -> None:
+def spawn_updater(install: str | Path, wait_pid: int,
+                  workspace: str | Path | None = None) -> None:
     """Start the updater as a detached process. It waits for
     wait_pid (the Bench) to exit, swaps the staged code in, and
-    relaunches the Bench. The caller quits right after this."""
+    relaunches the Bench. The caller quits right after this. The
+    workspace in use, when given, is passed through (v1.17, E1)
+    so the relaunch reopens it."""
+    argv = [sys.executable, "-m", "skullpt.updater",
+            "--wait-pid", str(wait_pid),
+            "--install-dir", str(install)]
+    if workspace:
+        argv += ["--workspace", str(workspace)]
     subprocess.Popen(
-        [sys.executable, "-m", "skullpt.updater",
-         "--wait-pid", str(wait_pid),
-         "--install-dir", str(install)],
+        argv,
         cwd=str(install), start_new_session=True,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def handle_pending_at_startup(install: str | Path) -> str | None:
+def handle_pending_at_startup(install: str | Path,
+                              workspace: str | Path | None = None
+                              ) -> str | None:
     """Apply a waiting update at startup, before the main window
     opens (v1.15): the user said No to restarting last time, so
     the staged update applies on this launch instead.
@@ -264,6 +284,11 @@ def handle_pending_at_startup(install: str | Path) -> str | None:
     new version), an error string when the staged update failed
     re-verification (it was dropped; the caller tells the user
     after the window opens), or None when nothing was pending.
+
+    The workspace hand-off (v1.17, E1): the launching Bench's own
+    workspace wins when given; otherwise the workspace recorded
+    in the staged record is used. Either way the updater relaunches
+    the Bench on that workspace, not the default one.
     """
     if not stage_is_pending(install):
         return None
@@ -289,7 +314,11 @@ def handle_pending_at_startup(install: str | Path) -> str | None:
         if running is not None and record.get("version") == running:
             drop_pending(install)
             return None
-    spawn_updater(install, os.getpid())
+    carried = workspace or (record or {}).get("workspace")
+    if carried:
+        spawn_updater(install, os.getpid(), carried)
+    else:
+        spawn_updater(install, os.getpid())
     return "restarting"
 
 
@@ -358,14 +387,18 @@ def _zip_members(zip_path: Path) -> list[str]:
         return out
 
 
-def run_update(install: str | Path, wait_pid: int) -> int:
+def run_update(install: str | Path, wait_pid: int,
+               workspace: str | Path | None = None) -> int:
     """Swap the staged update over the install dir (the updater
     process). Waits for wait_pid to exit, re-verifies the staged
     zip, backs up the files it is about to replace, copies the
     staged files over, writes the updated marker, and relaunches
     the Bench. On any failure it restores the backup, writes the
     failed marker with the reason, and returns 1 - the old install
-    keeps working."""
+    keeps working. The workspace in use (v1.17, E1) comes from the
+    caller when given, else from the staged record; it is written
+    into the updated marker and passed to the relaunch, so the
+    Bench reopens the workspace the user was working in."""
     root = Path(install)
     failed_marker = root / FAILED_MARKER
 
@@ -388,6 +421,7 @@ def run_update(install: str | Path, wait_pid: int) -> int:
     if record is None:
         return fail("the staged update is gone - nothing was applied")
     version = record["version"]
+    carried = str(workspace) if workspace else record.get("workspace")
     zip_path = pending_dir(root) / record["zip_name"]
     old_version = _version_of_init(
         root / "skullpt" / "__init__.py") or "unknown"
@@ -445,10 +479,12 @@ def run_update(install: str | Path, wait_pid: int) -> int:
         _restore_backup(root, backup_dir)
         return fail(f"the update could not be applied ({exc}) - the "
                     "previous version is still in place")
+    marker_info = {"version": version, "backup": str(backup_dir)}
+    if carried:
+        marker_info["workspace"] = str(carried)
     try:
         updated_marker.write_text(json.dumps(
-            {"version": version, "backup": str(backup_dir)},
-            indent=2) + "\n", encoding="utf-8")
+            marker_info, indent=2) + "\n", encoding="utf-8")
     except OSError as exc:
         _restore_backup(root, backup_dir)
         return fail(f"the update could not be recorded ({exc}) - the "
@@ -461,8 +497,15 @@ def run_update(install: str | Path, wait_pid: int) -> int:
     # itself is in, and the user can open the new version from its
     # desktop icon.
     drop_pending(root)
+    # The relaunch reopens the workspace the user was in (v1.17,
+    # E1): run.sh passes its arguments to the CLI, and the bench
+    # command takes the workspace. Without one, plain run.sh
+    # opens the default workspace, as before.
+    relaunch = [str(root / "run.sh")]
+    if carried:
+        relaunch += ["bench", str(carried)]
     try:
-        subprocess.Popen([str(root / "run.sh")], cwd=str(root),
+        subprocess.Popen(relaunch, cwd=str(root),
                          start_new_session=True,
                          stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
@@ -499,8 +542,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="skullpt.updater")
     parser.add_argument("--wait-pid", type=int, required=True)
     parser.add_argument("--install-dir", required=True)
+    parser.add_argument("--workspace", default=None)
     args = parser.parse_args(argv)
-    return run_update(args.install_dir, args.wait_pid)
+    return run_update(args.install_dir, args.wait_pid, args.workspace)
 
 
 if __name__ == "__main__":

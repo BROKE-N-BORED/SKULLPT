@@ -1,5 +1,48 @@
 # SKULLPT — Changelog
 
+## v1.17 - 2026-11-19 - The third user-audit fix round (E1-E4)
+
+The 2026-11-19 hands-on user audit of v1.16 (0 P0, 0 P1, 4 P2)
+worked as E1-E4. The audit report is
+SKULLPT-user-audit-2026-11-19.md; the task list is
+SKULLPT-task-list-2026-11-19-2.md. All 14 D-fixes from the last
+round were verified holding as a user; this round is the four
+small things the audit found in the fixed app.
+
+- E1: an update restart reopens the workspace you were in. The
+  updater relaunched with plain run.sh and no workspace, so the
+  Bench came back on the default workspace and the "Updated to
+  vX" note was posted in that workspace's chat. The workspace in
+  use is now carried through the whole hand-off: the Bench
+  records it in the staged update when the update is pulled,
+  passes it to the updater on both the restart-now hand-off and
+  the deferred startup hand-off (the launching Bench's own
+  workspace wins, the staged record is the fallback), the
+  updater writes it into the updated marker, and the relaunch
+  runs `run.sh bench <workspace>`. The note is then read by the
+  Bench that opens on that workspace, so it lands in the right
+  chat. D1's guarantees are untouched: a successful apply still
+  drops the stage, no launch loops, the deferred path still
+  works, and a stage recorded by an older version (no workspace
+  in it) relaunches exactly as before.
+- E2: the Material Dial's Save button is renamed "Save preset".
+  It always saved a preset for later; applying the material to
+  the part is Close, and a bare "Save" read like it did that.
+  The Help text, the dial's Saved-page hint, and the README now
+  name the button the same way. The behaviour did not change.
+- E3: the Recipes window's detail pane no longer says "No
+  recipes yet" while recipes are listed. With recipes in the
+  list but none picked, the pane says "Pick a recipe to see it
+  here." (the Library window's pattern); "No recipes yet" shows
+  only when the list is truly empty.
+- E4: a failed update check is plain words everywhere. The
+  check's own error string no longer carries the raw urlopen
+  exception text ("<urlopen error [Errno 111] Connection
+  refused>"): it reads "could not reach GitHub - check your
+  connection and try again". The manual Check for updates
+  dialog's exception path uses the same plain sentence instead
+  of formatting the exception into the message.
+
 ## v1.16 - 2026-11-19 - The second user-audit fix round (D1-D14)
 
 The 2026-11-18 hands-on user audit of v1.15 (1 P0, 1 P1, 12 P2)

@@ -25,6 +25,9 @@ colors:
   # editor is the same disabled grey as every other disabled
   # control, and the part editor's blank fields are the same
   # inputs showing nothing, not a new widget.
+  # v1.17 reuses these tokens unchanged too: its changes are a
+  # carried workspace, plainer words, and one renamed button -
+  # behaviour and copy, not new chrome.
 
 typography:
   ui:
@@ -74,7 +77,9 @@ secondary button in the Render window; v1.15 the Windows menu, the
 elided status label, and the ask-first update dialogs as plain
 menus and dialogs; v1.16 the filed job's read-only editor state
 and the top-packed Latest render tile, reusing the same rows,
-buttons, and tiles). The code follows this file: `skullpt/qtdesign.py`
+buttons, and tiles; v1.17 the Dial's Save button renamed to Save
+preset, the same button in the same row). The code follows this
+file: `skullpt/qtdesign.py`
 holds the tokens, including the fixed amber `#f5a623`, and builds
 the one stylesheet `main()` applies. If this file and the code
 disagree, this file wins and the code is wrong.
@@ -297,7 +302,7 @@ Tooltips are canvas-soft with a hairline border.
   (style dots in the style's own base colour) or knobs (label plus
   current value). Centre: the active knob with its circular gauge
   and value, or the picked swatch. Below the disc: real buttons
-  (Advanced toggle, Surprise, Save, Close), not painted ones, so
+  (Advanced toggle, Surprise, Save preset, Close), not painted ones, so
   keyboard users can reach them. Draggable by its header,
   minimises to a bar. TENSION, recorded honestly: the BNB UI design
   library's pie-menu entry (016) caps pie menus at eight slices,

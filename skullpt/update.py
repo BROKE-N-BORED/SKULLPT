@@ -50,11 +50,14 @@ def check_for_update(current_version: str) -> dict:
                 "update_available": False, "url": RELEASE_PAGE_URL,
                 "zip_url": None, "sha256_url": None,
                 "error": f"GitHub answered with an error (HTTP {exc.code})"}
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        # Plain words only (v1.17, E4): the raw error text (the
+        # urlopen exception, its errno) never reaches a surface.
         return {"current": current_version, "latest": None,
                 "update_available": False, "url": RELEASE_PAGE_URL,
                 "zip_url": None, "sha256_url": None,
-                "error": f"could not reach GitHub ({exc})"}
+                "error": "could not reach GitHub - check your "
+                         "connection and try again"}
     tag = str(data.get("tag_name") or "")
     latest = tag.lstrip("vV") or None
     update_available = bool(

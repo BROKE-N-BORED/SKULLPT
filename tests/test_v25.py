@@ -100,10 +100,10 @@ class VersionTests(unittest.TestCase):
     def test_version_is_115(self):
         from skullpt import __version__
 
-        self.assertEqual(__version__, "1.16")
-        self.assertIn("v1.16", (ROOT / "README.md").read_text())
-        self.assertIn("## v1.16", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.16", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.17")
+        self.assertIn("v1.17", (ROOT / "README.md").read_text())
+        self.assertIn("## v1.17", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.17", (ROOT / "DESIGN.md").read_text())
 
 
 # ----------------------------------------------------------------- A20
@@ -1431,8 +1431,10 @@ class UpdaterBenchTests(_QtCase):
                 mock.patch.object(QtWidgets.QApplication,
                                   "quit") as quit_mock:
             window._ask_restart("9.9")
+        # The workspace rides along (v1.17, E1): the relaunch
+        # reopens the workspace the Bench was running.
         spawn.assert_called_once_with(updater_mod.install_dir(),
-                                      os.getpid())
+                                      os.getpid(), window.workspace)
         quit_mock.assert_called_once()
 
     def test_no_leaves_the_update_waiting(self):
@@ -1532,7 +1534,8 @@ class UpdaterRoundTripTests(_QtCase):
             window._maybe_check_update_silent()
             self.assertTrue(self._wait_until(
                 lambda: spawn.call_count == 1))
-        spawn.assert_called_once_with(self.install, os.getpid())
+        spawn.assert_called_once_with(self.install, os.getpid(),
+                                      window.workspace)
         quit_mock.assert_called_once()
         # The staged update is verified and waiting.
         self.assertTrue(updater_mod.stage_is_pending(self.install))
@@ -1582,7 +1585,11 @@ class UpdaterRoundTripTests(_QtCase):
                                "spawn_updater") as spawn2:
             result = updater_mod.handle_pending_at_startup(self.install)
         self.assertEqual(result, "restarting")
-        spawn2.assert_called_once_with(self.install, os.getpid())
+        # The staged record carries the workspace from the pull
+        # (v1.17, E1), so the deferred hand-off passes it on as
+        # the string the record holds.
+        spawn2.assert_called_once_with(self.install, os.getpid(),
+                                       str(window.workspace))
         # Simulate the updater after the Bench exits.
         self.assertEqual(updater_mod.run_update(self.install, _dead_pid()), 0)
         self.assertIn('__version__ = "9.9"',
