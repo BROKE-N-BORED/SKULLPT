@@ -52,10 +52,10 @@ class VersionTests(unittest.TestCase):
     def test_version_is_117(self):
         from skullpt import __version__
 
-        self.assertEqual(__version__, "1.17")
-        self.assertIn("v1.17", (ROOT / "README.md").read_text())
-        self.assertIn("## v1.17", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.17", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.18")
+        self.assertIn("v1.18", (ROOT / "README.md").read_text())
+        self.assertIn("## v1.18", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.18", (ROOT / "DESIGN.md").read_text())
 
     def test_changelog_names_the_round(self):
         text = (ROOT / "CHANGELOG.md").read_text()

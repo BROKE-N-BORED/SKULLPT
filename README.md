@@ -1,4 +1,4 @@
-# SKULLPT - v1.17
+# SKULLPT - v1.18
 
 A standalone design & asset workshop. Plain language in, real files out:
 detailed UI components, websites, graphics, characters, and small 3D scenes,
@@ -112,6 +112,11 @@ an update restart reopens the workspace you were in, the Material
 Dial's Save button says "Save preset", the Recipes pane no longer
 claims there are no recipes while listing one, and a failed
 update check speaks in plain words.
+v1.18 adds the Blender add-on manager (F1-F6): a Blender Add-ons
+window that installs an add-on from a downloaded .zip or .py in a
+couple of clicks, and lists, switches, updates, and removes the
+add-ons you installed, with Blender itself doing the work (see
+Blender add-ons below).
 Glass does
 not bake - its look comes from light passing through it, not from
 surface maps - and the bake report says so.
@@ -433,7 +438,7 @@ menu (or the `skullpt` command). The terminal way, for reference:
 
     python3 -m skullpt bench ~/design-shell-workspace
 
-The Bench is nine windows where the workshop lives: a real Linux
+The Bench is ten windows where the workshop lives: a real Linux
 desktop app (Qt/PySide6), not a web page, no browser involved. (The
 old web Bench was removed in v1.9.) Needs PySide6; `install.sh`
 installs it into the shell's private `.venv`, and the Bench says
@@ -462,6 +467,9 @@ plainly if it is missing (re-run the installer).
 - **Library** - filed jobs, searchable, openable as new jobs.
 - **Recipes** - recipe manifests: apply one to draft a job, or
   graduate an approved job into a recipe.
+- **Blender Add-ons** - the add-ons you installed into Blender:
+  install one from a downloaded file, switch it on or off,
+  update it, or remove it (v1.18, see Blender add-ons below).
 - **Settings** - keys and the Hugging Face token (checked against
   Hugging Face before it is saved, v1.10), render defaults,
   workspace backup, update check.
@@ -596,6 +604,41 @@ there). The first real mesh happens on a machine with a token.
   Bench cannot read are listed with their reasons ("Couldn't read")
   instead of silently vanishing. The unauthorized skull example is
   gated in code — the Bench never offers it.
+
+## v1.18 - the Blender add-on manager (F1-F6)
+
+- **Install in a couple of clicks (F2).** The Blender Add-ons
+  window (Windows menu) has one Install button: pick the .zip or
+  .py file you downloaded and Blender's own installer puts the
+  add-on in, switched on, with Blender's preferences saved, so
+  it is still on next time Blender opens. Picking a newer file
+  for an add-on (its Update button, or Install again) installs
+  it over the old one.
+- **The list (F1).** One headless Blender query lists the
+  add-ons you installed - name, version, author, and what it
+  does - and which are on. Blender names its own add-ons
+  folder, so a portable Blender and a system Blender take the
+  same code path. The add-ons that ship inside Blender are not
+  listed; they are not yours to manage.
+- **Switch and remove (F3).** Each row has an On tick (Blender's
+  own enable and disable, preferences saved) and a Remove
+  button (it asks once, then Blender's remove deletes the
+  files; the removal is checked afterwards, and if a Blender
+  ever lacks the remove command SKULLPT deletes the add-on's
+  own files itself).
+- **The edges speak plainly (F5).** A zip holding an extension
+  package (blender_manifest.toml) is named as one before
+  anything runs: this version installs classic add-ons, and
+  extension support is a later addition. A zip with no add-on
+  in it, or one packaged with its files at the top level, is
+  refused the same way, and a failed install says what went
+  wrong. The window and the Help carry the one honest note:
+  switching an add-on on runs its code, like in Blender
+  itself, so only install add-ons from places you trust.
+- **Proof (F6).** The test suite runs a real cycle against a
+  real Blender in a throwaway config: a test add-on is
+  installed, listed, switched off and on, updated from 1.0.0
+  to 2.0.0, and removed, with its files proven gone.
 
 ## v1.17 - the third user-audit fix round (E1-E4)
 
@@ -1187,7 +1230,8 @@ model are installed.
                    builder, viewer, ingest, intake, graduate, unreal,
                    imagegen, picker, settings, bench, qtbench, qtwindows,
                    qtdesign, cloudmesh, blender_character, tokenfile,
-                   keycheck, ollama, update, subproc, backup, applog, cli)
+                   keycheck, ollama, update, subproc, backup, applog,
+                   addons, cli)
     designshell/   compatibility shim — forwards to skullpt, so the
                    Forge bridge and old `python3 -m designshell` commands
                    keep working

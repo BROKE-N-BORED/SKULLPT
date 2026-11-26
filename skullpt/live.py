@@ -47,7 +47,13 @@ def _post(url: str, payload: dict, headers: dict | None = None, timeout: int = 1
           cancel=None) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
+        headers={"Content-Type": "application/json",
+                 # Named on purpose (v1.18): Groq's edge refuses the
+                 # default Python user agent with HTTP 403 before
+                 # the key is judged - the same refusal that broke
+                 # the Settings key check.
+                 "User-Agent": "SKULLPT-seat-call",
+                 **(headers or {})}, method="POST")
     # urlopen cannot be cancelled from another thread, so the call
     # runs in a daemon thread and the caller polls the cancel event
     # in short slices; a set event abandons the thread (it dies on

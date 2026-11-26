@@ -1326,7 +1326,8 @@ if QT_AVAILABLE:
                     ("jobs", "Jobs"), ("render", "Render"),
                     ("character", "Character Studio"),
                     ("images", "Images"), ("library", "Library"),
-                    ("recipes", "Recipes"), ("settings", "Settings")):
+                    ("recipes", "Recipes"), ("addons", "Blender Add-ons"),
+                    ("settings", "Settings")):
                 windows_menu.addAction(
                     label, lambda _c=False, n=name: self._open_window(n))
 
@@ -1371,8 +1372,8 @@ if QT_AVAILABLE:
 
         # -- windows ----------------------------------------------------
         def _open_window(self, name: str) -> None:
-            from .qtwindows import (CharacterWindow, HelpWindow, ImagesWindow,
-                                    LibraryWindow, RecipesWindow,
+            from .qtwindows import (AddonsWindow, CharacterWindow, HelpWindow,
+                                    ImagesWindow, LibraryWindow, RecipesWindow,
                                     SettingsWindow, SetupWindow, show_window)
 
             if name == "jobs":
@@ -1392,6 +1393,8 @@ if QT_AVAILABLE:
                     window = LibraryWindow(self, self.workspace)
                 elif name == "recipes":
                     window = RecipesWindow(self, self.workspace)
+                elif name == "addons":
+                    window = AddonsWindow(self, self.workspace)
                 elif name == "settings":
                     window = SettingsWindow(self, self.workspace)
                 elif name == "setup":

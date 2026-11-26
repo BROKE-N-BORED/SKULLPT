@@ -1,5 +1,83 @@
 # SKULLPT — Changelog
 
+## v1.18 - 2026-11-21 - The Blender add-on manager (F1-F6)
+
+Also in this version, a fix found 2026-11-26 before v1.18 shipped:
+the Settings key check refused every Groq key as "not valid",
+including brand-new ones. Proven against the real Groq API: the
+check named no user agent, Groq's edge answers the default Python
+user agent with HTTP 403 (error 1010) before the key is judged,
+and the check read any 403 as an invalid key. The checks now name
+a user agent (as the update checks already did), a 403 is reported
+as the service refusing the check - never as the key being wrong -
+and the live seat calls name a user agent too, since they would
+have hit the same refusal.
+
+Ordered by Joshua 2026-11-21: "Have it add a way to easily
+install and manage blender add-ons." The design is
+SKULLPT-addon-manager-design-2026-11-21.md. One new window and
+one new backend module; Blender itself does the add-on work
+through the same headless-script path the builds use, so nothing
+about folder locations or zip layouts is guessed.
+
+- F1: the list. A new backend module (skullpt/addons.py) runs
+  one headless Blender query that returns the user-installed
+  add-ons: module, name, version, author, description, and
+  whether each is switched on. Blender is asked where its own
+  user add-ons folder is (bpy.utils.user_resource), so a
+  portable Blender (Joshua's 5.3.0) and a system Blender are
+  the same code path. Only user-installed add-ons are listed;
+  the ones that ship inside Blender are not SKULLPT's to
+  manage. The query runs without --factory-startup, unlike the
+  build runs: the manager must see the user's real preferences.
+- F2: install and update. A picked .zip or .py goes through
+  Blender's own addon_install, the new add-on is switched on,
+  and preferences are saved, so it is still on next time
+  Blender opens. Installing over an existing add-on is the
+  update path. The installed module is found the way Blender
+  finds it: the add-on list from before the install against
+  the list after.
+- F3: switch and remove. On and off are Blender's own
+  addon_enable and addon_disable, preferences saved each
+  time. Remove disables, then calls Blender's addon_remove,
+  then proves the files are gone; if a Blender lacks the
+  remove command, or the files survive it, the add-on's own
+  files are deleted directly, and a fresh list query proves
+  the module is gone before the window says "removed".
+  (Found while building: Blender 4.5.9's addon_remove deletes
+  the files and then trips over a window redraw that does not
+  exist in a headless run. The error is caught; the file check
+  is the verdict.)
+- F4: the window. A Blender Add-ons window in the Windows
+  menu: an Install add-on... button, one card per add-on
+  (name, version, author, one-line description, an On tick,
+  Update..., Remove with one plain confirmation), and a
+  status line that says what just happened. Every Blender
+  call runs on a worker thread. The empty state and the
+  no-Blender state (with a button to the Setup check) are
+  plain words, never dead controls.
+- F5: the edges in plain words. The package checks that need
+  no Blender run first, in pure Python: a zip holding a
+  blender_manifest.toml is an extension package and is named
+  as one (this version installs classic add-ons; extension
+  support is a later addition); a zip packaged with its
+  files at the top level, a zip with no add-on in it, and a
+  file that is not a .zip or .py are each refused with the
+  reason, before anything changes. An add-on that installs
+  but cannot be switched on is taken back out when it was
+  new, so a failed install changes nothing. The trust note
+  (switching an add-on on runs its code, like in Blender
+  itself; only install add-ons from places you trust) sits
+  in the window and in Help.
+- F6: proof and paperwork. tests/test_v28.py: backend unit
+  tests at the faked Blender-runner seam, window tests at the
+  faked backend seam, and a real-Blender cycle in a
+  throwaway config (install, listed, off, on, updated
+  1.0.0 to 2.0.0, removed, files gone) that runs wherever a
+  Blender is found and skips where none is. Help gains a
+  Blender add-ons section; README and DESIGN updated (the
+  Bench is ten windows now).
+
 ## v1.17 - 2026-11-19 - The third user-audit fix round (E1-E4)
 
 The 2026-11-19 hands-on user audit of v1.16 (0 P0, 0 P1, 4 P2)

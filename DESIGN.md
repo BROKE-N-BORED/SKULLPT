@@ -28,6 +28,9 @@ colors:
   # v1.17 reuses these tokens unchanged too: its changes are a
   # carried workspace, plainer words, and one renamed button -
   # behaviour and copy, not new chrome.
+  # v1.18 reuses these tokens unchanged too: its one new window
+  # (Blender Add-ons) is built from the same cards, buttons, and
+  # muted notes as the Setup check and the other windows.
 
 typography:
   ui:
@@ -86,12 +89,13 @@ disagree, this file wins and the code is wrong.
 
 ## Overview
 
-SKULLPT is a workshop, not a dashboard. The Bench is nine windows,
+SKULLPT is a workshop, not a dashboard. The Bench is ten windows,
 one per job (U1): Jobs is home (bento job cards, chat, status bar);
 Render holds the 3D viewport full size; Images is the native picture
 picker; Library is the filed assets; Settings holds engines and the
 Hugging Face token; Character Studio shapes a rigged human; Recipes
-lists the templates; Help explains the windows; the Setup check
+lists the templates; Blender Add-ons manages the add-ons installed
+into Blender; Help explains the windows; the Setup check
 runs at first launch. A left icon rail (24px bone icons) and the
 menu bar move between them.
 

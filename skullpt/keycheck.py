@@ -10,6 +10,14 @@ mock server (DESIGNSHELL_GEMINI_VALIDATE_URL,
 DESIGNSHELL_GROQ_VALIDATE_URL, DESIGNSHELL_HF_VALIDATE_URL); the mock
 answers 200 for a good key and 401 for a bad one, the same shape as
 the real services.
+
+Every request names itself with a User-Agent (v1.18 fix, found
+2026-11-26 against the real Groq API): Groq's edge refuses requests
+carrying the default Python user agent with HTTP 403 (error 1010)
+before the key is even judged, and the old code read that 403 as
+"key not valid" - so every key, good ones included, was refused.
+A 403 is therefore never reported as an invalid key any more; only
+a 400 or 401 is.
 """
 from __future__ import annotations
 
@@ -25,17 +33,26 @@ GEMINI_KEY_PAGE = "https://aistudio.google.com/apikey"
 GROQ_KEY_PAGE = "https://console.groq.com/keys"
 
 
+USER_AGENT = "SKULLPT-key-check"
+
+
 def _check(url: str, headers: dict, timeout: float,
            noun: str = "key") -> tuple[bool, str]:
+    headers = {"User-Agent": USER_AGENT, **headers}
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read()
         return True, "Key accepted."
     except urllib.error.HTTPError as exc:
-        if exc.code in (400, 401, 403):
+        if exc.code in (400, 401):
             return False, (f"That {noun} did not work - the service said it "
                            f"is not valid. Check the {noun} and try again.")
+        if exc.code == 403:
+            return False, (f"The service refused the check (HTTP 403), "
+                           f"so the {noun} could not be checked and was "
+                           f"not saved. That refusal is not the service "
+                           f"saying the {noun} is wrong - try again later.")
         return False, (f"The check failed (the service answered "
                        f"HTTP {exc.code}) - the {noun} was not saved.")
     except (urllib.error.URLError, TimeoutError, OSError):
@@ -44,7 +61,7 @@ def _check(url: str, headers: dict, timeout: float,
 
 
 def validate_gemini_key(key: str, timeout: float = 15.0) -> tuple[bool, str]:
-    """One read-only models-list call. A 400/401/403 means the key is
+    """One read-only models-list call. A 400 or 401 means the key is
     not valid; anything else is a network or service problem."""
     override = os.environ.get("DESIGNSHELL_GEMINI_VALIDATE_URL")
     query = f"key={urllib.parse.quote(key)}"

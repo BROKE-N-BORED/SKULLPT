@@ -15,6 +15,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import addons as addons_mod
 from . import bench as bench_mod
 from . import graduate
 from . import imagegen
@@ -2930,6 +2931,308 @@ class RecipesWindow(_GeometryWindow):
             log("Bench", f"Started {job.dir.name} from the recipe.")
 
 
+# ---------------------------------------------------------- add-ons window
+
+_ADDON_FILE_FILTER = "Blender add-on files (*.zip *.py)"
+
+
+class AddonsWindow(_GeometryWindow):
+    """Blender add-ons (v1.18, F4): install an add-on from a file,
+    switch it on or off, update it to a newer file, or remove it,
+    each in a click. Blender itself does the work (the addons
+    backend runs it headless); this window is the list and the
+    buttons. Every Blender call runs on a worker thread, so the
+    window never freezes while Blender starts.
+
+    With no Blender found the window still opens and says so
+    plainly, with the way to fix it, instead of showing controls
+    that cannot work.
+    """
+
+    GEOMETRY_KEY = "AddonsWindow"
+
+    def __init__(self, bench, workspace: Path, parent=None):
+        super().__init__(parent)
+        self._bench = bench
+        self._workspace = Path(workspace)
+        self._call: _BackgroundCall | None = None
+        self._addons: list[dict] = []
+        self.setWindowTitle("SKULLPT - Blender Add-ons")
+        self.setMinimumSize(560, 420)
+
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        main = QtWidgets.QVBoxLayout(central)
+        main.setContentsMargins(12, 12, 12, 12)
+        main.setSpacing(12)
+
+        intro = QtWidgets.QLabel(
+            "Add-ons you installed into Blender, in one place. "
+            "Install one from a file you downloaded, switch it on "
+            "or off, update it to a newer file, or remove it.")
+        intro.setWordWrap(True)
+        main.addWidget(intro)
+
+        top = QtWidgets.QHBoxLayout()
+        self._install_btn = QtWidgets.QPushButton("Install add-on...")
+        self._install_btn.setObjectName("primary")
+        self._install_btn.clicked.connect(self._install)
+        top.addWidget(self._install_btn)
+        top.addStretch(1)
+        main.addLayout(top)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff)
+        content = QtWidgets.QWidget()
+        self._rows_layout = QtWidgets.QVBoxLayout(content)
+        self._rows_layout.setSpacing(12)
+        scroll.setWidget(content)
+        main.addWidget(scroll, 1)
+
+        note = QtWidgets.QLabel(
+            "Switching an add-on on runs its code, like in Blender "
+            "itself. Only install add-ons from places you trust.")
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        main.addWidget(note)
+
+        self._status = QtWidgets.QLabel("")
+        self._status.setWordWrap(True)
+        main.addWidget(self._status)
+
+        restore_geometry(self, self.GEOMETRY_KEY)
+        if self.width() < 560:
+            self.resize(820, 560)
+        self.refresh()
+
+    # -- loading ----------------------------------------------------
+
+    def refresh(self) -> None:
+        """Re-read the add-on list (on a worker thread). A refresh
+        asked for while one is already running is a no-op: the
+        running one is already reading the current state."""
+        if self._call is not None:
+            return
+        if not addons_mod.blender_available():
+            self._addons = []
+            self._show_no_blender()
+            return
+        self._install_btn.setEnabled(True)
+        self._set_status("Looking for your add-ons...")
+        self._start(lambda: addons_mod.list_addons(),
+                    self._on_listed)
+
+    def _start(self, fn, done) -> None:
+        call = _BackgroundCall(fn)
+        call.finished.connect(done)
+        self._call = call
+        call.start()
+
+    def _on_listed(self, result) -> None:
+        self._call = None
+        if isinstance(result, Exception):
+            self._addons = []
+            self._show_rows()
+            self._set_status(self._plain_error(result))
+            return
+        self._addons = result
+        self._show_rows()
+        if result:
+            count = len(result)
+            self._set_status(
+                f"{count} add-on{'s' if count != 1 else ''} "
+                "installed.")
+        else:
+            self._set_status("")
+
+    def _show_no_blender(self) -> None:
+        self._clear_rows()
+        self._install_btn.setEnabled(False)
+        label = QtWidgets.QLabel(
+            "Blender was not found on this machine, so there are "
+            "no add-ons to manage yet. The Setup check can "
+            "install Blender.")
+        label.setWordWrap(True)
+        self._rows_layout.addWidget(label)
+        setup_btn = QtWidgets.QPushButton("Open the Setup check")
+        setup_btn.clicked.connect(
+            lambda: self._bench._open_window("setup"))
+        self._rows_layout.addWidget(setup_btn)
+        self._rows_layout.addStretch(1)
+        self._set_status(
+            "Blender was not found. Install it with the Setup "
+            "check, then reopen this window.")
+
+    # -- rows ---------------------------------------------------------
+
+    def _clear_rows(self) -> None:
+        while self._rows_layout.count():
+            item = self._rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
+
+    def _show_rows(self) -> None:
+        self._clear_rows()
+        if not self._addons:
+            empty = QtWidgets.QLabel(
+                "No add-ons installed yet. Install add-on... "
+                "takes a .zip or .py file you downloaded.")
+            empty.setWordWrap(True)
+            self._rows_layout.addWidget(empty)
+        for addon in self._addons:
+            self._rows_layout.addWidget(self._row(addon))
+        self._rows_layout.addStretch(1)
+
+    def _row(self, addon: dict) -> QtWidgets.QFrame:
+        frame = QtWidgets.QFrame()
+        frame.setObjectName("card")
+        frame.setProperty("module", addon["module"])
+        layout = QtWidgets.QHBoxLayout(frame)
+        text = QtWidgets.QVBoxLayout()
+        title = QtWidgets.QLabel(addon["name"])
+        title.setObjectName("heading")
+        text.addWidget(title)
+        facts = []
+        if addon["version"]:
+            facts.append(f"Version {addon['version']}")
+        if addon["author"]:
+            facts.append(f"by {addon['author']}")
+        if facts:
+            meta = QtWidgets.QLabel("  ".join(facts))
+            meta.setObjectName("muted")
+            text.addWidget(meta)
+        if addon["description"]:
+            detail = QtWidgets.QLabel(addon["description"])
+            detail.setWordWrap(True)
+            detail.setObjectName("muted")
+            text.addWidget(detail)
+        layout.addLayout(text, 1)
+
+        toggle = QtWidgets.QCheckBox("On")
+        toggle.setChecked(bool(addon["enabled"]))
+        toggle.clicked.connect(
+            lambda checked, module=addon["module"]:
+                self._toggle(module, checked))
+        layout.addWidget(toggle)
+        update_btn = QtWidgets.QPushButton("Update...")
+        update_btn.clicked.connect(
+            lambda _checked=False, addon=addon:
+                self._update(addon))
+        layout.addWidget(update_btn)
+        remove_btn = QtWidgets.QPushButton("Remove")
+        remove_btn.clicked.connect(
+            lambda _checked=False, addon=addon:
+                self._remove(addon))
+        layout.addWidget(remove_btn)
+        return frame
+
+    # -- actions ------------------------------------------------------
+
+    def _busy(self) -> bool:
+        return self._call is not None
+
+    def _set_status(self, text: str) -> None:
+        self._status.setText(text)
+
+    def _plain_error(self, exc: Exception) -> str:
+        if isinstance(exc, addons_mod.AddonError):
+            return str(exc)
+        from . import applog
+
+        applog.get_logger().error(
+            "addons window: unexpected failure: %r", exc)
+        return ("Something went wrong. The details are in the "
+                "Debug log.")
+
+    def _run_action(self, fn, busy_text: str, done_text) -> None:
+        """Run one add-on action on the worker thread, then
+        refresh the list and say what happened. `done_text` maps
+        the action's return value to the status sentence."""
+        if self._busy():
+            return
+        self._set_status(busy_text)
+
+        def _work():
+            result = fn()
+            return result, addons_mod.list_addons()
+
+        def _done(outcome) -> None:
+            self._call = None
+            if isinstance(outcome, Exception):
+                self._set_status(self._plain_error(outcome))
+                # The list may have changed anyway (an install
+                # that failed at the switch-on step did not, but
+                # a refresh is the honest picture either way).
+                self.refresh()
+                return
+            result, addons = outcome
+            self._addons = addons
+            self._show_rows()
+            self._set_status(done_text(result))
+
+        self._start(_work, _done)
+
+    def _install(self) -> None:
+        if self._busy():
+            return
+        picked, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Install add-on", str(Path.home()),
+            _ADDON_FILE_FILTER)
+        if not picked:
+            return
+        self._run_action(
+            lambda: addons_mod.install_addon(picked),
+            "Installing...",
+            lambda info: (
+                f"{info['name']} "
+                f"{info['version'] + ' ' if info['version'] else ''}"
+                "installed and switched on."))
+
+    def _update(self, addon: dict) -> None:
+        if self._busy():
+            return
+        picked, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, f"Update {addon['name']}", str(Path.home()),
+            _ADDON_FILE_FILTER)
+        if not picked:
+            return
+        self._run_action(
+            lambda: addons_mod.install_addon(picked),
+            f"Updating {addon['name']}...",
+            lambda info: (
+                f"{info['name']} updated to "
+                f"{info['version'] or 'a newer version'}."))
+
+    def _toggle(self, module: str, on: bool) -> None:
+        name = next((a["name"] for a in self._addons
+                     if a["module"] == module), module)
+        self._run_action(
+            lambda: addons_mod.set_enabled(module, on),
+            f"Switching {name} {'on' if on else 'off'}...",
+            lambda _result: (
+                f"{name} switched {'on' if on else 'off'}."))
+
+    def _remove(self, addon: dict) -> None:
+        if self._busy():
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self, "Remove add-on",
+            f"Remove {addon['name']}? Its files are deleted "
+            "from Blender's add-ons folder.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No)
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        self._run_action(
+            lambda: addons_mod.remove_addon(addon["module"]),
+            f"Removing {addon['name']}...",
+            lambda _result: f"{addon['name']} removed.")
+
+
 # ---------------------------------------------------------- settings window
 
 _ENGINE_LABELS = {
@@ -3656,8 +3959,10 @@ Studio</b> shapes a human with sliders, a skin and a rig.
 <b>Images</b> is where you keep or reject generated pictures.
 <b>Library</b> holds everything you have filed. <b>Recipes</b>
 keeps the recipes your filed jobs graduate into, so you can start
-a new job from one. <b>Settings</b> shows which engines are
-ready and holds your keys (Gemini, Groq, Hugging Face).</p>
+a new job from one. <b>Blender Add-ons</b> installs add-ons into
+Blender and manages the ones you have. <b>Settings</b> shows
+which engines are ready and holds your keys (Gemini, Groq,
+Hugging Face).</p>
 <h3>Setup</h3>
 <p>The first time SKULLPT opens, the Setup check lists anything
 missing: an engine, the local model, or a key, with a button next
@@ -3765,6 +4070,24 @@ script brings them into Unreal alongside the model.</p>
 <p>Building needs Blender 4.5.9 or newer installed. The renders
 and the game-ready model come from Blender; without it, SKULLPT can
 still draft descriptions and show the viewport.</p>
+<h3>Blender add-ons</h3>
+<p>The Blender Add-ons window (Windows menu) manages the add-ons
+you install into Blender. <b>Install add-on...</b> takes a .zip or
+.py file you downloaded - a free add-on from a maker's page, say -
+and Blender's own installer puts it in, switched on and saved, so
+it is still on next time Blender opens. Each add-on in the list
+has an <b>On</b> tick to switch it off or on, an <b>Update...</b>
+button that installs a newer file over the old one, and a
+<b>Remove</b> button that deletes its files from Blender's
+add-ons folder (it asks once first). Only add-ons you installed
+are listed; the ones that ship inside Blender are not SKULLPT's
+to manage. Switching an add-on on runs its code, like in Blender
+itself - only install add-ons from places you trust. Blender
+also has a newer extension package format: a zip holding a
+blender_manifest.toml is an extension, and this version of
+SKULLPT installs classic add-ons only, so it says so plainly
+instead of failing quietly. Extension support is a later
+addition.</p>
 <h3>Your workspace</h3>
 <p>Everything lives in your workspace folder: jobs, the library,
 image batches, and settings. The folder is shown in Settings. File,

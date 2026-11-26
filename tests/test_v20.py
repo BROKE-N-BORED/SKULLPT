@@ -1363,7 +1363,7 @@ class ReadmeTests(unittest.TestCase):
         self.assertNotIn("No Character studio yet", self.text)
 
     def test_bench_section_describes_multi_window_bench(self):
-        self.assertIn("nine windows", self.text)
+        self.assertIn("ten windows", self.text)
 
     def test_module_list_covers_current_modules(self):
         for module in ("tokenfile", "keycheck", "ollama", "update",
@@ -1380,11 +1380,11 @@ class DesignDocTests(unittest.TestCase):
         self.text = (ROOT / "DESIGN.md").read_text()
 
     def test_header_names_v112(self):
-        self.assertIn("v1.17", self.text.splitlines()[0]
+        self.assertIn("v1.18", self.text.splitlines()[0]
                       + "\n" + "\n".join(self.text.splitlines()[1:60]))
 
     def test_nine_windows(self):
-        self.assertIn("nine windows", self.text)
+        self.assertIn("ten windows", self.text)
         self.assertNotIn("five windows", self.text)
 
     def test_amber_is_a_fixed_token(self):
@@ -1411,10 +1411,10 @@ class VersionTests(unittest.TestCase):
     def test_version_is_111_everywhere(self):
         from skullpt import __version__
 
-        self.assertEqual(__version__, "1.17")
-        self.assertIn("v1.17", (ROOT / "README.md").read_text())
-        self.assertIn("v1.17", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.17", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.18")
+        self.assertIn("v1.18", (ROOT / "README.md").read_text())
+        self.assertIn("v1.18", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.18", (ROOT / "DESIGN.md").read_text())
 
     def test_changelog_has_a_v110_section(self):
         text = (ROOT / "CHANGELOG.md").read_text()

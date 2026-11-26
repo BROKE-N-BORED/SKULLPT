@@ -100,10 +100,10 @@ class VersionTests(unittest.TestCase):
     def test_version_is_115(self):
         from skullpt import __version__
 
-        self.assertEqual(__version__, "1.17")
-        self.assertIn("v1.17", (ROOT / "README.md").read_text())
-        self.assertIn("## v1.17", (ROOT / "CHANGELOG.md").read_text())
-        self.assertIn("v1.17", (ROOT / "DESIGN.md").read_text())
+        self.assertEqual(__version__, "1.18")
+        self.assertIn("v1.18", (ROOT / "README.md").read_text())
+        self.assertIn("## v1.18", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("v1.18", (ROOT / "DESIGN.md").read_text())
 
 
 # ----------------------------------------------------------------- A20
@@ -1228,7 +1228,7 @@ class A34MenuBarTests(_QtCase):
                    menus["Windows"].actions()]
         self.assertEqual(entries, ["Jobs", "Render", "Character Studio",
                                    "Images", "Library", "Recipes",
-                                   "Settings"])
+                                   "Blender Add-ons", "Settings"])
 
 
 # ----------------------------------------------------------------- A35
